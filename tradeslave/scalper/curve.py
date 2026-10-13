@@ -43,6 +43,10 @@ class CurveState:
         return self.virtual_sol_reserves / LAMPORTS_PER_SOL
 
 
+# Returned when a curve finished: pump.fun zeroes the reserves after migration.
+GRADUATED = CurveState(0, 0, complete=True)
+
+
 def decode_bonding_curve(data_b64: str) -> CurveState | None:
     """Decode a BondingCurve account (base64). Returns None if it isn't one."""
     try:
@@ -53,7 +57,7 @@ def decode_bonding_curve(data_b64: str) -> CurveState | None:
         return None
     vt, vs, rt, rs, supply, complete = _LAYOUT.unpack_from(raw, 8)
     if vt <= 0 or vs <= 0:
-        return None
+        return GRADUATED if complete else None
     return CurveState(vt, vs, rt, rs, supply, bool(complete))
 
 

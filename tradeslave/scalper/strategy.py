@@ -143,6 +143,9 @@ def initial_zone_entry(tr: TokenTracker, now: float, c: ScalpConfig) -> Signal:
         return _no("above_buy_zone", vs_opening=round(vs_opening, 4))
     if vs_opening < -c.zone_below_pct:
         return _no("below_buy_zone", vs_opening=round(vs_opening, 4))
+    net_recent, _ = tr.flow(now, c.flow_window_s)
+    if -net_recent > c.max_recent_net_sell_sol:
+        return _no("heavy_selling", net_sell_sol=round(-net_recent, 3))
     updates = len(tr.window(now, c.flow_window_s))
     if updates < c.min_updates_in_window:
         return _no("market_inactive", updates=updates)

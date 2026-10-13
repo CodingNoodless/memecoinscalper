@@ -24,7 +24,9 @@ from ..paths import LOG_DIR, PROJECT_ROOT
 from ..state import append_jsonl, save_json, state_path
 from .config import ScalpConfig, load_config
 from .core import Scalper
-from .curve import decode_bonding_curve, state_from_pumpportal
+import dataclasses
+
+from .curve import GRADUATED, decode_bonding_curve, state_from_pumpportal
 from .recorder import TickRecorder
 from .strategy import entry_signal, safety_block
 
@@ -49,7 +51,7 @@ class LiveEngine:
         self.creator_mints: dict[str, set[str]] = {}       # creator -> watched mints
         self.watch: dict[str, str] = {}                    # mint -> curve account
         self.stats = {"created_seen": 0, "skipped_full": 0, "skipped_filter": 0, "curve_msgs": 0,
-                      "decode_fail": 0, "creator_msgs": 0, "creator_sell_logs": 0, "dev_sells": 0, "pp_reconnects": 0,
+                      "decode_fail": 0, "graduated": 0, "handler_errors": 0, "creator_msgs": 0, "creator_sell_logs": 0, "dev_sells": 0, "pp_reconnects": 0,
                       "rpc_reconnects": 0, "sub_errors": 0}
         self.raw_samples = 0
         self.started = time.time()
@@ -154,7 +156,7 @@ class LiveEngine:
                     log.info("PumpPortal connected; subscribed to new tokens")
                     backoff = 1.0
                     async for raw in ws:
-                        self._on_pumpportal(raw)
+                        self._guard(self._on_pumpportal, raw)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # network errors: reconnect
@@ -280,7 +282,7 @@ class LiveEngine:
                                 await self._subscribe_creator(creator, mint)
                     backoff = 1.0
                     async for raw in ws:
-                        self._on_rpc(raw)
+                        self._guard(self._on_rpc, raw)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -343,8 +345,17 @@ class LiveEngine:
         value = result.get("value") or {}
         data = value.get("data")
         state = decode_bonding_curve(data[0]) if isinstance(data, list) and data else None
+        if state is GRADUATED:
+            # Curve finished and migrated to an AMM pool: stop trading it here.
+            self.stats["graduated"] += 1
+            tr = self.scalper.trackers.get(mint)
+            if tr is not None and tr.state is not None and not tr.state.complete:
+                tr.state = dataclasses.replace(tr.state, complete=True)
+            return
         if state is None:
             self.stats["decode_fail"] += 1
+            if self.stats["decode_fail"] <= 5:
+                self._sample("decode_fail", raw)
             return
         now = time.time()
         if self.recorder:
@@ -371,30 +382,46 @@ class LiveEngine:
                 self.recorder.creator_sell(now, mint)
             self.scalper.on_creator_sell(mint, now)
 
+    def _guard(self, handler, raw) -> None:
+        """One bad message must never take the engine down."""
+        try:
+            handler(raw)
+        except Exception:
+            self.stats["handler_errors"] += 1
+            log.exception("Error handling a %s message; continuing", handler.__name__)
+
     # --- clock, housekeeping, status ----------------------------------------
     async def clock_loop(self) -> None:
         last_status = last_save = time.time()
         while True:
             await asyncio.sleep(0.2)
-            now = time.time()
-            self.scalper.on_clock(now)
-            for mint in list(self.watch):
-                tr = self.scalper.trackers.get(mint)
-                if tr is None:
-                    await self._unsubscribe(mint)
-                    continue
-                idle = now - (tr.last_update_t or tr.created_at)
-                done = tr.age(now) > self.cfg.watch_max_age_s or idle > self.cfg.idle_unwatch_s or \
-                    (tr.state is not None and tr.state.complete) or tr.dev_sold or tr.floor_broken or \
-                    tr.creator_launches > self.cfg.serial_launch_max
-                if done and self.scalper.forget(mint):
-                    await self._unsubscribe(mint)
-            if now - last_save >= 2:
-                self._save_wallet()
-                last_save = now
-            if now - last_status >= self.cfg.status_every_s:
-                self._status(now)
-                last_status = now
+            try:
+                last_status, last_save = await self._clock_tick(last_status, last_save)
+            except Exception:
+                self.stats["handler_errors"] += 1
+                log.exception("Error in the clock loop; continuing")
+
+    async def _clock_tick(self, last_status: float, last_save: float) -> tuple[float, float]:
+        now = time.time()
+        self.scalper.on_clock(now)
+        for mint in list(self.watch):
+            tr = self.scalper.trackers.get(mint)
+            if tr is None:
+                await self._unsubscribe(mint)
+                continue
+            idle = now - (tr.last_update_t or tr.created_at)
+            done = tr.age(now) > self.cfg.watch_max_age_s or idle > self.cfg.idle_unwatch_s or \
+                (tr.state is not None and tr.state.complete) or tr.dev_sold or tr.floor_broken or \
+                tr.creator_launches > self.cfg.serial_launch_max
+            if done and self.scalper.forget(mint):
+                await self._unsubscribe(mint)
+        if now - last_save >= 2:
+            self._save_wallet()
+            last_save = now
+        if now - last_status >= self.cfg.status_every_s:
+            self._status(now)
+            last_status = now
+        return last_status, last_save
 
     def _status(self, now: float) -> None:
         book = self.scalper.book
@@ -406,12 +433,13 @@ class LiveEngine:
         log.info(
             "STATUS up=%.0fm watched=%d open=%d balance=%.4f equity=%.4f | trades=%d wins=%d (%.0f%%) "
             "avg=%+.2f%% pnl=%+.4f SOL fees=%.4f failed_tx=%d | new_tokens=%d curve_msgs=%d decode_fail=%d "
-            "dev_sells=%d (creator sell logs %d) skipped_full=%d | top_entry_blocks=%s",
+            "dev_sells=%d (creator sell logs %d) graduated=%d errors=%d skipped_full=%d | top_entry_blocks=%s",
             (now - self.started) / 60, len(self.watch), len(book.positions), book.balance_sol,
             book.equity_sol(self.scalper.trackers), len(closed), wins, 100 * wins / len(closed) if closed else 0,
             avg * 100, pnl, book.fees_paid_sol, book.failed_tx, self.stats["created_seen"],
             self.stats["curve_msgs"], self.stats["decode_fail"], self.stats["dev_sells"],
-            self.stats["creator_sell_logs"], self.stats["skipped_full"], blocks,
+            self.stats["creator_sell_logs"], self.stats["graduated"], self.stats["handler_errors"],
+            self.stats["skipped_full"], blocks,
         )
         if self.stats["curve_msgs"] > 50 and self.stats["decode_fail"] > self.stats["curve_msgs"] * 0.5:
             log.error("Most curve updates fail to decode - pump.fun may have changed its account layout. "
@@ -494,3 +522,7 @@ def main() -> None:
     except KeyboardInterrupt:
         engine.stopping = True
         log.info("Scalper stopped")
+    except Exception:
+        engine.stopping = True
+        log.exception("Scalper crashed")   # the traceback lands in logs/scalper.log, not only the terminal
+        raise

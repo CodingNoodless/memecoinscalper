@@ -43,11 +43,12 @@ class ScalpConfig:
     confirm_window_s: float = 2.0    # stall: no sells for this long and the latest trade is a buy
     confirm_bounce_pct: float = 0.015  # bounce: price this far above the zone low since touch
     max_quiet_s: float = 10.0        # a pause longer than this is a dead token, not a stall
+    max_recent_net_sell_sol: float = 1000.0  # skip if more than this much SOL was net-sold in flow_window_s
     activity_window_s: float = 30.0  # the token must still be trading:
     min_activity_sol: float = 1.0    #   at least this much SOL traded (buys + sells) in the window
 
     # --- rug / scam filters ----------------------------------------------
-    max_dev_supply_pct: float = 0.10     # dev's launch buy as share of the 1B supply
+    max_dev_supply_pct: float = 0.05     # dev's launch buy as share of the 1B supply (bounces: median 2.4%, failures 9.8%)
     early_window_s: float = 3.0          # "sniper window" after creation
     max_early_supply_pct: float = 0.30   # supply bought in the sniper window (incl. dev)
     dev_dump_match_pct: float = 0.005    # one sell matching the dev's whole bag (+-0.5%) = dev dumped

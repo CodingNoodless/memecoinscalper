@@ -27,6 +27,13 @@ uv run python -m tradeslave.scalper.backtest
 uv run python -m tradeslave.scalper.backtest --grid take_profit_pct=0.03,0.05,0.08
 ```
 
+To see what happens after tokens return to their opening price, using only
+what the bot could know at that moment (no hindsight):
+
+```
+uv run python -m tradeslave.scalper.report
+```
+
 All settings live in `tradeslave/scalper/config.py` and can be overridden in
 `.env` as `SCALP_<NAME>` (e.g. `SCALP_TAKE_PROFIT_PCT=0.04`). The public Solana
 RPC is the default; set `SCALP_RPC_WS` to another websocket endpoint if it

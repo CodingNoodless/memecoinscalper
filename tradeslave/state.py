@@ -27,6 +27,20 @@ def load_json(name: str, default: Any) -> Any:
             return json.load(source)
 
 
+def _replace_with_retry(source: Path, target: Path, attempts: int = 40, delay_s: float = 0.025) -> None:
+    """os.replace, retried briefly. On Windows the replace fails with
+    PermissionError while another process (e.g. the dashboard) has the target
+    open for reading; that lasts milliseconds."""
+    for attempt in range(attempts):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(delay_s)
+
+
 def save_json(name: str, value: Any) -> None:
     """Atomically replace one state file so readers never see partial JSON."""
     path = state_path(name)
@@ -37,7 +51,7 @@ def save_json(name: str, value: Any) -> None:
                 json.dump(value, destination, indent=2, allow_nan=False)
                 destination.flush()
                 os.fsync(destination.fileno())
-            os.replace(temporary, path)
+            _replace_with_retry(temporary, path)
         finally:
             if temporary.exists():
                 temporary.unlink()
