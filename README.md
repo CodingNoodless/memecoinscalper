@@ -3,6 +3,26 @@
 This project currently runs a paper-only trading loop. It does not load a Solana
 wallet, sign transactions, or send swaps.
 
+## Quick start
+
+```
+uv sync                 # install dependencies (add --group dev for tests)
+uv run python main.py   # paper trader: scanner + trader threads
+uv run python dashboard.py   # read-only dashboard at http://127.0.0.1:8765
+uv run pytest           # unit tests (pure functions; no network, no real state)
+```
+
+Code lives in the `tradeslave/` package; `main.py` and `dashboard.py` are thin
+entry points. Runtime state, logs and `.env` stay in the project root
+(`tradeslave/paths.py`). Previous runs are kept under `archive/<date>/`.
+
+`LLM_MODE` picks how one candidate is chosen from the screened top five:
+`off` (default) takes the highest deterministic selection score with no model
+latency; `shadow` trades the score pick and then logs whether Ollama would have
+agreed (`llm_shadow_comparison` events); `on` restores the Ollama pick. Values
+the code clamps (for example `MAX_HOLD_HOURS` above 2) and unknown `.env` keys
+are logged as warnings at startup.
+
 ## Configuration
 
 Copy `.env.example` to `.env` in the project directory and fill in local
