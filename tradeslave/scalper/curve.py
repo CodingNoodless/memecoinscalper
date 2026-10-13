@@ -61,6 +61,21 @@ def decode_bonding_curve(data_b64: str) -> CurveState | None:
     return CurveState(vt, vs, rt, rs, supply, bool(complete))
 
 
+def decode_failure_reason(data_b64) -> str:
+    """Why decode_bonding_curve returned None (for diagnostics)."""
+    try:
+        raw = base64.b64decode(data_b64)
+    except (ValueError, TypeError):
+        return "bad_base64"
+    if len(raw) == 0:
+        return "empty_account"
+    if len(raw) < 8 + _LAYOUT.size:
+        return f"short_{len(raw)}b"
+    if raw[:8] != BONDING_CURVE_DISCRIMINATOR:
+        return f"other_account_{raw[:8].hex()}"
+    return "zero_reserves_not_complete"
+
+
 def encode_bonding_curve(state: CurveState) -> str:
     """Inverse of decode (used by tests and synthetic replays)."""
     body = _LAYOUT.pack(

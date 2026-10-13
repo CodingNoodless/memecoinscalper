@@ -44,7 +44,8 @@ def load_backfill(path=BACKFILL) -> dict[str, dict]:
     return out
 from .strategy import safety_block
 
-FEATURES = ("rise", "since_peak_s", "age_s", "volume_30s", "net_flow_10s", "updates_10s", "dev_pct", "sniper_pct")
+FEATURES = ("rise", "since_peak_s", "age_s", "volume_30s", "net_flow_10s", "updates_10s", "dev_pct", "sniper_pct",
+            "first_dip", "h2_vs_opening")
 
 
 def collect(records, cfg, up: float, down: float, horizon: float, backfill: dict | None = None) -> list[dict]:
@@ -69,7 +70,9 @@ def collect(records, cfg, up: float, down: float, horizon: float, backfill: dict
             scalper.on_curve(rec["m"], t, CurveState(int(rec["vt"]), int(rec["vs"]), int(rec.get("rt") or 0),
                                                      int(rec.get("rs") or 0), 0, bool(rec.get("c"))))
             tr = scalper.trackers.get(rec["m"])
-            if tr is None or rec["m"] in touches or tr.zone_touch_t is None or tr.age(t) < cfg.min_age_s:
+            setup_t = tr.sd_setup_t if (tr is not None and cfg.entry_mode == "second_dip") else \
+                (tr.zone_touch_t if tr is not None else None)
+            if tr is None or rec["m"] in touches or setup_t is None or tr.age(t) < cfg.min_age_s:
                 continue
             w10, w30 = tr.window(t, 10), tr.window(t, 30)
             touches[rec["m"]] = {
@@ -82,6 +85,8 @@ def collect(records, cfg, up: float, down: float, horizon: float, backfill: dict
                 "socials": "unknown" if tr.socials is None or not tr.socials.get("fetched") else
                            (tr.socials.get("twitter_kind") or ("telegram/web" if tr.socials.get("has_any") else "none")),
                 "twitter_reuse": tr.twitter_reuse,
+                "first_dip": (1.0 - tr.sd_l1 / tr.sd_h1) if tr.sd_h1 else 0.0,
+                "h2_vs_opening": (tr.sd_h2 / tr.launch_price - 1.0) if tr.sd_h2 else 0.0,
             }
     out = []
     for mint, row in touches.items():
@@ -103,13 +108,17 @@ def main() -> None:
     parser.add_argument("--up", type=float, default=0.09, help="price rise counted as a bounce (0.09 ~ +5%% net)")
     parser.add_argument("--down", type=float, default=0.10, help="price fall counted as a failure")
     parser.add_argument("--horizon", type=float, default=60.0, help="seconds to look forward")
+    parser.add_argument("--mode", default=None, help="entry mode to evaluate (default: the configured one)")
     args = parser.parse_args()
     paths = [Path(f) for f in args.files] or sorted(TICK_DIR.glob("*.jsonl.gz"))
     if not paths:
         raise SystemExit("No recorded ticks yet.")
     backfill = load_backfill()
-    rows = collect(read_ticks(paths), load_config(), args.up, args.down, args.horizon, backfill)
-    print(f"{len(rows)} tokens returned to their opening price after a spike "
+    cfg = load_config(**({"entry_mode": args.mode} if args.mode else {}))
+    rows = collect(read_ticks(paths), cfg, args.up, args.down, args.horizon, backfill)
+    setup = {"second_dip": "reached the second-dip buy zone (rise, tiny dip, up, 10-45% dip)",
+             "initial_zone": "returned to their opening price after a spike"}.get(cfg.entry_mode, "set up")
+    print(f"[{cfg.entry_mode}] {len(rows)} tokens {setup} "
           f"(bounce = +{args.up:.0%} before -{args.down:.0%} within {args.horizon:.0f}s)\n")
     for label, subset in (("all", rows), ("passed rug filters at that moment", [r for r in rows if r["verdict"] == "clean"])):
         c = Counter(r["outcome"] for r in subset)

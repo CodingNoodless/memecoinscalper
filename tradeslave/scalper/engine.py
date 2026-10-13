@@ -26,13 +26,13 @@ from .config import ScalpConfig, load_config
 from .core import Scalper
 import dataclasses
 
-from .curve import GRADUATED, decode_bonding_curve, state_from_pumpportal
+from .curve import GRADUATED, decode_bonding_curve, decode_failure_reason, state_from_pumpportal
 from .recorder import TickRecorder
 from .socials import fetch_metadata, parse_socials
 from .strategy import entry_signal, safety_block
 
 log = logging.getLogger("scalper")
-RAW_SAMPLE_LIMIT = 25
+RAW_SAMPLE_LIMIT = 10   # per message kind
 
 
 class LiveEngine:
@@ -54,7 +54,8 @@ class LiveEngine:
         self.stats = {"created_seen": 0, "skipped_full": 0, "skipped_filter": 0, "curve_msgs": 0,
                       "decode_fail": 0, "graduated": 0, "meta_ok": 0, "meta_fail": 0, "with_twitter": 0, "handler_errors": 0, "creator_msgs": 0, "creator_sell_logs": 0, "dev_sells": 0, "pp_reconnects": 0,
                       "rpc_reconnects": 0, "sub_errors": 0}
-        self.raw_samples = 0
+        self.raw_samples: dict[str, int] = {}
+        self.decode_fail_reasons: dict[str, int] = {}
         self.meta_slots = asyncio.Semaphore(6)
         self.started = time.time()
         self._restore_balance()
@@ -108,6 +109,7 @@ class LiveEngine:
             "equity_sol": book.equity_sol(self.scalper.trackers), "updated_at": now, "started_at": self.started,
             "paper_start_sol": self.cfg.paper_start_sol, "watched": len(self.watch), "stats": self.stats,
             "entry_block_reasons": dict(sorted(self.scalper.entry_block_reasons.items(), key=lambda kv: -kv[1])[:12]),
+            "decode_fail_reasons": dict(sorted(self.decode_fail_reasons.items(), key=lambda kv: -kv[1])[:6]),
             "watchlist": self._watchlist(now),
             "settings": {k: getattr(self.cfg, k) for k in (
                 "entry_mode", "entry_confirm", "min_initial_rise_pct", "zone_above_pct", "zone_below_pct",
@@ -136,9 +138,9 @@ class LiveEngine:
 
     def _sample(self, kind: str, raw) -> None:
         """Keep the first few raw messages so field formats can be checked by hand."""
-        if self.raw_samples >= RAW_SAMPLE_LIMIT:
+        if self.raw_samples.get(kind, 0) >= RAW_SAMPLE_LIMIT:
             return
-        self.raw_samples += 1
+        self.raw_samples[kind] = self.raw_samples.get(kind, 0) + 1
         try:
             LOG_DIR.mkdir(parents=True, exist_ok=True)
             with (LOG_DIR / "scalper_raw_samples.jsonl").open("a", encoding="utf-8") as handle:
@@ -380,8 +382,9 @@ class LiveEngine:
             return
         if state is None:
             self.stats["decode_fail"] += 1
-            if self.stats["decode_fail"] <= 5:
-                self._sample("decode_fail", raw)
+            reason = decode_failure_reason(data[0]) if isinstance(data, list) and data else "no_data"
+            self.decode_fail_reasons[reason] = self.decode_fail_reasons.get(reason, 0) + 1
+            self._sample("decode_fail", raw)
             return
         now = time.time()
         if self.recorder:
@@ -468,6 +471,8 @@ class LiveEngine:
             self.stats["creator_sell_logs"], self.stats["graduated"], self.stats["handler_errors"],
             self.stats["skipped_full"], self.stats["meta_ok"], self.stats["meta_fail"], self.stats["with_twitter"], blocks,
         )
+        if self.decode_fail_reasons:
+            log.info("Decode failures by cause: %s", dict(sorted(self.decode_fail_reasons.items(), key=lambda kv: -kv[1])[:6]))
         if self.stats["curve_msgs"] > 50 and self.stats["decode_fail"] > self.stats["curve_msgs"] * 0.5:
             log.error("Most curve updates fail to decode - pump.fun may have changed its account layout. "
                       "See logs/scalper_raw_samples.jsonl")

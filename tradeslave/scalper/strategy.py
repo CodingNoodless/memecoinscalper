@@ -1,6 +1,15 @@
 """Entry and exit rules for the scalper. Pure functions: no I/O.
 
-Default entry, `initial_zone` (Rohit's method):
+Default entry, `second_dip` (Rohit, 2026-10-12):
+  1. Initial incline: price >= opening x (1 + min_initial_rise_pct).
+  2. A tiny first dip: a pullback of first_dip_min_move_pct..first_dip_max_pct
+     from the incline high (bigger = not the pattern: token skipped).
+  3. It goes up a little: >= recover_min_pct off the first-dip low; the high
+     after that is H2.
+  4. The second dip: price 10-45% below H2 = buy zone; buy once selling stalls.
+     Deeper than 45% = collapse: token skipped.
+
+Alternative entry, `initial_zone` (earlier method):
   1. Launch spike: snipers + the dev push the price at least
      min_initial_rise_pct above the opening price (the price right after the
      dev's creation buy).
@@ -54,6 +63,7 @@ def update_launch_state(tr: TokenTracker, c: ScalpConfig) -> None:
             and abs(tr.last_tokens_sold - tr.dev_tokens) <= c.dev_dump_match_pct * tr.dev_tokens:
         tr.dev_sold, tr.dev_sold_reason = True, "dev_sized_sell"
     confirm_creator_sells(tr, c)
+    update_second_dip(tr, c)
     risen = tr.peak_price >= opening * (1.0 + c.min_initial_rise_pct)
     if risen and price < opening * (1.0 - c.rug_floor_pct):
         tr.floor_broken = True
@@ -64,6 +74,40 @@ def update_launch_state(tr: TokenTracker, c: ScalpConfig) -> None:
         tr.zone_low = min(tr.zone_low, price)
     elif tr.zone_touch_t is not None and price > opening * (1.0 + c.zone_above_pct):
         tr.zone_touch_t, tr.zone_low = None, 0.0   # left the zone upward: a new touch is needed
+
+
+def update_second_dip(tr: TokenTracker, c: ScalpConfig) -> None:
+    """Advance the second-dip pattern state with the latest price."""
+    if tr.sd_phase == "invalid" or not tr.launch_price or not tr.ticks:
+        return
+    price, t = tr.price, tr.ticks[-1].t
+    if tr.sd_phase == "wait_rise":
+        if price >= tr.launch_price * (1.0 + c.min_initial_rise_pct):
+            tr.sd_phase, tr.sd_h1 = "first_leg", price
+        return
+    if tr.sd_phase == "first_leg":
+        if price > tr.sd_h1:
+            tr.sd_h1 = price
+            return
+        if price > tr.sd_h1 * (1.0 - c.first_dip_min_move_pct):
+            return
+        tr.sd_phase, tr.sd_l1 = "first_dip", price          # the first leg just ended
+    if tr.sd_phase == "first_dip":
+        tr.sd_l1 = min(tr.sd_l1, price)
+        if tr.sd_l1 < tr.sd_h1 * (1.0 - c.first_dip_max_pct):
+            tr.sd_phase, tr.sd_invalid_reason = "invalid", "first_dip_too_big"
+        elif price >= tr.sd_l1 * (1.0 + c.recover_min_pct):
+            tr.sd_phase, tr.sd_h2, tr.sd_h2_t = "second_leg", price, t
+        return
+    # second_leg: H2 follows new highs; the second dip is measured from it
+    if price > tr.sd_h2:
+        tr.sd_h2, tr.sd_h2_t = price, t
+        return
+    drawdown = 1.0 - price / tr.sd_h2
+    if drawdown > c.second_dip_max_pct:
+        tr.sd_phase, tr.sd_invalid_reason = "invalid", "second_dip_too_deep"
+    elif drawdown >= c.second_dip_min_pct and tr.sd_setup_t is None:
+        tr.sd_setup_t = t
 
 
 def confirm_creator_sells(tr: TokenTracker, c: ScalpConfig) -> None:
@@ -113,6 +157,8 @@ def safety_block(tr: TokenTracker, now: float, c: ScalpConfig) -> str | None:
 
 
 def entry_signal(tr: TokenTracker, now: float, c: ScalpConfig) -> Signal:
+    if c.entry_mode == "second_dip":
+        return second_dip_entry(tr, now, c)
     if c.entry_mode == "initial_zone":
         return initial_zone_entry(tr, now, c)
     return dip_bounce_entry(tr, now, c)
@@ -138,6 +184,61 @@ def _common_guards(tr: TokenTracker, now: float, c: ScalpConfig) -> Signal | Non
     return None
 
 
+def _activity_and_confirm(tr: TokenTracker, now: float, c: ScalpConfig, details: dict, low: float) -> Signal | None:
+    """Shared by the zone entries: the token must still be trading, nobody may be
+    dumping into it, and the configured confirmation must pass. Fills details."""
+    price = tr.price
+    net_recent, _ = tr.flow(now, c.flow_window_s)
+    if -net_recent > c.max_recent_net_sell_sol:
+        return _no("heavy_selling", net_sell_sol=round(-net_recent, 3))
+    updates = len(tr.window(now, c.flow_window_s))
+    if updates < c.min_updates_in_window:
+        return _no("market_inactive", updates=updates)
+    volume = sum(abs(t.flow_sol) for t in tr.window(now, c.activity_window_s))
+    if volume < c.min_activity_sol:
+        return _no("market_inactive", volume_sol=round(volume, 3))
+    details.update({"volume_sol": round(volume, 3), "creator_launches": tr.creator_launches})
+    if c.entry_confirm == "stall":
+        last_flow = tr.ticks[-1].flow_sol
+        last_sell_t = next((t.t for t in reversed(tr.ticks) if t.flow_sol < 0), None)
+        quiet = now - last_sell_t if last_sell_t is not None else float("inf")
+        if last_flow <= 0 or quiet < c.confirm_window_s:
+            return _no("still_selling", last_flow_sol=round(last_flow, 3), quiet_s=round(min(quiet, 999.0), 1))
+        if quiet > c.max_quiet_s:
+            return _no("market_inactive", quiet_s=round(min(quiet, 999.0), 1))
+        details["quiet_s"] = round(min(quiet, 999.0), 1)
+    elif c.entry_confirm == "bounce":
+        bounce = price / low - 1.0 if low > 0 else 0.0
+        if bounce < c.confirm_bounce_pct:
+            return _no("waiting_for_uptick", bounce=round(bounce, 4))
+        details["bounce"] = round(bounce, 4)
+    return None
+
+
+def second_dip_entry(tr: TokenTracker, now: float, c: ScalpConfig) -> Signal:
+    guard = _common_guards(tr, now, c)
+    if guard:
+        return guard
+    if tr.sd_phase == "invalid":
+        return _no(tr.sd_invalid_reason or "pattern_invalid")
+    if tr.sd_phase != "second_leg":
+        return _no({"wait_rise": "no_launch_spike_yet", "first_leg": "waiting_first_dip",
+                    "first_dip": "waiting_recovery"}[tr.sd_phase])
+    price = tr.price
+    drawdown = 1.0 - price / tr.sd_h2
+    if drawdown < c.second_dip_min_pct:
+        return _no("second_dip_not_yet", drawdown=round(drawdown, 4))
+    details = {"second_dip": round(drawdown, 4), "first_dip": round(1.0 - tr.sd_l1 / tr.sd_h1, 4),
+               "h2_vs_opening": round(tr.sd_h2 / tr.launch_price - 1.0, 4),
+               "vs_opening": round(price / tr.launch_price - 1.0, 4), "age": round(tr.age(now), 1),
+               "dev_supply_pct": round(tr.dev_supply_pct, 4),
+               "early_supply_pct": None if (e := tr.early_supply_pct(c.early_window_s)) is None else round(e, 4)}
+    blocked = _activity_and_confirm(tr, now, c, details, low=tr.low_since(tr.sd_h2_t))
+    if blocked:
+        return blocked
+    return Signal(True, "second_dip", details)
+
+
 def initial_zone_entry(tr: TokenTracker, now: float, c: ScalpConfig) -> Signal:
     guard = _common_guards(tr, now, c)
     if guard:
@@ -151,34 +252,12 @@ def initial_zone_entry(tr: TokenTracker, now: float, c: ScalpConfig) -> Signal:
         return _no("above_buy_zone", vs_opening=round(vs_opening, 4))
     if vs_opening < -c.zone_below_pct:
         return _no("below_buy_zone", vs_opening=round(vs_opening, 4))
-    net_recent, _ = tr.flow(now, c.flow_window_s)
-    if -net_recent > c.max_recent_net_sell_sol:
-        return _no("heavy_selling", net_sell_sol=round(-net_recent, 3))
-    updates = len(tr.window(now, c.flow_window_s))
-    if updates < c.min_updates_in_window:
-        return _no("market_inactive", updates=updates)
-    volume = sum(abs(t.flow_sol) for t in tr.window(now, c.activity_window_s))
-    if volume < c.min_activity_sol:
-        return _no("market_inactive", volume_sol=round(volume, 3))
     details = {"rise": round(rise, 4), "vs_opening": round(vs_opening, 4), "age": round(tr.age(now), 1),
-               "volume_sol": round(volume, 3), "creator_launches": tr.creator_launches,
                "dev_supply_pct": round(tr.dev_supply_pct, 4),
                "early_supply_pct": None if (e := tr.early_supply_pct(c.early_window_s)) is None else round(e, 4)}
-    if c.entry_confirm == "stall":
-        last_flow = tr.ticks[-1].flow_sol
-        last_sell_t = next((t.t for t in reversed(tr.ticks) if t.flow_sol < 0), None)
-        quiet = now - last_sell_t if last_sell_t is not None else float("inf")
-        if last_flow <= 0 or quiet < c.confirm_window_s:
-            return _no("still_selling", last_flow_sol=round(last_flow, 3), quiet_s=round(min(quiet, 999.0), 1))
-        if quiet > c.max_quiet_s:
-            return _no("market_inactive", quiet_s=round(min(quiet, 999.0), 1))
-        details["quiet_s"] = round(min(quiet, 999.0), 1)
-    elif c.entry_confirm == "bounce":
-        low = tr.zone_low or price
-        bounce = price / low - 1.0 if low > 0 else 0.0
-        if bounce < c.confirm_bounce_pct:
-            return _no("waiting_for_uptick", bounce=round(bounce, 4))
-        details["bounce"] = round(bounce, 4)
+    blocked = _activity_and_confirm(tr, now, c, details, low=tr.zone_low or price)
+    if blocked:
+        return blocked
     return Signal(True, "initial_zone", details)
 
 

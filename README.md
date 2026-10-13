@@ -6,9 +6,11 @@ wallet, sign transactions, or send swaps.
 ## Launch-dip scalper (new primary strategy)
 
 `uv run python scalp.py` runs a separate PAPER engine built for many small,
-fast trades on fresh pump.fun tokens: wait for the launch spike (snipers + dev),
-buy when the price falls back to around its opening price and selling stalls,
-sell the climb (default target +5%
+fast trades on fresh pump.fun tokens. Default entry (`SCALP_ENTRY_MODE=second_dip`): initial
+incline, a tiny first dip (2-10%), the price goes up a little, then a second dip
+of 10-45% from that new high; buy in the second dip once selling stalls and
+sell the climb. `initial_zone` (buy the return to the opening price) is kept
+for comparison (default target +5%
 NET of fees), and repeat on the same token while it keeps swinging. One asyncio
 process watches up to `SCALP_MAX_WATCHED` tokens and holds up to
 `SCALP_MAX_OPEN_POSITIONS` positions at once.

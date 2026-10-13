@@ -19,7 +19,8 @@ SUPPLY = 1_000_000_000
 
 
 def zcfg(**overrides):
-    base = dict(fail_rate=0.0, latency_s=0.8, seed=1)
+    """These tests cover the initial_zone method (the default is now second_dip)."""
+    base = dict(fail_rate=0.0, latency_s=0.8, seed=1, entry_mode="initial_zone")
     base.update(overrides)
     return ScalpConfig(**base)
 

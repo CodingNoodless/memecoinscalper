@@ -6,6 +6,7 @@ from __future__ import annotations
 import gzip
 import json
 import time
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -67,14 +68,24 @@ class TickRecorder:
 
 
 def read_ticks(paths: list[Path]):
-    """Yield recorded dicts from one or more .jsonl.gz files, oldest first per file."""
+    """Yield recorded dicts from one or more .jsonl.gz files, oldest first per file.
+
+    A file that is still being written (the scalper is running) or was cut off
+    by a crash has no gzip end marker; everything up to the last complete line
+    is still returned."""
     for path in sorted(paths):
         with gzip.open(path, "rt", encoding="utf-8") as handle:
-            for line in handle:
+            while True:
+                try:
+                    line = handle.readline()
+                except (EOFError, OSError, zlib.error):
+                    break  # unfinished or truncated stream: stop at what was flushed
+                if not line:
+                    break
                 line = line.strip()
                 if not line:
                     continue
                 try:
                     yield json.loads(line)
                 except json.JSONDecodeError:
-                    continue  # a torn last line after a crash
+                    continue  # a torn last line

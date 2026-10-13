@@ -57,6 +57,14 @@ class TokenTracker:
     last_tokens_sold: float = 0.0       # tokens sold into the curve by the latest update
     creator_launches: int = 1           # tokens this creator launched within serial_window_s
     creator_sell_times: list = field(default_factory=list)  # unconfirmed creator-wallet sells
+    # second-dip pattern state: wait_rise -> first_leg -> first_dip -> second_leg | invalid
+    sd_phase: str = "wait_rise"
+    sd_h1: float = 0.0                  # high of the initial incline
+    sd_l1: float = 0.0                  # low of the tiny first dip
+    sd_h2: float = 0.0                  # high after the first dip (second dip measured from here)
+    sd_h2_t: float = 0.0
+    sd_invalid_reason: str = ""
+    sd_setup_t: float | None = None     # first time the second dip entered the buy zone
     socials: dict | None = None         # parsed metadata; None until fetched
     twitter_reuse: int = 0              # earlier tokens that used the same Twitter link
 

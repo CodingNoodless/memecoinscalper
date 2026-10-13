@@ -27,10 +27,13 @@ class ScalpConfig:
     max_initial_buy_sol: float = 5.0  # very large dev buys are often dump setups
 
     # --- entry mode -------------------------------------------------------
+    # second_dip (default, Rohit 2026-10-12): initial incline -> a tiny first dip
+    #   -> price goes up a little -> a second dip of 10-45% from that new high:
+    #   buy during the second dip once selling stalls.
     # initial_zone: Rohit's method - snipers + dev pump the price, it falls back
     #   to around the opening price, buy there once selling stalls, sell the climb.
     # dip_bounce: earlier rule set (dip from peak + bounce), kept for comparison.
-    entry_mode: str = "initial_zone"
+    entry_mode: str = "second_dip"
     min_age_s: float = 5.0           # skip the first seconds of chaos
     max_entry_age_s: float = 300.0   # stop opening new trades on old tokens
 
@@ -46,6 +49,13 @@ class ScalpConfig:
     max_recent_net_sell_sol: float = 1000.0  # skip if more than this much SOL was net-sold in flow_window_s
     activity_window_s: float = 30.0  # the token must still be trading:
     min_activity_sol: float = 1.0    #   at least this much SOL traded (buys + sells) in the window
+
+    # --- second_dip rules (drops measured from the swing high) -----------------
+    first_dip_min_move_pct: float = 0.02  # a pullback this big ends the first leg (smaller = noise)
+    first_dip_max_pct: float = 0.10       # first dip must be tiny: bigger = not the pattern, skip token
+    recover_min_pct: float = 0.03         # "goes up a little": bounce off the first dip low
+    second_dip_min_pct: float = 0.10      # buy zone: 10% ...
+    second_dip_max_pct: float = 0.45      # ... to 45% below the high after the first dip
 
     # --- rug / scam filters ----------------------------------------------
     max_dev_supply_pct: float = 0.05     # dev's launch buy as share of the 1B supply (bounces: median 2.4%, failures 9.8%)
@@ -148,7 +158,10 @@ def _validate(c: ScalpConfig) -> None:
         (0 < c.trade_size_sol <= c.max_exposure_sol, "need 0 < trade_size_sol <= max_exposure_sol"),
         (c.max_open_positions > 0, "max_open_positions must be positive"),
         (c.min_age_s < c.max_entry_age_s <= c.watch_max_age_s, "need min_age_s < max_entry_age_s <= watch_max_age_s"),
-        (c.entry_mode in {"initial_zone", "dip_bounce"}, "entry_mode must be initial_zone or dip_bounce"),
+        (c.entry_mode in {"second_dip", "initial_zone", "dip_bounce"},
+         "entry_mode must be second_dip, initial_zone or dip_bounce"),
+        (0 < c.first_dip_min_move_pct < c.first_dip_max_pct <= c.second_dip_min_pct < c.second_dip_max_pct < 1,
+         "need 0 < first_dip_min_move < first_dip_max <= second_dip_min < second_dip_max < 1"),
         (c.entry_confirm in {"none", "stall", "bounce"}, "entry_confirm must be none, stall or bounce"),
         (c.min_initial_rise_pct > c.zone_above_pct >= 0, "need min_initial_rise_pct > zone_above_pct >= 0"),
         (0 <= c.zone_below_pct < c.rug_floor_pct < 1, "need 0 <= zone_below_pct < rug_floor_pct < 1"),
