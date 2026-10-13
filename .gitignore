@@ -1,0 +1,25 @@
+.env
+paper_wallet.json
+trade_history.json
+token_attempts.json
+discovered_pools.json
+active_candidates.json
+pending_entry.json
+.tradeslavebot.lock
+paper_observations.jsonl
+pipeline_events.jsonl
+logs/
+.*.tmp
+__pycache__/
+*.py[cod]
+.venv/
+
+# runtime/output
+pipeline_output.json
+archive/
+data/
+*.db
+*.sqlite
+.pytest_cache/
+.idea/workspace.xml
+.idea/shelf/
