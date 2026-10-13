@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 
 from .config import PAPER_NETWORK_FEE_USD, PAPER_STARTING_BALANCE
 from .state import STATE_DIR, STATE_LOCK, load_json
+from .scalper.dashboard_view import build_scalper_snapshot, scalper_html
 
 
 HOST = "127.0.0.1"
@@ -250,7 +251,7 @@ main{max-width:1500px;margin:auto;padding:26px 30px 36px}.top{display:flex;justi
 .cards{display:grid;grid-template-columns:repeat(5,minmax(130px,1fr));gap:12px;margin-bottom:14px}.card,.panel{background:linear-gradient(145deg,#15211e,#101715);border:1px solid var(--line);border-radius:14px;box-shadow:0 10px 26px #0002}.card{padding:16px 18px;min-height:94px}.label{font-size:12px;color:var(--muted)}.value{font-size:25px;font-weight:650;letter-spacing:-.03em;margin-top:8px}.sub{font-size:11px;color:var(--muted);margin-top:3px}.green{color:var(--green)}.red{color:var(--red)}.amber{color:var(--amber)}
 .layout{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(310px,1fr);gap:14px}.panel{padding:18px 20px}.panel-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}.panel h2{margin:0;font-size:15px;font-weight:600}.switch{display:flex;gap:6px}.switch button{border:1px solid var(--line);color:var(--muted);background:transparent;border-radius:7px;padding:5px 9px;cursor:pointer;font:inherit;font-size:11px}.switch button.active{color:var(--text);background:var(--panel2);border-color:#47655a}canvas{display:block;width:100%;height:260px}.trade-top{display:flex;justify-content:space-between;align-items:flex-start}.symbol{font-size:25px;font-weight:700}.address{font:11px ui-monospace,monospace;color:var(--muted);margin-top:3px;overflow-wrap:anywhere}.pnl{font-size:20px;font-weight:700;text-align:right}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:18px}.stat{border-top:1px solid var(--line);padding-top:10px}.stat .label{font-size:11px}.stat .v{font-size:14px;margin-top:4px;overflow-wrap:anywhere}.empty{height:230px;display:grid;place-items:center;text-align:center;color:var(--muted);padding:30px}.wide{grid-column:1/-1}.lower{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;font-size:12px}th{text-align:left;color:var(--muted);font-weight:500;padding:7px;border-bottom:1px solid var(--line)}td{padding:9px 7px;border-bottom:1px solid #26342f;white-space:nowrap}.event{color:var(--muted);font-size:12px}.footer{text-align:right;font-size:10px;color:#708078;margin-top:12px}@media(max-width:1000px){.cards{grid-template-columns:repeat(3,1fr)}.layout{grid-template-columns:1fr}.lower{grid-template-columns:1fr}}@media(max-width:600px){main{padding:16px}.cards{grid-template-columns:repeat(2,1fr)}.value{font-size:21px}}
 </style></head><body><main>
-<header class="top"><div class="brand"><span class="orb"></span><div><div class="eyebrow">Tradeslave · paper account</div><h1>Trading monitor</h1></div></div><div><div class="pill">Paper mode · read only</div><div id="updated" class="updated" style="margin-top:7px">Connecting…</div></div></header>
+<header class="top"><div class="brand"><span class="orb"></span><div><div class="eyebrow">Tradeslave · paper account</div><h1>Trading monitor</h1></div></div><div><div style="display:flex;gap:8px;justify-content:flex-end"><a class="pill" style="color:var(--muted);text-decoration:none" href="/">Scalper</a><div class="pill">Momentum bot · paper</div></div><div id="updated" class="updated" style="margin-top:7px">Connecting…</div></div></header>
 <section class="cards">
 <div class="card"><div class="label">Cash balance</div><div id="balance" class="value">—</div><div class="sub">Uninvested paper USD</div></div>
 <div class="card"><div class="label">Net worth estimate</div><div id="equity" class="value">—</div><div class="sub">Cash + estimated net exit quote</div></div>
@@ -290,14 +291,28 @@ async function refresh(){try{const response=await fetch('/api/state',{cache:'no-
 </script></body></html>"""
 
 
+# The scalper page reuses the momentum page's stylesheet so both views match.
+SCALPER_PAGE = scalper_html(HTML.split("<style>", 1)[1].split("</style>", 1)[0])
+
+
 class DashboardHandler(BaseHTTPRequestHandler):
     server_version = "PaperDashboard/1.0"
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
         path = urlsplit(self.path).path
         if path == "/":
+            body = SCALPER_PAGE.encode("utf-8")
+            content_type = "text/html; charset=utf-8"
+        elif path == "/momentum":
             body = HTML.encode("utf-8")
             content_type = "text/html; charset=utf-8"
+        elif path == "/api/scalper":
+            try:
+                body = json.dumps(build_scalper_snapshot(), allow_nan=False).encode("utf-8")
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                logger.exception("Scalper snapshot failed")
+                body = json.dumps({"error": f"Could not read scalper state: {exc}"}).encode("utf-8")
+            content_type = "application/json; charset=utf-8"
         elif path == "/api/state":
             try:
                 body = json.dumps(build_snapshot(), allow_nan=False).encode("utf-8")

@@ -6,8 +6,9 @@ wallet, sign transactions, or send swaps.
 ## Launch-dip scalper (new primary strategy)
 
 `uv run python scalp.py` runs a separate PAPER engine built for many small,
-fast trades on fresh pump.fun tokens: watch tokens from launch, buy after the
-initial sniper dump once buying returns, sell the bounce (default target +5%
+fast trades on fresh pump.fun tokens: wait for the launch spike (snipers + dev),
+buy when the price falls back to around its opening price and selling stalls,
+sell the climb (default target +5%
 NET of fees), and repeat on the same token while it keeps swinging. One asyncio
 process watches up to `SCALP_MAX_WATCHED` tokens and holds up to
 `SCALP_MAX_OPEN_POSITIONS` positions at once.
@@ -31,6 +32,11 @@ All settings live in `tradeslave/scalper/config.py` and can be overridden in
 RPC is the default; set `SCALP_RPC_WS` to another websocket endpoint if it
 disconnects or rate-limits. Results: `scalp_trades.jsonl`, `scalp_wallet.json`,
 `logs/scalper.log`.
+
+`uv run python dashboard.py` now opens on the scalper monitor at
+http://127.0.0.1:8765 (equity, win rate, per-trade results, open positions,
+watchlist with rug-filter status, why it isn't buying, engine health). The
+momentum bot's view moved to http://127.0.0.1:8765/momentum.
 
 ## Quick start
 
