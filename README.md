@@ -57,8 +57,8 @@ candidates; RugCheck feed candidates are matched to a Solana pool from DEX Scree
 Each scan logs eligible and rejection counts by discovery source so a quiet
 scanner can be diagnosed without interpreting a zero-trade count alone.
 It ranks up to five eligible tokens using `calculate_natural_selection_score`
-and asks the local model to select one. The score is an experimental ranking,
-not a forecast of profit. For each nonempty screened batch,
+and picks the top score (with `LLM_MODE=on`, the local model selects one instead). The score is an experimental ranking,
+not a forecast of profit. In `on` mode, for each nonempty screened batch,
 Ollama receives a schema-constrained address list; its selected address is
 validated against that batch before the trader can use it. Transport errors,
 malformed output, or an address outside the list fail closed and do not create
@@ -78,7 +78,7 @@ estimated bought amount back to USDC and skips the entry if estimated
 round-trip loss exceeds `MAX_ENTRY_ROUNDTRIP_LOSS_PCT` (3% by default and
 hard-capped at 3% even when an older `.env` contains a larger value).
 
-After Ollama nominates a candidate, the trader retrieves closed 1-minute
+After a candidate is selected, the trader retrieves closed 1-minute
 pool candles from GeckoTerminal and requires at least 15 fresh bars. The entry
 chart gate requires EMA(5) above EMA(13), the last close above EMA(5), a rising
 fast EMA, positive but bounded three-candle momentum, and no oversized last
