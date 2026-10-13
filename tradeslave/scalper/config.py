@@ -58,6 +58,10 @@ class ScalpConfig:
     serial_launch_max: int = 2           # creator launched more tokens than this recently = token farm, skip
     serial_window_s: float = 3600.0
     skip_mayhem: bool = False            # pump.fun "mayhem mode" tokens (recorded either way)
+    # --- narrative / socials (Rohit: tokens with a Twitter page did better) ---
+    require_socials: str = "off"         # off | any | twitter | twitter_profile
+    metadata_timeout_s: float = 4.0      # per gateway attempt
+    max_twitter_reuse: int = 1000        # skip if this many earlier tokens used the same Twitter link
     first_dip_min_pct: float = 0.20  # price must have fallen this far from the launch peak
     dip_max_pct: float = 0.70        # deeper than this = likely dead/rugged, skip
     # --- dip_bounce rules ------------------------------------------------
@@ -151,6 +155,8 @@ def _validate(c: ScalpConfig) -> None:
         (0 < c.max_dev_supply_pct <= 1 and 0 < c.max_early_supply_pct <= 1, "supply limits must be in (0, 1]"),
         (c.confirm_window_s < c.max_quiet_s, "need confirm_window_s < max_quiet_s"),
         (c.serial_launch_max >= 1, "serial_launch_max must be at least 1"),
+        (c.require_socials in {"off", "any", "twitter", "twitter_profile"},
+         "require_socials must be off, any, twitter or twitter_profile"),
     ]
     for ok, message in checks:
         if not ok:

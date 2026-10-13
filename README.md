@@ -34,6 +34,16 @@ what the bot could know at that moment (no hindsight):
 uv run python -m tradeslave.scalper.report
 ```
 
+Narrative / socials: the scalper fetches each token's metadata (Twitter/X
+link and its kind - post, account or community - plus Telegram, website and
+description) and records it. `SCALP_REQUIRE_SOCIALS` = `off` (default) / `any` /
+`twitter` / `twitter_profile` makes it a hard filter. For tokens recorded before
+this existed:
+
+```
+uv run python -m tradeslave.scalper.backfill_meta   # then rerun the report
+```
+
 All settings live in `tradeslave/scalper/config.py` and can be overridden in
 `.env` as `SCALP_<NAME>` (e.g. `SCALP_TAKE_PROFIT_PCT=0.04`). The public Solana
 RPC is the default; set `SCALP_RPC_WS` to another websocket endpoint if it

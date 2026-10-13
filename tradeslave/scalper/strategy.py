@@ -26,6 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .config import ScalpConfig
+from .socials import socials_ok
 from .tracker import TokenTracker
 
 
@@ -92,6 +93,13 @@ def safety_block(tr: TokenTracker, now: float, c: ScalpConfig) -> str | None:
         return "floor_broken"
     if tr.creator_launches > c.serial_launch_max:
         return "serial_launcher"
+    if c.require_socials != "off":
+        if tr.socials is None:
+            return "metadata_pending"
+        if not socials_ok(tr.socials, c.require_socials):
+            return "no_socials"
+    if tr.twitter_reuse >= c.max_twitter_reuse:
+        return "copycat_twitter"
     if c.skip_mayhem and tr.mayhem:
         return "mayhem_mode"
     if tr.dev_supply_pct > c.max_dev_supply_pct:

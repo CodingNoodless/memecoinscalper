@@ -46,6 +46,8 @@ def replay(records, cfg: ScalpConfig) -> Scalper:
                 state = CurveState(int(rec["vt"]), int(rec["vs"]))
             scalper.on_create(rec["m"], rec.get("s", "?"), t, state, rec.get("cr", ""), rec.get("bc", ""),
                               float(rec.get("ib") or 0.0), float(rec.get("dt") or 0.0), bool(rec.get("mh")))
+        elif rec.get("k") == "meta":
+            scalper.on_metadata(rec["m"], t, {k[2:]: v for k, v in rec.items() if k.startswith("x_")})
         elif rec.get("k") in ("csell", "devsell"):   # "devsell" = older recordings, same meaning
             scalper.on_creator_sell(rec["m"], t)
         elif rec.get("k") == "curve":

@@ -14,6 +14,7 @@ be judged on evidence. Only information available at the touch is used.
 from __future__ import annotations
 
 import argparse
+import json
 import statistics
 from collections import Counter
 from pathlib import Path
@@ -22,12 +23,32 @@ from .config import load_config
 from .core import Scalper
 from .curve import CurveState
 from .recorder import TICK_DIR, read_ticks
+from ..paths import DATA_DIR
+
+BACKFILL = DATA_DIR / "meta" / "backfill.jsonl"
+
+
+def load_backfill(path=BACKFILL) -> dict[str, dict]:
+    """Socials fetched after the fact by `backfill_meta` (metadata is fixed at launch,
+    so it is treated as known from the token's creation)."""
+    out = {}
+    if path.exists():
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(row, dict) and row.get("mint") and isinstance(row.get("socials"), dict):
+                    out[row["mint"]] = row["socials"]
+    return out
 from .strategy import safety_block
 
 FEATURES = ("rise", "since_peak_s", "age_s", "volume_30s", "net_flow_10s", "updates_10s", "dev_pct", "sniper_pct")
 
 
-def collect(records, cfg, up: float, down: float, horizon: float) -> list[dict]:
+def collect(records, cfg, up: float, down: float, horizon: float, backfill: dict | None = None) -> list[dict]:
+    backfill = backfill or {}
     scalper = Scalper(cfg)
     scalper._decide = lambda tr, now: None   # observe only
     touches: dict[str, dict] = {}
@@ -38,6 +59,10 @@ def collect(records, cfg, up: float, down: float, horizon: float) -> list[dict]:
             state = CurveState(int(rec["vt"]), int(rec["vs"])) if rec.get("vt") and rec.get("vs") else None
             scalper.on_create(rec["m"], rec.get("s", "?"), t, state, rec.get("cr", ""), rec.get("bc", ""),
                               float(rec.get("ib") or 0.0), float(rec.get("dt") or 0.0), bool(rec.get("mh")))
+            if rec["m"] in backfill:
+                scalper.on_metadata(rec["m"], t, backfill[rec["m"]])
+        elif kind == "meta":
+            scalper.on_metadata(rec["m"], t, {k[2:]: v for k, v in rec.items() if k.startswith("x_")})
         elif kind in ("csell", "devsell"):
             scalper.on_creator_sell(rec["m"], t)
         elif kind == "curve":
@@ -54,6 +79,9 @@ def collect(records, cfg, up: float, down: float, horizon: float) -> list[dict]:
                 "volume_30s": sum(abs(x.flow_sol) for x in w30), "net_flow_10s": sum(x.flow_sol for x in w10),
                 "updates_10s": len(w10), "dev_pct": tr.dev_supply_pct,
                 "sniper_pct": tr.early_supply_pct(cfg.early_window_s) or 0.0,
+                "socials": "unknown" if tr.socials is None or not tr.socials.get("fetched") else
+                           (tr.socials.get("twitter_kind") or ("telegram/web" if tr.socials.get("has_any") else "none")),
+                "twitter_reuse": tr.twitter_reuse,
             }
     out = []
     for mint, row in touches.items():
@@ -79,7 +107,8 @@ def main() -> None:
     paths = [Path(f) for f in args.files] or sorted(TICK_DIR.glob("*.jsonl.gz"))
     if not paths:
         raise SystemExit("No recorded ticks yet.")
-    rows = collect(read_ticks(paths), load_config(), args.up, args.down, args.horizon)
+    backfill = load_backfill()
+    rows = collect(read_ticks(paths), load_config(), args.up, args.down, args.horizon, backfill)
     print(f"{len(rows)} tokens returned to their opening price after a spike "
           f"(bounce = +{args.up:.0%} before -{args.down:.0%} within {args.horizon:.0f}s)\n")
     for label, subset in (("all", rows), ("passed rug filters at that moment", [r for r in rows if r["verdict"] == "clean"])):
@@ -90,6 +119,19 @@ def main() -> None:
               f"median best {statistics.median(r['best'] for r in subset):+.1%}  "
               f"median after {args.horizon:.0f}s {statistics.median(r['end'] for r in subset):+.1%}")
     print("\nverdict at touch:", dict(Counter(r["verdict"] for r in rows).most_common()))
+    print("\nby socials (narrative):")
+    for group in ("tweet", "profile", "community", "other", "telegram/web", "none", "unknown"):
+        subset = [r for r in rows if r["socials"] == group]
+        if subset:
+            c = Counter(r["outcome"] for r in subset)
+            print(f"  {group:13s} n={len(subset):3d}  bounce {c['bounce']:3d}  fail {c['fail']:3d}  neither {c['neither']:3d}"
+                  f"  | median best {statistics.median(r['best'] for r in subset):+.1%}"
+                  f"  median after {args.horizon:.0f}s {statistics.median(r['end'] for r in subset):+.1%}")
+    has_x = [r for r in rows if r["socials"] in ("tweet", "profile", "community")]
+    no_x = [r for r in rows if r["socials"] in ("none", "telegram/web", "other")]
+    if has_x and no_x:
+        rate = lambda s: sum(r["outcome"] == "bounce" for r in s) / len(s)
+        print(f"  -> bounce rate with an X link {rate(has_x):.0%} (n={len(has_x)}) vs without {rate(no_x):.0%} (n={len(no_x)})")
     bounce = [r for r in rows if r["outcome"] == "bounce"]
     fail = [r for r in rows if r["outcome"] == "fail"]
     if bounce and fail:

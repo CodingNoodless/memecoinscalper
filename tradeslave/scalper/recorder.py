@@ -53,6 +53,9 @@ class TickRecorder:
                     "vs": state.virtual_sol_reserves, "rt": state.real_token_reserves,
                     "rs": state.real_sol_reserves, "c": int(state.complete), "sl": slot})
 
+    def metadata(self, t, mint, socials: dict) -> None:
+        self.write({"k": "meta", "t": round(t, 3), "m": mint, **{f"x_{k}": v for k, v in socials.items()}})
+
     def creator_sell(self, t, mint) -> None:
         """The creator wallet sold something (not necessarily this token)."""
         self.write({"k": "csell", "t": round(t, 3), "m": mint})

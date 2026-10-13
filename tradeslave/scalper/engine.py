@@ -28,6 +28,7 @@ import dataclasses
 
 from .curve import GRADUATED, decode_bonding_curve, state_from_pumpportal
 from .recorder import TickRecorder
+from .socials import fetch_metadata, parse_socials
 from .strategy import entry_signal, safety_block
 
 log = logging.getLogger("scalper")
@@ -51,9 +52,10 @@ class LiveEngine:
         self.creator_mints: dict[str, set[str]] = {}       # creator -> watched mints
         self.watch: dict[str, str] = {}                    # mint -> curve account
         self.stats = {"created_seen": 0, "skipped_full": 0, "skipped_filter": 0, "curve_msgs": 0,
-                      "decode_fail": 0, "graduated": 0, "handler_errors": 0, "creator_msgs": 0, "creator_sell_logs": 0, "dev_sells": 0, "pp_reconnects": 0,
+                      "decode_fail": 0, "graduated": 0, "meta_ok": 0, "meta_fail": 0, "with_twitter": 0, "handler_errors": 0, "creator_msgs": 0, "creator_sell_logs": 0, "dev_sells": 0, "pp_reconnects": 0,
                       "rpc_reconnects": 0, "sub_errors": 0}
         self.raw_samples = 0
+        self.meta_slots = asyncio.Semaphore(6)
         self.started = time.time()
         self._restore_balance()
 
@@ -92,6 +94,8 @@ class LiveEngine:
                 "safety": safety_block(tr, now, self.cfg),
                 "status": "in position" if mint in self.scalper.book.positions else (signal.reason if signal else ""),
                 "entries": tr.entries, "updates": len(tr.ticks), "creator_launches": tr.creator_launches,
+                "socials": None if tr.socials is None else (tr.socials.get("twitter_kind") or
+                                                            ("telegram/web" if tr.socials.get("has_any") else "none")),
             })
         rows.sort(key=lambda r: r["age_s"])
         return rows
@@ -107,7 +111,7 @@ class LiveEngine:
             "watchlist": self._watchlist(now),
             "settings": {k: getattr(self.cfg, k) for k in (
                 "entry_mode", "entry_confirm", "min_initial_rise_pct", "zone_above_pct", "zone_below_pct",
-                "rug_floor_pct", "max_dev_supply_pct", "max_early_supply_pct", "take_profit_pct",
+                "rug_floor_pct", "max_dev_supply_pct", "max_early_supply_pct", "require_socials", "take_profit_pct",
                 "stop_loss_pct", "max_hold_s", "trade_size_sol", "max_open_positions", "fee_bps", "latency_s")},
         })
         for p in snap["open_positions"]:
@@ -202,6 +206,11 @@ class LiveEngine:
         if self.recorder:
             self.recorder.create(now, mint, symbol, state, creator, curve_key, initial_buy_sol, dev_tokens, mayhem)
         self.watch[mint] = curve_key
+        uri = msg.get("uri")
+        try:
+            asyncio.get_running_loop().create_task(self._load_metadata(mint, uri))
+        except RuntimeError:
+            pass   # no running loop (offline tests)
         if self.rpc_ready.is_set():
             loop = asyncio.get_running_loop()
             loop.create_task(self._subscribe_curve(mint, curve_key))
@@ -209,6 +218,23 @@ class LiveEngine:
                 loop.create_task(self._subscribe_creator(creator, mint))
         elif creator:
             self.creator_mints.setdefault(creator, set()).add(mint)
+
+    async def _load_metadata(self, mint: str, uri) -> None:
+        """Fetch the token's metadata (socials, description) without blocking the loop."""
+        async with self.meta_slots:
+            meta = await asyncio.to_thread(fetch_metadata, uri, self.cfg.metadata_timeout_s) if uri else None
+        socials = parse_socials(meta)
+        self.stats["meta_ok" if socials["fetched"] else "meta_fail"] += 1
+        if socials["twitter"]:
+            self.stats["with_twitter"] += 1
+        now = time.time()
+        if self.recorder:
+            self.recorder.metadata(now, mint, socials)
+        try:
+            self.scalper.on_metadata(mint, now, socials)
+        except Exception:
+            self.stats["handler_errors"] += 1
+            log.exception("Error applying metadata for %s", mint)
 
     # --- RPC: bonding curves + creator wallets --------------------------------
     async def _send(self, payload: dict) -> None:
@@ -433,13 +459,14 @@ class LiveEngine:
         log.info(
             "STATUS up=%.0fm watched=%d open=%d balance=%.4f equity=%.4f | trades=%d wins=%d (%.0f%%) "
             "avg=%+.2f%% pnl=%+.4f SOL fees=%.4f failed_tx=%d | new_tokens=%d curve_msgs=%d decode_fail=%d "
-            "dev_sells=%d (creator sell logs %d) graduated=%d errors=%d skipped_full=%d | top_entry_blocks=%s",
+            "dev_sells=%d (creator sell logs %d) graduated=%d errors=%d skipped_full=%d | metadata ok=%d fail=%d "
+            "twitter=%d | top_entry_blocks=%s",
             (now - self.started) / 60, len(self.watch), len(book.positions), book.balance_sol,
             book.equity_sol(self.scalper.trackers), len(closed), wins, 100 * wins / len(closed) if closed else 0,
             avg * 100, pnl, book.fees_paid_sol, book.failed_tx, self.stats["created_seen"],
             self.stats["curve_msgs"], self.stats["decode_fail"], self.stats["dev_sells"],
             self.stats["creator_sell_logs"], self.stats["graduated"], self.stats["handler_errors"],
-            self.stats["skipped_full"], blocks,
+            self.stats["skipped_full"], self.stats["meta_ok"], self.stats["meta_fail"], self.stats["with_twitter"], blocks,
         )
         if self.stats["curve_msgs"] > 50 and self.stats["decode_fail"] > self.stats["curve_msgs"] * 0.5:
             log.error("Most curve updates fail to decode - pump.fun may have changed its account layout. "
@@ -509,11 +536,11 @@ def main() -> None:
         log.error("Another scalper instance is already running; exiting")
         return
     log.info("Scalper (PAPER) starting: mode=%s confirm=%s | rise>=%.0f%% zone=[-%.0f%%, +%.0f%%] of opening "
-             "| filters: dev<=%.0f%% snipers<=%.0f%% dev-sell watch=%s | TP=%+.1f%% SL=-%.1f%% max_hold=%.0fs "
+             "| filters: dev<=%.0f%% snipers<=%.0f%% dev-sell watch=%s socials=%s | TP=%+.1f%% SL=-%.1f%% max_hold=%.0fs "
              "| size=%.3f SOL max_open=%d watch=%d | fee=%.2f%%/side latency=%.1fs fail=%.0f%%",
              cfg.entry_mode, cfg.entry_confirm, cfg.min_initial_rise_pct * 100, cfg.zone_below_pct * 100,
              cfg.zone_above_pct * 100, cfg.max_dev_supply_pct * 100, cfg.max_early_supply_pct * 100,
-             cfg.watch_creator, cfg.take_profit_pct * 100, cfg.stop_loss_pct * 100, cfg.max_hold_s,
+             cfg.watch_creator, cfg.require_socials, cfg.take_profit_pct * 100, cfg.stop_loss_pct * 100, cfg.max_hold_s,
              cfg.trade_size_sol, cfg.max_open_positions, cfg.max_watched, cfg.fee_bps / 100, cfg.latency_s,
              cfg.fail_rate * 100)
     engine = LiveEngine(cfg)

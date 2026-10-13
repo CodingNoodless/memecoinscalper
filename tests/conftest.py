@@ -48,3 +48,10 @@ def state_dir(tmp_path, monkeypatch):
     from tradeslave.scalper import engine
     monkeypatch.setattr(engine, "LOG_DIR", tmp_path / "logs")
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def no_network_metadata(monkeypatch):
+    """Tests never touch the network: metadata fetches return nothing."""
+    from tradeslave.scalper import engine
+    monkeypatch.setattr(engine, "fetch_metadata", lambda uri, timeout_s=4.0: None)

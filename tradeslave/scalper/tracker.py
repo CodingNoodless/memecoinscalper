@@ -57,6 +57,8 @@ class TokenTracker:
     last_tokens_sold: float = 0.0       # tokens sold into the curve by the latest update
     creator_launches: int = 1           # tokens this creator launched within serial_window_s
     creator_sell_times: list = field(default_factory=list)  # unconfirmed creator-wallet sells
+    socials: dict | None = None         # parsed metadata; None until fetched
+    twitter_reuse: int = 0              # earlier tokens that used the same Twitter link
 
     def update(self, t: float, state: CurveState) -> Tick | None:
         """Add a new curve state. Returns the tick, or None if nothing changed."""

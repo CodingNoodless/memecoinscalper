@@ -22,6 +22,7 @@ class Scalper:
         self.book = PaperBook(cfg, on_event=self.emit)
         self.trackers: dict[str, TokenTracker] = {}
         self.creator_history: dict[str, list[tuple[float, str]]] = {}   # creator -> [(t, mint)]
+        self.twitter_links: dict[str, int] = {}                          # normalised link -> uses
         self.entry_block_reasons: dict[str, int] = {}
 
     # --- inputs -----------------------------------------------------------
@@ -44,6 +45,20 @@ class Scalper:
                 if other_tr is not None:
                     other_tr.creator_launches = len(history)
         return tr
+
+    def on_metadata(self, mint: str, t: float, socials: dict) -> None:
+        """Socials arrived for a token. Copycats re-using an earlier token's
+        Twitter link are counted (narrative copies are common)."""
+        tr = self.trackers.get(mint)
+        if tr is None:
+            return
+        tr.socials = socials
+        link = (socials or {}).get("twitter")
+        if link:
+            key = link.lower().split("?")[0].rstrip("/")
+            tr.twitter_reuse = self.twitter_links.get(key, 0)
+            self.twitter_links[key] = tr.twitter_reuse + 1
+        self._decide(tr, t)
 
     def on_creator_sell(self, mint: str, t: float) -> None:
         """The creator wallet sold something. It counts as this dev dumping only
