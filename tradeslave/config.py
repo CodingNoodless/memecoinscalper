@@ -224,7 +224,10 @@ def _unknown_env_keys() -> list[str]:
         keys = dotenv_values(PROJECT_ROOT / ".env").keys()
     except OSError:
         return []
-    return sorted(key for key in keys if key and key not in KNOWN_SETTINGS)
+    return sorted(
+        key for key in keys
+        if key and key not in KNOWN_SETTINGS and not key.startswith(("SCALP_", "PUMPPORTAL_"))
+    )
 
 
 for _key in _unknown_env_keys():

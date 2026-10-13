@@ -3,6 +3,35 @@
 This project currently runs a paper-only trading loop. It does not load a Solana
 wallet, sign transactions, or send swaps.
 
+## Launch-dip scalper (new primary strategy)
+
+`uv run python scalp.py` runs a separate PAPER engine built for many small,
+fast trades on fresh pump.fun tokens: watch tokens from launch, buy after the
+initial sniper dump once buying returns, sell the bounce (default target +5%
+NET of fees), and repeat on the same token while it keeps swinging. One asyncio
+process watches up to `SCALP_MAX_WATCHED` tokens and holds up to
+`SCALP_MAX_OPEN_POSITIONS` positions at once.
+
+Data is free: PumpPortal's new-token websocket for discovery, and a Solana RPC
+websocket (`accountSubscribe`) on each token's bonding curve, so every buy or
+sell arrives as an exact curve state. Paper fills use pump.fun curve math with
+the 1.25% fee on both sides, a network fee per transaction, ~0.8 s latency and
+a 5% failed-transaction rate.
+
+Every tick is recorded to `data/ticks/YYYY-MM-DD.jsonl.gz`. Replay it with
+different settings:
+
+```
+uv run python -m tradeslave.scalper.backtest
+uv run python -m tradeslave.scalper.backtest --grid take_profit_pct=0.03,0.05,0.08
+```
+
+All settings live in `tradeslave/scalper/config.py` and can be overridden in
+`.env` as `SCALP_<NAME>` (e.g. `SCALP_TAKE_PROFIT_PCT=0.04`). The public Solana
+RPC is the default; set `SCALP_RPC_WS` to another websocket endpoint if it
+disconnects or rate-limits. Results: `scalp_trades.jsonl`, `scalp_wallet.json`,
+`logs/scalper.log`.
+
 ## Quick start
 
 ```

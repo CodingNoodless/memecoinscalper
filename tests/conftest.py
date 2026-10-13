@@ -45,4 +45,6 @@ from tradeslave import state  # noqa: E402
 def state_dir(tmp_path, monkeypatch):
     """Redirect all state reads/writes to a temp folder (never the real paper account)."""
     monkeypatch.setattr(state, "STATE_DIR", tmp_path)
+    from tradeslave.scalper import engine
+    monkeypatch.setattr(engine, "LOG_DIR", tmp_path / "logs")
     return tmp_path

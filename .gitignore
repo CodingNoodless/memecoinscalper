@@ -23,3 +23,8 @@ data/
 .pytest_cache/
 .idea/workspace.xml
 .idea/shelf/
+scalp_wallet.json
+scalp_trades.jsonl
+scalp_events.jsonl
+.scalper.lock
+backtests/
