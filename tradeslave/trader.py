@@ -10,7 +10,7 @@ from typing import Any
 
 import requests
 
-from config import (
+from .config import (
     DEXSCREENER_BASE_URL,
     GECKOTERMINAL_BASE_URL,
     ENTRY_WATCH_MAX_SECONDS,
@@ -56,9 +56,9 @@ from config import (
     USDC_DECIMALS,
     USDC_MINT,
 )
-from scanner import parse_timestamp
-from risk import daily_realized_risk
-from state import (
+from .scanner import parse_timestamp
+from .risk import daily_realized_risk
+from .state import (
     STATE_LOCK,
     append_jsonl,
     load_json,
@@ -442,7 +442,7 @@ def _empty_wallet() -> dict[str, Any]:
 def _load_wallet() -> dict[str, Any]:
     wallet = load_json("paper_wallet.json", None)
     if wallet is None:
-        from state import state_path
+        from .state import state_path
 
         if state_path("paper_wallet.json").exists():
             raise ValueError("paper_wallet.json contains null; refusing to reset paper account")

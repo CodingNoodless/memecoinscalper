@@ -11,7 +11,7 @@ from typing import Any
 
 import requests
 
-from config import (
+from .config import (
     DEXSCREENER_BASE_URL,
     GECKOTERMINAL_BASE_URL,
     HTTP_TIMEOUT_SECONDS,
@@ -34,7 +34,7 @@ from config import (
     RUGCHECK_MIN_REQUEST_INTERVAL_SECONDS,
     SCAN_INTERVAL_SECONDS,
 )
-from state import (
+from .state import (
     append_jsonl,
     empty_candidate_snapshot,
     load_json,
@@ -44,7 +44,7 @@ from state import (
     recent_token_attempts,
     save_json,
 )
-from risk import daily_realized_risk
+from .risk import daily_realized_risk
 
 
 logger = logging.getLogger(__name__)

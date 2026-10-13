@@ -7,8 +7,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .paths import PROJECT_ROOT
 
-STATE_DIR = Path(__file__).resolve().parent
+
+STATE_DIR = PROJECT_ROOT
 STATE_LOCK = threading.RLock()
 
 

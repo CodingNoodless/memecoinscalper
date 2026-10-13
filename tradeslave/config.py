@@ -3,10 +3,12 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from .paths import PROJECT_ROOT
+
 
 # Resolve relative to this file, not the IDE's working directory. Existing
 # process environment values still take precedence over values in .env.
-load_dotenv(dotenv_path=Path(__file__).resolve().with_name(".env"))
+load_dotenv(dotenv_path=PROJECT_ROOT / ".env")
 
 
 def _float_setting(name: str, default: float) -> float:

@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 import math
 from typing import Any
 
-from config import MAX_DAILY_LOSS_PCT
-from state import load_json
+from .config import MAX_DAILY_LOSS_PCT
+from .state import load_json
 
 
 def _number(value: Any) -> float | None:
