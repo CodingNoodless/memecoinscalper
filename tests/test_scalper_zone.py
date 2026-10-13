@@ -13,7 +13,7 @@ from tradeslave.scalper.backtest import replay
 from tradeslave.scalper.strategy import entry_signal, safety_block
 
 from test_scalper import Market, T0
-from test_scalper_engine import FakeWS, create_msg
+from test_scalper_engine import FakeWS, create_msg, notification
 
 SUPPLY = 1_000_000_000
 
@@ -158,20 +158,57 @@ def test_repeat_entry_when_price_returns_to_the_zone_again():
     assert [c["kind"] for c in scalper.book.closed] == ["initial_zone", "initial_zone"]
 
 
-def test_dev_sell_is_recorded_and_replayed(tmp_path):
+def test_creator_sell_counts_only_when_this_curve_confirms_it():
+    scalper = Scalper(zcfg())
+    m = new_token(scalper, dev_factor=1.06)                  # dev bag ~3% of supply
+    tr = scalper.trackers["Z1"]
+    step(scalper, "Z1", m, SPIKE)
+    scalper.on_creator_sell("Z1", T0 + 7)                     # wallet sold something...
+    step(scalper, "Z1", m, [(8, 0.97)])                       # ...but only a small sell here
+    step(scalper, "Z1", m, [(12, 1.01)])                      # confirmation window passes
+    assert not tr.dev_sold and tr.creator_sell_times == []
+    scalper.on_creator_sell("Z1", T0 + 14)
+    scalper.on_curve("Z1", T0 + 14.5, m.sell_tokens(tr.dev_tokens * 0.6))   # dev-sized sell on THIS curve
+    assert tr.dev_sold and tr.dev_sold_reason == "creator_wallet_sell_confirmed"
+
+
+def test_serial_launcher_is_blocked_including_earlier_tokens():
+    scalper = Scalper(zcfg())
+    new_token(scalper, "A", start=T0)
+    assert safety_block(scalper.trackers["A"], T0 + 4, scalper.cfg) != "serial_launcher"
+    new_token(scalper, "B", start=T0 + 60)
+    new_token(scalper, "C", start=T0 + 120)                   # third launch by "dev"
+    for mint in "ABC":
+        assert scalper.trackers[mint].creator_launches == 3
+        assert safety_block(scalper.trackers[mint], T0 + 130, scalper.cfg) == "serial_launcher"
+
+
+def test_dead_token_back_at_opening_is_not_bought():
+    """Everyone sold out and nothing trades: not a stall, a dead token."""
+    scalper = Scalper(zcfg())
+    m = new_token(scalper)
+    step(scalper, "Z1", m, SPIKE + RETURN + [(40, 1.0005)])   # one tiny buy after 25 s of silence
+    sig = entry_signal(scalper.trackers["Z1"], T0 + 40, scalper.cfg)
+    assert sig.reason == "market_inactive"
+    assert not scalper.book.positions and not scalper.book.orders
+
+
+def test_creator_sell_is_recorded_and_replayed(tmp_path):
     rec = TickRecorder(tmp_path)
     m = Market()
-    state = m.move(1.02)
-    rec.create(T0, "Z1", "Z1", state, "dev", "curve", 0.6, 20_000_000.0, False)
+    state = m.move(1.06)
+    dev_tokens = (1_073_000_000 * 10**6 - state.virtual_token_reserves) / 10**6
+    rec.create(T0, "Z1", "Z1", state, "dev", "curve", 1.8, dev_tokens, False)
     for dt, f in SPIKE + RETURN:
         rec.curve(T0 + dt, "Z1", m.move(f))
-    rec.dev_sell(T0 + 16, "Z1", "creator_wallet_sell")
+    rec.creator_sell(T0 + 16, "Z1")
+    rec.curve(T0 + 16.5, "Z1", m.sell_tokens(dev_tokens))
     for dt, f in STALL_BUY + CLIMB:
-        rec.curve(T0 + dt, "Z1", m.move(f))
+        rec.curve(T0 + dt + 2, "Z1", m.move(f))
     rec.close()
     scalper = replay(read_ticks(list(tmp_path.glob("*.jsonl.gz"))), zcfg())
     tr = scalper.trackers["Z1"]
-    assert tr.dev_sold and tr.dev_tokens == 20_000_000.0
+    assert tr.dev_sold and tr.dev_tokens == pytest.approx(dev_tokens)
     assert scalper.book.closed == []                          # never traded after the dev sold
 
 
@@ -180,7 +217,11 @@ def test_engine_flags_creator_sell_from_logs(state_dir):
         engine = LiveEngine(zcfg(record_ticks=False))
         engine.rpc_ws = FakeWS()
         engine.rpc_ready.set()
-        engine._on_pumpportal(create_msg("Z1", Market()))
+        market = Market()
+        market.move(1.06)                                     # dev bought ~3% at creation
+        msg = json.loads(create_msg("Z1", market))
+        msg["initialBuy"] = (1_073_000_000 * 10**6 - market.vt) / 10**6
+        engine._on_pumpportal(json.dumps(msg))
         await asyncio.sleep(0)
         kinds = {r["method"]: r for r in engine.rpc_ws.sent}
         assert kinds["logsSubscribe"]["params"][0] == {"mentions": ["dev"]}
@@ -193,10 +234,13 @@ def test_engine_flags_creator_sell_from_logs(state_dir):
         sell_logs = json.loads(json.dumps(buy_logs))
         sell_logs["params"]["result"]["value"]["logs"] = ["Program log: Instruction: Sell"]
         engine._on_rpc(json.dumps(sell_logs))
+        assert not engine.scalper.trackers["Z1"].dev_sold      # not confirmed on this curve yet
+        tr = engine.scalper.trackers["Z1"]
+        engine._on_rpc(notification(11, market.sell_tokens(tr.dev_tokens)))
         return engine
     engine = asyncio.run(scenario())
     assert engine.scalper.trackers["Z1"].dev_sold
-    assert engine.stats["dev_sells"] == 1
+    assert engine.stats["dev_sells"] == 1 and engine.stats["creator_sell_logs"] == 1
     engine._save_wallet()
     wallet = json.loads((state_dir / "scalp_wallet.json").read_text())
     assert wallet["watchlist"][0]["safety"] == "dev_sold"

@@ -52,6 +52,7 @@ def update_launch_state(tr: TokenTracker, c: ScalpConfig) -> None:
     if not tr.dev_sold and tr.dev_supply_pct >= 0.005 and tr.last_tokens_sold > 0 \
             and abs(tr.last_tokens_sold - tr.dev_tokens) <= c.dev_dump_match_pct * tr.dev_tokens:
         tr.dev_sold, tr.dev_sold_reason = True, "dev_sized_sell"
+    confirm_creator_sells(tr, c)
     risen = tr.peak_price >= opening * (1.0 + c.min_initial_rise_pct)
     if risen and price < opening * (1.0 - c.rug_floor_pct):
         tr.floor_broken = True
@@ -64,6 +65,23 @@ def update_launch_state(tr: TokenTracker, c: ScalpConfig) -> None:
         tr.zone_touch_t, tr.zone_low = None, 0.0   # left the zone upward: a new touch is needed
 
 
+def confirm_creator_sells(tr: TokenTracker, c: ScalpConfig) -> None:
+    """A sell by the creator WALLET may be of a different token (serial launchers
+    trade many). Count it as this dev dumping only if this curve shows a sell of
+    at least dev_sell_confirm_fraction of the dev bag within dev_sell_confirm_s."""
+    if tr.dev_sold or not tr.creator_sell_times or tr.dev_tokens <= 0:
+        return
+    need = c.dev_sell_confirm_fraction * tr.dev_tokens
+    latest = tr.ticks[-1].t if tr.ticks else 0.0
+    for sell_t in list(tr.creator_sell_times):
+        if any(abs(t.t - sell_t) <= c.dev_sell_confirm_s and t.tokens_sold >= need for t in tr.ticks):
+            tr.dev_sold, tr.dev_sold_reason = True, "creator_wallet_sell_confirmed"
+            tr.creator_sell_times.clear()
+            return
+        if latest - sell_t > c.dev_sell_confirm_s:
+            tr.creator_sell_times.remove(sell_t)   # no matching sell on this token: not this dev dumping
+
+
 def safety_block(tr: TokenTracker, now: float, c: ScalpConfig) -> str | None:
     """Reason this token must not be traded (scam/rug signals), or None."""
     if tr.state is not None and tr.state.complete:
@@ -72,6 +90,8 @@ def safety_block(tr: TokenTracker, now: float, c: ScalpConfig) -> str | None:
         return "dev_sold"
     if tr.floor_broken:
         return "floor_broken"
+    if tr.creator_launches > c.serial_launch_max:
+        return "serial_launcher"
     if c.skip_mayhem and tr.mayhem:
         return "mayhem_mode"
     if tr.dev_supply_pct > c.max_dev_supply_pct:
@@ -123,7 +143,14 @@ def initial_zone_entry(tr: TokenTracker, now: float, c: ScalpConfig) -> Signal:
         return _no("above_buy_zone", vs_opening=round(vs_opening, 4))
     if vs_opening < -c.zone_below_pct:
         return _no("below_buy_zone", vs_opening=round(vs_opening, 4))
+    updates = len(tr.window(now, c.flow_window_s))
+    if updates < c.min_updates_in_window:
+        return _no("market_inactive", updates=updates)
+    volume = sum(abs(t.flow_sol) for t in tr.window(now, c.activity_window_s))
+    if volume < c.min_activity_sol:
+        return _no("market_inactive", volume_sol=round(volume, 3))
     details = {"rise": round(rise, 4), "vs_opening": round(vs_opening, 4), "age": round(tr.age(now), 1),
+               "volume_sol": round(volume, 3), "creator_launches": tr.creator_launches,
                "dev_supply_pct": round(tr.dev_supply_pct, 4),
                "early_supply_pct": None if (e := tr.early_supply_pct(c.early_window_s)) is None else round(e, 4)}
     if c.entry_confirm == "stall":
@@ -132,6 +159,8 @@ def initial_zone_entry(tr: TokenTracker, now: float, c: ScalpConfig) -> Signal:
         quiet = now - last_sell_t if last_sell_t is not None else float("inf")
         if last_flow <= 0 or quiet < c.confirm_window_s:
             return _no("still_selling", last_flow_sol=round(last_flow, 3), quiet_s=round(min(quiet, 999.0), 1))
+        if quiet > c.max_quiet_s:
+            return _no("market_inactive", quiet_s=round(min(quiet, 999.0), 1))
         details["quiet_s"] = round(min(quiet, 999.0), 1)
     elif c.entry_confirm == "bounce":
         low = tr.zone_low or price

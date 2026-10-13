@@ -42,6 +42,9 @@ class ScalpConfig:
     entry_confirm: str = "stall"     # none = buy on touch | stall = sellers paused | bounce = small uptick first
     confirm_window_s: float = 2.0    # stall: no sells for this long and the latest trade is a buy
     confirm_bounce_pct: float = 0.015  # bounce: price this far above the zone low since touch
+    max_quiet_s: float = 10.0        # a pause longer than this is a dead token, not a stall
+    activity_window_s: float = 30.0  # the token must still be trading:
+    min_activity_sol: float = 1.0    #   at least this much SOL traded (buys + sells) in the window
 
     # --- rug / scam filters ----------------------------------------------
     max_dev_supply_pct: float = 0.10     # dev's launch buy as share of the 1B supply
@@ -49,6 +52,10 @@ class ScalpConfig:
     max_early_supply_pct: float = 0.30   # supply bought in the sniper window (incl. dev)
     dev_dump_match_pct: float = 0.005    # one sell matching the dev's whole bag (+-0.5%) = dev dumped
     watch_creator: bool = True           # subscribe to the creator wallet's transactions
+    dev_sell_confirm_s: float = 3.0      # a creator-wallet sell counts only if THIS curve shows a sell
+    dev_sell_confirm_fraction: float = 0.5  # of at least this share of the dev bag within +-3 s
+    serial_launch_max: int = 2           # creator launched more tokens than this recently = token farm, skip
+    serial_window_s: float = 3600.0
     skip_mayhem: bool = False            # pump.fun "mayhem mode" tokens (recorded either way)
     first_dip_min_pct: float = 0.20  # price must have fallen this far from the launch peak
     dip_max_pct: float = 0.70        # deeper than this = likely dead/rugged, skip
@@ -141,6 +148,8 @@ def _validate(c: ScalpConfig) -> None:
         (c.min_initial_rise_pct > c.zone_above_pct >= 0, "need min_initial_rise_pct > zone_above_pct >= 0"),
         (0 <= c.zone_below_pct < c.rug_floor_pct < 1, "need 0 <= zone_below_pct < rug_floor_pct < 1"),
         (0 < c.max_dev_supply_pct <= 1 and 0 < c.max_early_supply_pct <= 1, "supply limits must be in (0, 1]"),
+        (c.confirm_window_s < c.max_quiet_s, "need confirm_window_s < max_quiet_s"),
+        (c.serial_launch_max >= 1, "serial_launch_max must be at least 1"),
     ]
     for ok, message in checks:
         if not ok:

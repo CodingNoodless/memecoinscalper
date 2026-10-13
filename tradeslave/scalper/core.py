@@ -21,6 +21,7 @@ class Scalper:
         self.emit = on_event or (lambda kind, data: None)
         self.book = PaperBook(cfg, on_event=self.emit)
         self.trackers: dict[str, TokenTracker] = {}
+        self.creator_history: dict[str, list[tuple[float, str]]] = {}   # creator -> [(t, mint)]
         self.entry_block_reasons: dict[str, int] = {}
 
     # --- inputs -----------------------------------------------------------
@@ -33,7 +34,28 @@ class Scalper:
         if state is not None:
             tr.update(t, state)
         self.trackers[mint] = tr
+        if creator:
+            history = [(ht, hm) for ht, hm in self.creator_history.get(creator, [])
+                       if t - ht <= self.cfg.serial_window_s]
+            history.append((t, mint))
+            self.creator_history[creator] = history
+            for _, other in history:   # a new launch also flags this creator's earlier tokens
+                other_tr = self.trackers.get(other)
+                if other_tr is not None:
+                    other_tr.creator_launches = len(history)
         return tr
+
+    def on_creator_sell(self, mint: str, t: float) -> None:
+        """The creator wallet sold something. It counts as this dev dumping only
+        once the token's own curve confirms a dev-sized sell (see strategy)."""
+        tr = self.trackers.get(mint)
+        if tr is None or tr.dev_sold:
+            return
+        tr.creator_sell_times.append(t)
+        update_launch_state(tr, self.cfg)
+        if tr.dev_sold:
+            self.emit("dev_sold", {"mint": mint, "symbol": tr.symbol, "t": t, "how": tr.dev_sold_reason})
+            self._decide(tr, t)
 
     def on_curve(self, mint: str, t: float, state: CurveState) -> None:
         tr = self.trackers.get(mint)
@@ -43,7 +65,10 @@ class Scalper:
         self.book.fill_due(tr, t)
         if tr.update(t, state) is None:
             return
+        was_flagged = tr.dev_sold
         update_launch_state(tr, self.cfg)
+        if tr.dev_sold and not was_flagged:
+            self.emit("dev_sold", {"mint": mint, "symbol": tr.symbol, "t": t, "how": tr.dev_sold_reason})
         self._decide(tr, t)
 
     def on_dev_sell(self, mint: str, t: float, how: str = "creator_wallet_sell") -> None:

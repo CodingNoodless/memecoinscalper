@@ -24,6 +24,7 @@ class Tick:
     virtual_sol: float    # SOL
     flow_sol: float       # signed SOL into the curve since the previous tick
     virtual_tokens: float = 0.0  # whole tokens left in the virtual reserves
+    tokens_sold: float = 0.0     # whole tokens sold into the curve by this update (0 for buys)
 
 
 @dataclass
@@ -54,6 +55,8 @@ class TokenTracker:
     zone_touch_t: float | None = None   # first time price entered the buy zone after the rise
     zone_low: float = 0.0               # lowest price since the zone touch
     last_tokens_sold: float = 0.0       # tokens sold into the curve by the latest update
+    creator_launches: int = 1           # tokens this creator launched within serial_window_s
+    creator_sell_times: list = field(default_factory=list)  # unconfirmed creator-wallet sells
 
     def update(self, t: float, state: CurveState) -> Tick | None:
         """Add a new curve state. Returns the tick, or None if nothing changed."""
@@ -67,7 +70,7 @@ class TokenTracker:
         self.state = state
         self.last_tokens_sold = tokens_sold
         tick = Tick(t=t, price=state.price_sol, virtual_sol=state.virtual_sol, flow_sol=flow,
-                    virtual_tokens=state.virtual_token_reserves / TOKEN_UNIT)
+                    virtual_tokens=state.virtual_token_reserves / TOKEN_UNIT, tokens_sold=tokens_sold)
         self.ticks.append(tick)
         if not self.launch_price:
             self.launch_price = tick.price

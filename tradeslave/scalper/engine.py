@@ -49,7 +49,7 @@ class LiveEngine:
         self.creator_mints: dict[str, set[str]] = {}       # creator -> watched mints
         self.watch: dict[str, str] = {}                    # mint -> curve account
         self.stats = {"created_seen": 0, "skipped_full": 0, "skipped_filter": 0, "curve_msgs": 0,
-                      "decode_fail": 0, "creator_msgs": 0, "dev_sells": 0, "pp_reconnects": 0,
+                      "decode_fail": 0, "creator_msgs": 0, "creator_sell_logs": 0, "dev_sells": 0, "pp_reconnects": 0,
                       "rpc_reconnects": 0, "sub_errors": 0}
         self.raw_samples = 0
         self.started = time.time()
@@ -89,7 +89,7 @@ class LiveEngine:
                 "early_supply_pct": None if early is None else round(early, 4),
                 "safety": safety_block(tr, now, self.cfg),
                 "status": "in position" if mint in self.scalper.book.positions else (signal.reason if signal else ""),
-                "entries": tr.entries, "updates": len(tr.ticks),
+                "entries": tr.entries, "updates": len(tr.ticks), "creator_launches": tr.creator_launches,
             })
         rows.sort(key=lambda r: r["age_s"])
         return rows
@@ -124,6 +124,7 @@ class LiveEngine:
         elif kind == "buy_filled":
             log.info("BUY %s at %.3e SOL cost=%.4f", data["symbol"], data["price"], data["cost_sol"])
         elif kind == "dev_sold":
+            self.stats["dev_sells"] += 1
             log.info("DEV SOLD %s (%s): token blocked", data["symbol"], data["how"])
         append_jsonl("scalp_events.jsonl", record)
 
@@ -362,11 +363,13 @@ class LiveEngine:
         if not any("Instruction: Sell" in line for line in logs if isinstance(line, str)):
             return
         now = time.time()
-        self.stats["dev_sells"] += 1
+        self.stats["creator_sell_logs"] += 1
+        if self.stats["creator_sell_logs"] <= 10:
+            self._sample("creator_sell_logs", json.dumps(value)[:4000])
         for mint in list(self.creator_mints.get(creator, ())):
             if self.recorder:
-                self.recorder.dev_sell(now, mint, "creator_wallet_sell")
-            self.scalper.on_dev_sell(mint, now, "creator_wallet_sell")
+                self.recorder.creator_sell(now, mint)
+            self.scalper.on_creator_sell(mint, now)
 
     # --- clock, housekeeping, status ----------------------------------------
     async def clock_loop(self) -> None:
@@ -382,7 +385,8 @@ class LiveEngine:
                     continue
                 idle = now - (tr.last_update_t or tr.created_at)
                 done = tr.age(now) > self.cfg.watch_max_age_s or idle > self.cfg.idle_unwatch_s or \
-                    (tr.state is not None and tr.state.complete) or tr.dev_sold or tr.floor_broken
+                    (tr.state is not None and tr.state.complete) or tr.dev_sold or tr.floor_broken or \
+                    tr.creator_launches > self.cfg.serial_launch_max
                 if done and self.scalper.forget(mint):
                     await self._unsubscribe(mint)
             if now - last_save >= 2:
@@ -402,12 +406,12 @@ class LiveEngine:
         log.info(
             "STATUS up=%.0fm watched=%d open=%d balance=%.4f equity=%.4f | trades=%d wins=%d (%.0f%%) "
             "avg=%+.2f%% pnl=%+.4f SOL fees=%.4f failed_tx=%d | new_tokens=%d curve_msgs=%d decode_fail=%d "
-            "dev_sells=%d skipped_full=%d | top_entry_blocks=%s",
+            "dev_sells=%d (creator sell logs %d) skipped_full=%d | top_entry_blocks=%s",
             (now - self.started) / 60, len(self.watch), len(book.positions), book.balance_sol,
             book.equity_sol(self.scalper.trackers), len(closed), wins, 100 * wins / len(closed) if closed else 0,
             avg * 100, pnl, book.fees_paid_sol, book.failed_tx, self.stats["created_seen"],
             self.stats["curve_msgs"], self.stats["decode_fail"], self.stats["dev_sells"],
-            self.stats["skipped_full"], blocks,
+            self.stats["creator_sell_logs"], self.stats["skipped_full"], blocks,
         )
         if self.stats["curve_msgs"] > 50 and self.stats["decode_fail"] > self.stats["curve_msgs"] * 0.5:
             log.error("Most curve updates fail to decode - pump.fun may have changed its account layout. "

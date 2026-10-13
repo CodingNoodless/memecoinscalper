@@ -30,6 +30,13 @@ def replay(records, cfg: ScalpConfig) -> Scalper:
     last_clock = None
     for rec in records:
         t = float(rec["t"])
+        if last_clock is not None and t - last_clock > cfg.max_hold_s:
+            # A gap in the recording (engine stopped). Live, the clock keeps
+            # running, so let open positions reach their time stop before it.
+            for step in range(int((cfg.max_hold_s + 5) / 0.2) + 1):
+                scalper.on_clock(last_clock + step * 0.2)
+            last_clock = t
+            scalper.on_clock(t)
         if last_clock is None or t - last_clock >= 0.2:
             scalper.on_clock(t)
             last_clock = t
@@ -39,8 +46,8 @@ def replay(records, cfg: ScalpConfig) -> Scalper:
                 state = CurveState(int(rec["vt"]), int(rec["vs"]))
             scalper.on_create(rec["m"], rec.get("s", "?"), t, state, rec.get("cr", ""), rec.get("bc", ""),
                               float(rec.get("ib") or 0.0), float(rec.get("dt") or 0.0), bool(rec.get("mh")))
-        elif rec.get("k") == "devsell":
-            scalper.on_dev_sell(rec["m"], t, rec.get("how", "creator_wallet_sell"))
+        elif rec.get("k") in ("csell", "devsell"):   # "devsell" = older recordings, same meaning
+            scalper.on_creator_sell(rec["m"], t)
         elif rec.get("k") == "curve":
             state = CurveState(int(rec["vt"]), int(rec["vs"]), int(rec.get("rt") or 0), int(rec.get("rs") or 0),
                                0, bool(rec.get("c")))
@@ -71,7 +78,8 @@ def summarize(scalper: Scalper) -> dict:
         row["pnl_sol"] = round(row["pnl_sol"] + c["pnl_sol"], 6)
     safety: dict[str, int] = {}
     for tr in scalper.trackers.values():
-        flag = ("dev_sold" if tr.dev_sold else "floor_broken" if tr.floor_broken else None)
+        flag = ("dev_sold" if tr.dev_sold else "floor_broken" if tr.floor_broken else
+                "serial_launcher" if tr.creator_launches > scalper.cfg.serial_launch_max else None)
         if flag:
             safety[flag] = safety.get(flag, 0) + 1
     by_kind: dict[str, dict] = {}

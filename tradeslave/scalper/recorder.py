@@ -53,8 +53,9 @@ class TickRecorder:
                     "vs": state.virtual_sol_reserves, "rt": state.real_token_reserves,
                     "rs": state.real_sol_reserves, "c": int(state.complete), "sl": slot})
 
-    def dev_sell(self, t, mint, how) -> None:
-        self.write({"k": "devsell", "t": round(t, 3), "m": mint, "how": how})
+    def creator_sell(self, t, mint) -> None:
+        """The creator wallet sold something (not necessarily this token)."""
+        self.write({"k": "csell", "t": round(t, 3), "m": mint})
 
     def close(self) -> None:
         if self._file is not None:
