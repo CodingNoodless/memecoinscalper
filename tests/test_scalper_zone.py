@@ -223,7 +223,10 @@ def test_engine_flags_creator_sell_from_logs(state_dir):
         msg = json.loads(create_msg("Z1", market))
         msg["initialBuy"] = (1_073_000_000 * 10**6 - market.vt) / 10**6
         engine._on_pumpportal(json.dumps(msg))
-        await asyncio.sleep(0)
+        for _ in range(100):                     # subscriptions are paced: wait for both
+            await asyncio.sleep(0.01)
+            if len(engine.rpc_ws.sent) >= 2:
+                break
         kinds = {r["method"]: r for r in engine.rpc_ws.sent}
         assert kinds["logsSubscribe"]["params"][0] == {"mentions": ["dev"]}
         engine._on_rpc(json.dumps({"jsonrpc": "2.0", "id": kinds["accountSubscribe"]["id"], "result": 11}))

@@ -95,3 +95,41 @@ def test_touch_report_uses_only_information_known_at_the_touch(tmp_path):
     [row] = collect(read_ticks(list(tmp_path.glob("*.jsonl.gz"))), zcfg(), up=0.09, down=0.10, horizon=60)
     assert row["verdict"] == "clean"
     assert row["outcome"] == "bounce"
+
+
+def test_subscriptions_are_paced(state_dir):
+    import time as _time
+
+    async def scenario():
+        engine = LiveEngine(zcfg(record_ticks=False, watch_creator=False, rpc_subs_per_s=20.0))
+        engine.rpc_ws = FakeWS()
+        engine.rpc_ready.set()
+        for i in range(6):
+            engine.watch[f"M{i}"] = f"curve{i}"
+        start = _time.monotonic()
+        await asyncio.gather(*(engine._subscribe_curve(f"M{i}", f"curve{i}") for i in range(6)))
+        return engine, _time.monotonic() - start
+    engine, elapsed = asyncio.run(scenario())
+    assert len(engine.rpc_ws.sent) == 6
+    assert elapsed >= 5 / 20.0 * 0.9          # 6 requests at 20/s take >= 0.25 s
+
+
+def test_closed_curve_account_stops_watching(state_dir):
+    async def scenario():
+        engine = LiveEngine(zcfg(record_ticks=False, watch_creator=False))
+        engine.rpc_ws = FakeWS()
+        engine.rpc_ready.set()
+        engine._on_pumpportal(create_msg("C1", Market()))
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            if engine.rpc_ws.sent:
+                break
+        req = engine.rpc_ws.sent[0]
+        engine._on_rpc(json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": 9}))
+        engine._on_rpc(json.dumps({"jsonrpc": "2.0", "method": "accountNotification", "params": {
+            "subscription": 9, "result": {"context": {"slot": 1}, "value": {"data": ["", "base64"]}}}}))
+        await engine._clock_tick(0.0, 0.0)
+        return engine
+    engine = asyncio.run(scenario())
+    assert engine.stats["closed_accounts"] == 1 and engine.stats["decode_fail"] == 0
+    assert "C1" not in engine.watch

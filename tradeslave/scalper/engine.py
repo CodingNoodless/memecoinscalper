@@ -52,11 +52,14 @@ class LiveEngine:
         self.creator_mints: dict[str, set[str]] = {}       # creator -> watched mints
         self.watch: dict[str, str] = {}                    # mint -> curve account
         self.stats = {"created_seen": 0, "skipped_full": 0, "skipped_filter": 0, "curve_msgs": 0,
-                      "decode_fail": 0, "graduated": 0, "meta_ok": 0, "meta_fail": 0, "with_twitter": 0, "handler_errors": 0, "creator_msgs": 0, "creator_sell_logs": 0, "dev_sells": 0, "pp_reconnects": 0,
+                      "decode_fail": 0, "graduated": 0, "closed_accounts": 0, "rate_limited": 0, "stall_reconnects": 0, "meta_ok": 0, "meta_fail": 0, "with_twitter": 0, "handler_errors": 0, "creator_msgs": 0, "creator_sell_logs": 0, "dev_sells": 0, "pp_reconnects": 0,
                       "rpc_reconnects": 0, "sub_errors": 0}
         self.raw_samples: dict[str, int] = {}
         self.decode_fail_reasons: dict[str, int] = {}
         self.meta_slots = asyncio.Semaphore(6)
+        self.sub_lock = asyncio.Lock()
+        self.last_sub_sent = 0.0
+        self.last_curve_msg = time.time()
         self.started = time.time()
         self._restore_balance()
 
@@ -248,11 +251,29 @@ class LiveEngine:
         self.next_id += 1
         return request_id
 
+    async def _paced_send(self, payload: dict) -> bool:
+        """Send a subscribe request no faster than rpc_subs_per_s. Never raises."""
+        async with self.sub_lock:
+            gap = 1.0 / max(self.cfg.rpc_subs_per_s, 0.1)
+            wait = self.last_sub_sent + gap - time.monotonic()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self.last_sub_sent = time.monotonic()
+            try:
+                await self._send(payload)
+                return True
+            except Exception as exc:
+                log.debug("subscribe send failed: %s", exc)
+                return False
+
     async def _subscribe_curve(self, mint: str, curve_key: str) -> None:
+        if mint not in self.watch:
+            return
         request_id = self._request_id()
         self.pending[request_id] = ("curve", mint)
-        await self._send({"jsonrpc": "2.0", "id": request_id, "method": "accountSubscribe",
-                          "params": [curve_key, {"encoding": "base64", "commitment": "processed"}]})
+        if not await self._paced_send({"jsonrpc": "2.0", "id": request_id, "method": "accountSubscribe",
+                                       "params": [curve_key, {"encoding": "base64", "commitment": "processed"}]}):
+            self.pending.pop(request_id, None)
 
     async def _subscribe_creator(self, creator: str, mint: str) -> None:
         mints = self.creator_mints.setdefault(creator, set())
@@ -261,8 +282,9 @@ class LiveEngine:
             return
         request_id = self._request_id()
         self.pending[request_id] = ("creator", creator)
-        await self._send({"jsonrpc": "2.0", "id": request_id, "method": "logsSubscribe",
-                          "params": [{"mentions": [creator]}, {"commitment": "processed"}]})
+        if not await self._paced_send({"jsonrpc": "2.0", "id": request_id, "method": "logsSubscribe",
+                                       "params": [{"mentions": [creator]}, {"commitment": "processed"}]}):
+            self.pending.pop(request_id, None)
 
     async def _unsubscribe(self, mint: str) -> None:
         self.watch.pop(mint, None)
@@ -291,6 +313,8 @@ class LiveEngine:
     async def rpc_loop(self, websockets) -> None:
         backoff = 1.0
         while not self.stopping:
+            connected_at = None
+            rate_limited = False
             try:
                 async with websockets.connect(self.cfg.rpc_ws, ping_interval=20, ping_timeout=20,
                                               max_size=2**22) as ws:
@@ -301,6 +325,8 @@ class LiveEngine:
                     self.creator_sub.clear()
                     self.creator_by_sub.clear()
                     self.rpc_ready.set()
+                    connected_at = time.monotonic()
+                    self.last_curve_msg = time.time()
                     log.info("Solana RPC connected (%s); resubscribing %d curves", self.cfg.rpc_ws, len(self.watch))
                     for mint, curve_key in list(self.watch.items()):
                         await self._subscribe_curve(mint, curve_key)
@@ -308,19 +334,27 @@ class LiveEngine:
                         for creator, mints in list(self.creator_mints.items()):
                             for mint in list(mints):
                                 await self._subscribe_creator(creator, mint)
-                    backoff = 1.0
                     async for raw in ws:
                         self._guard(self._on_rpc, raw)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 self.stats["rpc_reconnects"] += 1
-                log.warning("RPC connection lost (%s); reconnecting in %.0fs", exc, backoff)
+                rate_limited = "rate limit" in str(exc).lower() or "1013" in str(exc)
+                if rate_limited:
+                    self.stats["rate_limited"] += 1
             finally:
                 self.rpc_ready.clear()
                 self.rpc_ws = None
+            stable = connected_at is not None and time.monotonic() - connected_at >= self.cfg.rpc_stable_after_s
+            if stable:
+                backoff = 1.0          # only a connection that held up resets the backoff
+            if rate_limited:
+                backoff = max(backoff, self.cfg.rpc_rate_limit_backoff_s)
+            log.warning("RPC connection lost%s; reconnecting in %.0fs", " (rate limited by the RPC)" if rate_limited else "",
+                        backoff)
             await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, 30.0)
+            backoff = min(backoff * 2, 300.0)
 
     def _on_rpc(self, raw: str) -> None:
         try:
@@ -367,6 +401,7 @@ class LiveEngine:
         if mint is None:
             return
         self.stats["curve_msgs"] += 1
+        self.last_curve_msg = time.time()
         if self.stats["curve_msgs"] <= 5:
             self._sample("rpc_account_notification", raw)
         result = params.get("result") or {}
@@ -381,8 +416,15 @@ class LiveEngine:
                 tr.state = dataclasses.replace(tr.state, complete=True)
             return
         if state is None:
-            self.stats["decode_fail"] += 1
             reason = decode_failure_reason(data[0]) if isinstance(data, list) and data else "no_data"
+            if reason == "empty_account":
+                # The curve account was closed (token finished): stop asking for updates.
+                self.stats["closed_accounts"] += 1
+                tr = self.scalper.trackers.get(mint)
+                if tr is not None and tr.state is not None and not tr.state.complete:
+                    tr.state = dataclasses.replace(tr.state, complete=True)
+                return
+            self.stats["decode_fail"] += 1
             self.decode_fail_reasons[reason] = self.decode_fail_reasons.get(reason, 0) + 1
             self._sample("decode_fail", raw)
             return
@@ -444,6 +486,15 @@ class LiveEngine:
                 tr.creator_launches > self.cfg.serial_launch_max
             if done and self.scalper.forget(mint):
                 await self._unsubscribe(mint)
+        if self.rpc_ws is not None and self.watch and now - self.last_curve_msg > self.cfg.rpc_stall_warn_s:
+            self.stats["stall_reconnects"] += 1
+            log.warning("No curve updates for %.0fs while watching %d tokens: reconnecting the RPC",
+                        now - self.last_curve_msg, len(self.watch))
+            self.last_curve_msg = now
+            try:
+                await self.rpc_ws.close()
+            except Exception:
+                pass
         if now - last_save >= 2:
             self._save_wallet()
             last_save = now
@@ -462,13 +513,14 @@ class LiveEngine:
         log.info(
             "STATUS up=%.0fm watched=%d open=%d balance=%.4f equity=%.4f | trades=%d wins=%d (%.0f%%) "
             "avg=%+.2f%% pnl=%+.4f SOL fees=%.4f failed_tx=%d | new_tokens=%d curve_msgs=%d decode_fail=%d "
-            "dev_sells=%d (creator sell logs %d) graduated=%d errors=%d skipped_full=%d | metadata ok=%d fail=%d "
+            "dev_sells=%d (creator sell logs %d) graduated=%d closed=%d rate_limited=%d errors=%d skipped_full=%d | metadata ok=%d fail=%d "
             "twitter=%d | top_entry_blocks=%s",
             (now - self.started) / 60, len(self.watch), len(book.positions), book.balance_sol,
             book.equity_sol(self.scalper.trackers), len(closed), wins, 100 * wins / len(closed) if closed else 0,
             avg * 100, pnl, book.fees_paid_sol, book.failed_tx, self.stats["created_seen"],
             self.stats["curve_msgs"], self.stats["decode_fail"], self.stats["dev_sells"],
-            self.stats["creator_sell_logs"], self.stats["graduated"], self.stats["handler_errors"],
+            self.stats["creator_sell_logs"], self.stats["graduated"], self.stats["closed_accounts"],
+            self.stats["rate_limited"], self.stats["handler_errors"],
             self.stats["skipped_full"], self.stats["meta_ok"], self.stats["meta_fail"], self.stats["with_twitter"], blocks,
         )
         if self.decode_fail_reasons:

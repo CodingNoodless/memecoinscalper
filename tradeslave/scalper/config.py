@@ -117,6 +117,10 @@ class ScalpConfig:
     # --- infrastructure --------------------------------------------------
     pumpportal_ws: str = "wss://pumpportal.fun/api/data"
     rpc_ws: str = "wss://api.mainnet-beta.solana.com"
+    rpc_subs_per_s: float = 4.0        # pace subscribe requests (public RPC rate-limits bursts)
+    rpc_rate_limit_backoff_s: float = 60.0
+    rpc_stable_after_s: float = 60.0   # a connection must last this long before backoff resets
+    rpc_stall_warn_s: float = 120.0    # warn + reconnect if no curve update arrives while watching tokens
     record_ticks: bool = True
     status_every_s: float = 30.0
 
