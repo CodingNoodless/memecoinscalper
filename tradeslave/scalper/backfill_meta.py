@@ -145,24 +145,30 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--all", action="store_true", help="every recorded token, not only zone touches")
     parser.add_argument("--rpc", default=None, help="Solana RPC HTTP URL (default: public mainnet)")
+    parser.add_argument("--narrative", action="store_true",
+                        help="also re-fetch tokens whose saved metadata lacks the name/description text")
     args = parser.parse_args()
     cfg = load_config()
     rpc_url = args.rpc or cfg.rpc_ws.replace("wss://", "https://").replace("ws://", "http://")
     paths = sorted(TICK_DIR.glob("*.jsonl.gz"))
     records = list(read_ticks(paths))
     symbols = {r["m"]: r.get("s", "?") for r in records if r.get("k") == "create"}
-    recorded_meta = {r["m"] for r in records if r.get("k") == "meta"}
+    known_uri = {r["m"]: r["uri"] for r in records if r.get("k") == "create" and r.get("uri")}
+    recorded_meta = {r["m"] for r in records if r.get("k") == "meta" and (not args.narrative or "x_description" in r)}
     if args.all:
         mints = list(symbols)
     else:
         mints = [row["mint"] for row in collect(records, cfg, 0.09, 0.10, 60.0)]
-    done = set(load_backfill()) | recorded_meta
+    done = {m for m, s in load_backfill().items() if not args.narrative or "description" in s} | recorded_meta
     todo = [m for m in mints if m not in done]
     print(f"{len(mints)} tokens selected, {len(todo)} need socials (RPC: {rpc_url.split('?')[0]})")
     BACKFILL.parent.mkdir(parents=True, exist_ok=True)
     rpc = Rpc(rpc_url)
     found = []
     for i, mint in enumerate(todo, 1):
+        if mint in known_uri:                       # newer recordings keep the uri: no RPC needed
+            found.append((mint, (symbols.get(mint, ""), symbols.get(mint, ""), known_uri[mint])))
+            continue
         signature = rpc.creation_signature(mint)
         tx = rpc.call("getTransaction", [signature, {"encoding": "json", "maxSupportedTransactionVersion": 0,
                                                       "commitment": "confirmed"}]) if signature else None

@@ -51,8 +51,13 @@ class LiveEngine:
         self.creator_by_sub: dict[int, str] = {}
         self.creator_mints: dict[str, set[str]] = {}       # creator -> watched mints
         self.watch: dict[str, str] = {}                    # mint -> curve account
+        self.pp_ws = None
+        self.trade_subs: set[str] = set()                  # mints with a PumpPortal trade subscription
+        self.trade_day = ""
+        self.trade_events_today = 0
+        self.trade_feed_paused = False
         self.stats = {"created_seen": 0, "skipped_full": 0, "skipped_filter": 0, "curve_msgs": 0,
-                      "decode_fail": 0, "graduated": 0, "closed_accounts": 0, "rate_limited": 0, "stall_reconnects": 0, "meta_ok": 0, "meta_fail": 0, "with_twitter": 0, "handler_errors": 0, "creator_msgs": 0, "creator_sell_logs": 0, "dev_sells": 0, "pp_reconnects": 0,
+                      "trade_events": 0, "migrations": 0, "decode_fail": 0, "graduated": 0, "closed_accounts": 0, "rate_limited": 0, "stall_reconnects": 0, "meta_ok": 0, "meta_fail": 0, "with_twitter": 0, "handler_errors": 0, "creator_msgs": 0, "creator_sell_logs": 0, "dev_sells": 0, "pp_reconnects": 0,
                       "rpc_reconnects": 0, "sub_errors": 0}
         self.raw_samples: dict[str, int] = {}
         self.decode_fail_reasons: dict[str, int] = {}
@@ -161,25 +166,93 @@ class LiveEngine:
         while not self.stopping:
             try:
                 async with websockets.connect(url, ping_interval=20, ping_timeout=20, max_size=2**20) as ws:
+                    self.pp_ws = ws
                     await ws.send(json.dumps({"method": "subscribeNewToken"}))
-                    log.info("PumpPortal connected; subscribed to new tokens")
+                    if self.cfg.record_migrations:
+                        await ws.send(json.dumps({"method": "subscribeMigration"}))
+                    self.trade_subs.clear()
+                    if self._trade_feed_on():
+                        for mint in list(self.watch):
+                            await self._trade_sub(mint)
+                    log.info("PumpPortal connected; new tokens%s%s", " + migrations" if self.cfg.record_migrations else "",
+                             " + wallet-level trades (metered)" if self._trade_feed_on() else "")
                     backoff = 1.0
                     async for raw in ws:
                         self._guard(self._on_pumpportal, raw)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # network errors: reconnect
+                self.pp_ws = None
                 self.stats["pp_reconnects"] += 1
                 log.warning("PumpPortal connection lost (%s); reconnecting in %.0fs", exc, backoff)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 30.0)
+
+    # --- wallet-level trades (optional, metered) ------------------------------
+    def _trade_feed_on(self) -> bool:
+        return self.cfg.trade_feed and bool(os.getenv("PUMPPORTAL_API_KEY", "").strip()) and not self.trade_feed_paused
+
+    async def _trade_sub(self, mint: str) -> None:
+        if self.pp_ws is None or mint in self.trade_subs or not self._trade_feed_on():
+            return
+        self.trade_subs.add(mint)
+        try:
+            await self.pp_ws.send(json.dumps({"method": "subscribeTokenTrade", "keys": [mint]}))
+        except Exception:
+            self.trade_subs.discard(mint)
+
+    async def _trade_unsub(self, mints: list[str]) -> None:
+        mints = [m for m in mints if m in self.trade_subs]
+        if not mints or self.pp_ws is None:
+            return
+        self.trade_subs.difference_update(mints)
+        try:
+            await self.pp_ws.send(json.dumps({"method": "unsubscribeTokenTrade", "keys": mints}))
+        except Exception:
+            pass
+
+    def _on_trade(self, msg: dict) -> None:
+        now = time.time()
+        day = time.strftime("%Y-%m-%d", time.gmtime(now))
+        if day != self.trade_day:
+            self.trade_day, self.trade_events_today, self.trade_feed_paused = day, 0, False
+        self.trade_events_today += 1
+        self.stats["trade_events"] += 1
+        if self.stats["trade_events"] <= 3:
+            self._sample("pumpportal_trade", json.dumps(msg))
+        if self.trade_events_today >= self.cfg.trade_feed_max_events_per_day and not self.trade_feed_paused:
+            self.trade_feed_paused = True
+            log.warning("Wallet-trade feed paused: daily cap of %d messages reached", self.cfg.trade_feed_max_events_per_day)
+            asyncio.get_running_loop().create_task(self._trade_unsub(list(self.trade_subs)))
+        if self.recorder:
+            def num(key):
+                try:
+                    return float(msg.get(key))
+                except (TypeError, ValueError):
+                    return None
+            self.recorder.trade(now, msg.get("mint"), msg.get("traderPublicKey"), msg.get("txType") == "buy",
+                                num("solAmount"), num("tokenAmount"), num("vSolInBondingCurve"),
+                                num("vTokensInBondingCurve"), str(msg.get("signature") or "")[:100])
 
     def _on_pumpportal(self, raw: str) -> None:
         try:
             msg = json.loads(raw)
         except json.JSONDecodeError:
             return
-        if not isinstance(msg, dict) or msg.get("txType") != "create":
+        if not isinstance(msg, dict):
+            return
+        tx = msg.get("txType")
+        if tx in ("buy", "sell") and isinstance(msg.get("mint"), str):
+            self._on_trade(msg)
+            return
+        if tx != "create" and isinstance(msg.get("mint"), str) and ("pool" in msg or tx == "migrate"):
+            self.stats["migrations"] += 1
+            self._sample("pumpportal_migration", raw)
+            if self.recorder:
+                self.recorder.migration(time.time(), msg["mint"], {k: v for k, v in msg.items()
+                                                                  if k in ("pool", "signature", "txType") and isinstance(v, str)})
+            return
+        if tx != "create":
             return
         self._sample("pumpportal_create", raw)
         if msg.get("pool") not in (None, "pump"):
@@ -209,7 +282,8 @@ class LiveEngine:
         mayhem = msg.get("is_mayhem_mode") is True
         self.scalper.on_create(mint, symbol, now, state, creator, curve_key, initial_buy_sol, dev_tokens, mayhem)
         if self.recorder:
-            self.recorder.create(now, mint, symbol, state, creator, curve_key, initial_buy_sol, dev_tokens, mayhem)
+            self.recorder.create(now, mint, symbol, state, creator, curve_key, initial_buy_sol, dev_tokens, mayhem,
+                                 uri=str(msg.get("uri") or "")[:300], name=str(msg.get("name") or "")[:80])
         self.watch[mint] = curve_key
         uri = msg.get("uri")
         try:
@@ -219,6 +293,8 @@ class LiveEngine:
         if self.rpc_ready.is_set():
             loop = asyncio.get_running_loop()
             loop.create_task(self._subscribe_curve(mint, curve_key))
+            if self._trade_feed_on():
+                loop.create_task(self._trade_sub(mint))
             if creator and self.cfg.watch_creator:
                 loop.create_task(self._subscribe_creator(creator, mint))
         elif creator:
@@ -288,6 +364,7 @@ class LiveEngine:
 
     async def _unsubscribe(self, mint: str) -> None:
         self.watch.pop(mint, None)
+        await self._trade_unsub([mint])
         sub = self.curve_sub.pop(mint, None)
         if sub is not None:
             self.mint_by_curve_sub.pop(sub, None)
@@ -514,14 +591,15 @@ class LiveEngine:
             "STATUS up=%.0fm watched=%d open=%d balance=%.4f equity=%.4f | trades=%d wins=%d (%.0f%%) "
             "avg=%+.2f%% pnl=%+.4f SOL fees=%.4f failed_tx=%d | new_tokens=%d curve_msgs=%d decode_fail=%d "
             "dev_sells=%d (creator sell logs %d) graduated=%d closed=%d rate_limited=%d errors=%d skipped_full=%d | metadata ok=%d fail=%d "
-            "twitter=%d | top_entry_blocks=%s",
+            "twitter=%d wallet_trades=%d migrations=%d | top_entry_blocks=%s",
             (now - self.started) / 60, len(self.watch), len(book.positions), book.balance_sol,
             book.equity_sol(self.scalper.trackers), len(closed), wins, 100 * wins / len(closed) if closed else 0,
             avg * 100, pnl, book.fees_paid_sol, book.failed_tx, self.stats["created_seen"],
             self.stats["curve_msgs"], self.stats["decode_fail"], self.stats["dev_sells"],
             self.stats["creator_sell_logs"], self.stats["graduated"], self.stats["closed_accounts"],
             self.stats["rate_limited"], self.stats["handler_errors"],
-            self.stats["skipped_full"], self.stats["meta_ok"], self.stats["meta_fail"], self.stats["with_twitter"], blocks,
+            self.stats["skipped_full"], self.stats["meta_ok"], self.stats["meta_fail"], self.stats["with_twitter"],
+            self.stats["trade_events"], self.stats["migrations"], blocks,
         )
         if self.decode_fail_reasons:
             log.info("Decode failures by cause: %s", dict(sorted(self.decode_fail_reasons.items(), key=lambda kv: -kv[1])[:6]))

@@ -87,7 +87,14 @@ def parse_socials(meta: dict | None) -> dict:
     telegram = _clean_url(meta.get("telegram"))
     website = _clean_url(meta.get("website"))
     description = meta.get("description") if isinstance(meta.get("description"), str) else ""
+    def text(key, limit):
+        value = meta.get(key)
+        return " ".join(value.split())[:limit] if isinstance(value, str) else ""
+
     return {
+        "name": text("name", 80),
+        "symbol": text("symbol", 20),
+        "description": text("description", 400),
         "fetched": bool(meta),
         "twitter": twitter,
         "twitter_kind": twitter_kind(twitter),

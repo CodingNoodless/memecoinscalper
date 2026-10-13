@@ -43,9 +43,9 @@ class TickRecorder:
             self._last_flush = now
 
     def create(self, t, mint, symbol, state, creator="", curve_key="", initial_buy_sol=0.0,
-               dev_tokens=0.0, mayhem=False) -> None:
+               dev_tokens=0.0, mayhem=False, uri="", name="") -> None:
         self.write({"k": "create", "t": round(t, 3), "m": mint, "s": symbol, "cr": creator, "bc": curve_key,
-                    "ib": initial_buy_sol, "dt": dev_tokens, "mh": int(bool(mayhem)),
+                    "ib": initial_buy_sol, "dt": dev_tokens, "mh": int(bool(mayhem)), "uri": uri, "nm": name,
                     "vt": state.virtual_token_reserves if state else None,
                     "vs": state.virtual_sol_reserves if state else None})
 
@@ -56,6 +56,14 @@ class TickRecorder:
 
     def metadata(self, t, mint, socials: dict) -> None:
         self.write({"k": "meta", "t": round(t, 3), "m": mint, **{f"x_{k}": v for k, v in socials.items()}})
+
+    def trade(self, t, mint, wallet, is_buy, sol, tokens, vs, vt, signature) -> None:
+        """One trade with the trader's wallet (PumpPortal token-trade stream)."""
+        self.write({"k": "trade", "t": round(t, 3), "m": mint, "w": wallet, "b": int(bool(is_buy)), "sol": sol,
+                    "tok": tokens, "vs": vs, "vt": vt, "sig": signature})
+
+    def migration(self, t, mint, fields: dict) -> None:
+        self.write({"k": "migr", "t": round(t, 3), "m": mint, **{f"x_{k}": v for k, v in fields.items()}})
 
     def creator_sell(self, t, mint) -> None:
         """The creator wallet sold something (not necessarily this token)."""

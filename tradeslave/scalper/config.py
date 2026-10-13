@@ -122,6 +122,12 @@ class ScalpConfig:
     rpc_stable_after_s: float = 60.0   # a connection must last this long before backoff resets
     rpc_stall_warn_s: float = 120.0    # warn + reconnect if no curve update arrives while watching tokens
     record_ticks: bool = True
+    # --- wallet-level data (who buys/sells) --------------------------------
+    # PumpPortal token-trade stream: needs PUMPPORTAL_API_KEY with a funded linked
+    # wallet; billed 0.01 SOL per 10,000 messages. Off by default; capped per day.
+    trade_feed: bool = False
+    trade_feed_max_events_per_day: int = 50_000   # ~0.05 SOL/day at PumpPortal's price
+    record_migrations: bool = True                # free: tokens graduating to PumpSwap
     status_every_s: float = 30.0
 
 

@@ -57,6 +57,21 @@ http://127.0.0.1:8765 (equity, win rate, per-trade results, open positions,
 watchlist with rug-filter status, why it isn't buying, engine health). The
 momentum bot's view moved to http://127.0.0.1:8765/momentum.
 
+## Research tools (find an edge before risking money)
+
+```
+uv run python -m tradeslave.scalper.backfill_meta --all --narrative  # names/descriptions for recorded tokens
+uv run python -m tradeslave.research.narrative                      # Ollama scores narratives; do high scores win?
+uv run python -m tradeslave.research.wallets                        # do some wallets reliably buy winners?
+```
+
+`tradeslave/research/sim.py` is the trade simulator used for all studies (real
+curve fills, fees both ways, network fee, fill delay); it reproduced 61 of 61
+live paper trades exactly. Wallet-level data needs `SCALP_TRADE_FEED=true` and a
+`PUMPPORTAL_API_KEY` whose linked wallet holds SOL (0.01 SOL per 10,000
+messages; capped by `SCALP_TRADE_FEED_MAX_EVENTS_PER_DAY`, default 50,000).
+Graduations to PumpSwap are recorded for free.
+
 ## Quick start
 
 ```
