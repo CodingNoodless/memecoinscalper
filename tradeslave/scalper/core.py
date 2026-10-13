@@ -11,7 +11,7 @@ from typing import Callable
 from .book import PaperBook
 from .config import ScalpConfig
 from .curve import CurveState
-from .strategy import entry_signal, exit_signal
+from .strategy import entry_signal, exit_signal, update_launch_state
 from .tracker import TokenTracker
 
 
@@ -25,9 +25,11 @@ class Scalper:
 
     # --- inputs -----------------------------------------------------------
     def on_create(self, mint: str, symbol: str, t: float, state: CurveState | None,
-                  creator: str = "", curve_key: str = "", initial_buy_sol: float = 0.0) -> TokenTracker:
+                  creator: str = "", curve_key: str = "", initial_buy_sol: float = 0.0,
+                  dev_tokens: float = 0.0, mayhem: bool = False) -> TokenTracker:
         tr = TokenTracker(mint=mint, symbol=symbol, created_at=t, creator=creator,
-                          curve_key=curve_key, initial_buy_sol=initial_buy_sol)
+                          curve_key=curve_key, initial_buy_sol=initial_buy_sol,
+                          dev_tokens=dev_tokens, mayhem=mayhem)
         if state is not None:
             tr.update(t, state)
         self.trackers[mint] = tr
@@ -41,6 +43,16 @@ class Scalper:
         self.book.fill_due(tr, t)
         if tr.update(t, state) is None:
             return
+        update_launch_state(tr, self.cfg)
+        self._decide(tr, t)
+
+    def on_dev_sell(self, mint: str, t: float, how: str = "creator_wallet_sell") -> None:
+        """The creator wallet sold: never trade this token again; exit any position."""
+        tr = self.trackers.get(mint)
+        if tr is None or tr.dev_sold:
+            return
+        tr.dev_sold, tr.dev_sold_reason = True, how
+        self.emit("dev_sold", {"mint": mint, "symbol": tr.symbol, "t": t, "how": how})
         self._decide(tr, t)
 
     def on_clock(self, now: float) -> None:

@@ -20,17 +20,39 @@ load_dotenv(dotenv_path=PROJECT_ROOT / ".env")
 @dataclass(frozen=True)
 class ScalpConfig:
     # --- watchlist -------------------------------------------------------
-    max_watched: int = 25            # tokens tracked at once (one curve subscription each)
+    max_watched: int = 40            # tokens tracked at once (one curve subscription each)
     watch_max_age_s: float = 600.0   # stop watching a flat token after this age
     idle_unwatch_s: float = 60.0     # stop watching if no curve change for this long
     min_initial_buy_sol: float = 0.0  # dev's first buy (skip if below)
     max_initial_buy_sol: float = 5.0  # very large dev buys are often dump setups
 
-    # --- entry: first trade on a token = buy the sniper dump ----------------
-    min_age_s: float = 30.0          # don't trade the first seconds of chaos
-    max_entry_age_s: float = 480.0   # stop opening new trades on old tokens
+    # --- entry mode -------------------------------------------------------
+    # initial_zone: Rohit's method - snipers + dev pump the price, it falls back
+    #   to around the opening price, buy there once selling stalls, sell the climb.
+    # dip_bounce: earlier rule set (dip from peak + bounce), kept for comparison.
+    entry_mode: str = "initial_zone"
+    min_age_s: float = 5.0           # skip the first seconds of chaos
+    max_entry_age_s: float = 300.0   # stop opening new trades on old tokens
+
+    # --- initial_zone rules (prices relative to the opening price after the dev buy)
+    min_initial_rise_pct: float = 0.20  # the launch spike must reach +20% first
+    zone_above_pct: float = 0.10     # buy zone top: opening price +10%
+    zone_below_pct: float = 0.12     # buy zone bottom: opening price -12%
+    rug_floor_pct: float = 0.25      # trading below opening -25% = support broken: no entries, exit
+    entry_confirm: str = "stall"     # none = buy on touch | stall = sellers paused | bounce = small uptick first
+    confirm_window_s: float = 2.0    # stall: no sells for this long and the latest trade is a buy
+    confirm_bounce_pct: float = 0.015  # bounce: price this far above the zone low since touch
+
+    # --- rug / scam filters ----------------------------------------------
+    max_dev_supply_pct: float = 0.10     # dev's launch buy as share of the 1B supply
+    early_window_s: float = 3.0          # "sniper window" after creation
+    max_early_supply_pct: float = 0.30   # supply bought in the sniper window (incl. dev)
+    dev_dump_match_pct: float = 0.005    # one sell matching the dev's whole bag (+-0.5%) = dev dumped
+    watch_creator: bool = True           # subscribe to the creator wallet's transactions
+    skip_mayhem: bool = False            # pump.fun "mayhem mode" tokens (recorded either way)
     first_dip_min_pct: float = 0.20  # price must have fallen this far from the launch peak
     dip_max_pct: float = 0.70        # deeper than this = likely dead/rugged, skip
+    # --- dip_bounce rules ------------------------------------------------
     # --- entry: repeat trades = buy pullbacks inside the swing ---------------
     swing_lookback_s: float = 30.0   # recent high is measured over this window
     reentry_pullback_min_pct: float = 0.08
@@ -114,6 +136,11 @@ def _validate(c: ScalpConfig) -> None:
         (0 < c.trade_size_sol <= c.max_exposure_sol, "need 0 < trade_size_sol <= max_exposure_sol"),
         (c.max_open_positions > 0, "max_open_positions must be positive"),
         (c.min_age_s < c.max_entry_age_s <= c.watch_max_age_s, "need min_age_s < max_entry_age_s <= watch_max_age_s"),
+        (c.entry_mode in {"initial_zone", "dip_bounce"}, "entry_mode must be initial_zone or dip_bounce"),
+        (c.entry_confirm in {"none", "stall", "bounce"}, "entry_confirm must be none, stall or bounce"),
+        (c.min_initial_rise_pct > c.zone_above_pct >= 0, "need min_initial_rise_pct > zone_above_pct >= 0"),
+        (0 <= c.zone_below_pct < c.rug_floor_pct < 1, "need 0 <= zone_below_pct < rug_floor_pct < 1"),
+        (0 < c.max_dev_supply_pct <= 1 and 0 < c.max_early_supply_pct <= 1, "supply limits must be in (0, 1]"),
     ]
     for ok, message in checks:
         if not ok:

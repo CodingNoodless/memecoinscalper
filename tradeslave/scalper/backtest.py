@@ -38,7 +38,9 @@ def replay(records, cfg: ScalpConfig) -> Scalper:
             if rec.get("vt") and rec.get("vs"):
                 state = CurveState(int(rec["vt"]), int(rec["vs"]))
             scalper.on_create(rec["m"], rec.get("s", "?"), t, state, rec.get("cr", ""), rec.get("bc", ""),
-                              float(rec.get("ib") or 0.0))
+                              float(rec.get("ib") or 0.0), float(rec.get("dt") or 0.0), bool(rec.get("mh")))
+        elif rec.get("k") == "devsell":
+            scalper.on_dev_sell(rec["m"], t, rec.get("how", "creator_wallet_sell"))
         elif rec.get("k") == "curve":
             state = CurveState(int(rec["vt"]), int(rec["vs"]), int(rec.get("rt") or 0), int(rec.get("rs") or 0),
                                0, bool(rec.get("c")))
@@ -67,6 +69,11 @@ def summarize(scalper: Scalper) -> dict:
         row = by_reason.setdefault(c["exit_reason"], {"n": 0, "pnl_sol": 0.0})
         row["n"] += 1
         row["pnl_sol"] = round(row["pnl_sol"] + c["pnl_sol"], 6)
+    safety: dict[str, int] = {}
+    for tr in scalper.trackers.values():
+        flag = ("dev_sold" if tr.dev_sold else "floor_broken" if tr.floor_broken else None)
+        if flag:
+            safety[flag] = safety.get(flag, 0) + 1
     by_kind: dict[str, dict] = {}
     for c in closed:
         row = by_kind.setdefault(c["kind"], {"n": 0, "pnl_sol": 0.0, "wins": 0})
@@ -87,6 +94,7 @@ def summarize(scalper: Scalper) -> dict:
         "failed_tx": scalper.book.failed_tx,
         "by_exit_reason": by_reason,
         "by_entry_kind": by_kind,
+        "tokens_flagged": safety,
         "top_entry_blocks": dict(sorted(scalper.entry_block_reasons.items(), key=lambda kv: -kv[1])[:8]),
     }
 

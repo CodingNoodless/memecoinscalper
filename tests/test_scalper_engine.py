@@ -38,7 +38,8 @@ def test_engine_end_to_end_offline(state_dir, monkeypatch):
     monkeypatch.setattr("tradeslave.scalper.engine.time.time", lambda: clock["t"])
 
     async def scenario():
-        engine = LiveEngine(ScalpConfig(record_ticks=False, fail_rate=0.0))
+        engine = LiveEngine(ScalpConfig(record_ticks=False, fail_rate=0.0, entry_mode="dip_bounce", min_age_s=30.0,
+                                        max_entry_age_s=480.0, max_early_supply_pct=1.0, watch_creator=False))
         engine.rpc_ws = FakeWS()
         engine.rpc_ready.set()
         market = Market()
@@ -48,7 +49,7 @@ def test_engine_end_to_end_offline(state_dir, monkeypatch):
         [req] = engine.rpc_ws.sent
         assert req["method"] == "accountSubscribe" and req["params"][0] == "curve-MINT1"
         engine._on_rpc(json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": 4242}))
-        assert engine.mint_by_sub == {4242: "MINT1"}
+        assert engine.mint_by_curve_sub == {4242: "MINT1"}
         start = clock["t"]
         for dt, factor in LAUNCH_DUMP_BOUNCE + RALLY:
             clock["t"] = start + dt

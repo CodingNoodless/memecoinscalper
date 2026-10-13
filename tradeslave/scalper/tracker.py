@@ -11,7 +11,10 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 
-from .curve import CurveState
+from .curve import TOKEN_UNIT, CurveState
+
+TOTAL_SUPPLY_TOKENS = 1_000_000_000          # pump.fun tokens are minted with 1B supply
+CURVE_START_VIRTUAL_TOKENS = 1_073_000_000   # virtual token reserves at curve creation
 
 
 @dataclass(frozen=True)
@@ -20,6 +23,7 @@ class Tick:
     price: float          # SOL per token
     virtual_sol: float    # SOL
     flow_sol: float       # signed SOL into the curve since the previous tick
+    virtual_tokens: float = 0.0  # whole tokens left in the virtual reserves
 
 
 @dataclass
@@ -41,6 +45,15 @@ class TokenTracker:
     losses: int = 0
     last_exit_t: float = -1e18
     first_dip_done: bool = False
+    # launch / safety facts
+    dev_tokens: float = 0.0          # whole tokens the dev bought at creation
+    mayhem: bool = False
+    dev_sold: bool = False
+    dev_sold_reason: str = ""
+    floor_broken: bool = False
+    zone_touch_t: float | None = None   # first time price entered the buy zone after the rise
+    zone_low: float = 0.0               # lowest price since the zone touch
+    last_tokens_sold: float = 0.0       # tokens sold into the curve by the latest update
 
     def update(self, t: float, state: CurveState) -> Tick | None:
         """Add a new curve state. Returns the tick, or None if nothing changed."""
@@ -48,8 +61,13 @@ class TokenTracker:
                 and state.virtual_token_reserves == self.state.virtual_token_reserves:
             return None
         flow = 0.0 if self.state is None else state.virtual_sol - self.state.virtual_sol
+        tokens_sold = 0.0
+        if self.state is not None and state.virtual_token_reserves > self.state.virtual_token_reserves:
+            tokens_sold = (state.virtual_token_reserves - self.state.virtual_token_reserves) / TOKEN_UNIT
         self.state = state
-        tick = Tick(t=t, price=state.price_sol, virtual_sol=state.virtual_sol, flow_sol=flow)
+        self.last_tokens_sold = tokens_sold
+        tick = Tick(t=t, price=state.price_sol, virtual_sol=state.virtual_sol, flow_sol=flow,
+                    virtual_tokens=state.virtual_token_reserves / TOKEN_UNIT)
         self.ticks.append(tick)
         if not self.launch_price:
             self.launch_price = tick.price
@@ -98,3 +116,23 @@ class TokenTracker:
         if len(self.ticks) < 2 or self.ticks[-2].price <= 0:
             return 0.0
         return 1.0 - self.ticks[-1].price / self.ticks[-2].price
+
+    # --- launch analytics -----------------------------------------------------
+    @property
+    def dev_supply_pct(self) -> float:
+        return self.dev_tokens / TOTAL_SUPPLY_TOKENS
+
+    def early_supply_pct(self, window_s: float) -> float | None:
+        """Share of the 1B supply bought from the curve within `window_s` of creation
+        (dev + snipers + bundles). None until a curve update after the window arrives."""
+        cutoff = self.created_at + window_s
+        if not self.ticks or self.ticks[-1].t <= cutoff:
+            return None
+        at_cutoff = None
+        for tick in self.ticks:
+            if tick.t > cutoff:
+                break
+            at_cutoff = tick
+        if at_cutoff is None:
+            return None
+        return max(0.0, (CURVE_START_VIRTUAL_TOKENS - at_cutoff.virtual_tokens) / TOTAL_SUPPLY_TOKENS)

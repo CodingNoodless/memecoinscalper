@@ -41,9 +41,10 @@ class TickRecorder:
             handle.flush()
             self._last_flush = now
 
-    def create(self, t, mint, symbol, state, creator="", curve_key="", initial_buy_sol=0.0) -> None:
+    def create(self, t, mint, symbol, state, creator="", curve_key="", initial_buy_sol=0.0,
+               dev_tokens=0.0, mayhem=False) -> None:
         self.write({"k": "create", "t": round(t, 3), "m": mint, "s": symbol, "cr": creator, "bc": curve_key,
-                    "ib": initial_buy_sol,
+                    "ib": initial_buy_sol, "dt": dev_tokens, "mh": int(bool(mayhem)),
                     "vt": state.virtual_token_reserves if state else None,
                     "vs": state.virtual_sol_reserves if state else None})
 
@@ -51,6 +52,9 @@ class TickRecorder:
         self.write({"k": "curve", "t": round(t, 3), "m": mint, "vt": state.virtual_token_reserves,
                     "vs": state.virtual_sol_reserves, "rt": state.real_token_reserves,
                     "rs": state.real_sol_reserves, "c": int(state.complete), "sl": slot})
+
+    def dev_sell(self, t, mint, how) -> None:
+        self.write({"k": "devsell", "t": round(t, 3), "m": mint, "how": how})
 
     def close(self) -> None:
         if self._file is not None:

@@ -32,12 +32,22 @@ class Market:
         self.vt = self.k // self.vs
         return self.state()
 
+    def sell_tokens(self, whole_tokens):
+        """Sell an exact number of tokens into the curve."""
+        self.vt += int(whole_tokens * U)
+        self.vs = self.k // self.vt
+        return self.state()
+
     def state(self):
         return CurveState(self.vt, self.vs)
 
 
 def cfg(**overrides):
-    base = dict(fail_rate=0.0, latency_s=0.8, seed=1)
+    """These scenarios exercise the dip_bounce rules and the shared machinery.
+    Their synthetic launch pumps hard inside the sniper window, so the sniper
+    filter is relaxed here and tested separately in test_scalper_zone.py."""
+    base = dict(fail_rate=0.0, latency_s=0.8, seed=1, entry_mode="dip_bounce", min_age_s=30.0,
+                max_entry_age_s=480.0, max_early_supply_pct=1.0)
     base.update(overrides)
     return ScalpConfig(**base)
 

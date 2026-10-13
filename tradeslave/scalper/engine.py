@@ -2,9 +2,11 @@
 
 Data (all free):
   * PumpPortal websocket `subscribeNewToken` - every new pump.fun token, with
-    its bonding-curve address and starting reserves.
-  * Solana RPC websocket `accountSubscribe` on each token's bonding curve -
-    a message on every change, which is every buy or sell.
+    its bonding-curve address, starting reserves and the dev's buy.
+  * Solana RPC websocket on one connection:
+      - `accountSubscribe` on each token's bonding curve: a message on every
+        buy or sell, giving the exact curve state;
+      - `logsSubscribe` on each creator wallet: flags the dev selling.
 One asyncio process handles all tokens concurrently; the bottleneck is the
 network, not the CPU, so threads or extra processes would not add speed.
 """
@@ -19,11 +21,12 @@ import time
 from logging.handlers import RotatingFileHandler
 
 from ..paths import LOG_DIR, PROJECT_ROOT
-from ..state import append_jsonl, save_json
+from ..state import append_jsonl, save_json, state_path
 from .config import ScalpConfig, load_config
 from .core import Scalper
 from .curve import decode_bonding_curve, state_from_pumpportal
 from .recorder import TickRecorder
+from .strategy import entry_signal, safety_block
 
 log = logging.getLogger("scalper")
 RAW_SAMPLE_LIMIT = 25
@@ -36,28 +39,32 @@ class LiveEngine:
         self.recorder = TickRecorder() if cfg.record_ticks else None
         self.rpc_ws = None
         self.rpc_ready = asyncio.Event()
+        self.stopping = False
         self.next_id = 1
-        self.pending_subs: dict[int, str] = {}   # request id -> mint
-        self.sub_by_mint: dict[str, int] = {}
-        self.mint_by_sub: dict[int, str] = {}
-        self.watch: dict[str, str] = {}           # mint -> curve account
+        self.pending: dict[int, tuple[str, str]] = {}      # request id -> (kind, key)
+        self.curve_sub: dict[str, int] = {}                # mint -> subscription
+        self.mint_by_curve_sub: dict[int, str] = {}
+        self.creator_sub: dict[str, int] = {}              # creator -> subscription
+        self.creator_by_sub: dict[int, str] = {}
+        self.creator_mints: dict[str, set[str]] = {}       # creator -> watched mints
+        self.watch: dict[str, str] = {}                    # mint -> curve account
         self.stats = {"created_seen": 0, "skipped_full": 0, "skipped_filter": 0, "curve_msgs": 0,
-                      "decode_fail": 0, "pp_reconnects": 0, "rpc_reconnects": 0}
+                      "decode_fail": 0, "creator_msgs": 0, "dev_sells": 0, "pp_reconnects": 0,
+                      "rpc_reconnects": 0, "sub_errors": 0}
         self.raw_samples = 0
         self.started = time.time()
         self._restore_balance()
 
     # --- persistence --------------------------------------------------------
     def _restore_balance(self) -> None:
-        path = PROJECT_ROOT / "scalp_wallet.json"
+        path = state_path("scalp_wallet.json")
         if not path.exists():
             return
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             balance = float(data["balance_sol"])
-            carried = 0.0
-            for p in data.get("open_positions", []):
-                carried += float(p["cost_sol"]) * (1.0 + float(p.get("last_pnl_pct", 0.0)))
+            carried = sum(float(p["cost_sol"]) * (1.0 + float(p.get("last_pnl_pct", 0.0)))
+                          for p in data.get("open_positions", []))
             self.scalper.book.balance_sol = balance + carried
             if carried:
                 log.warning("Previous run left %d open paper positions; credited at last mark (%.4f SOL)",
@@ -66,11 +73,45 @@ class LiveEngine:
         except (OSError, ValueError, KeyError, TypeError) as exc:
             log.warning("Could not restore scalp_wallet.json (%s); starting at %.4f SOL", exc, self.cfg.paper_start_sol)
 
+    def _watchlist(self, now: float) -> list[dict]:
+        rows = []
+        for mint in self.watch:
+            tr = self.scalper.trackers.get(mint)
+            if tr is None or not tr.launch_price:
+                continue
+            signal = entry_signal(tr, now, self.cfg) if mint not in self.scalper.book.positions else None
+            early = tr.early_supply_pct(self.cfg.early_window_s)
+            rows.append({
+                "mint": mint, "symbol": tr.symbol, "age_s": round(tr.age(now), 1),
+                "vs_opening": round(tr.price / tr.launch_price - 1.0, 4),
+                "rise": round(tr.peak_price / tr.launch_price - 1.0, 4),
+                "dev_supply_pct": round(tr.dev_supply_pct, 4),
+                "early_supply_pct": None if early is None else round(early, 4),
+                "safety": safety_block(tr, now, self.cfg),
+                "status": "in position" if mint in self.scalper.book.positions else (signal.reason if signal else ""),
+                "entries": tr.entries, "updates": len(tr.ticks),
+            })
+        rows.sort(key=lambda r: r["age_s"])
+        return rows
+
     def _save_wallet(self) -> None:
-        snap = self.scalper.book.snapshot()
-        snap["equity_sol"] = self.scalper.book.equity_sol(self.scalper.trackers)
-        snap["updated_at"] = time.time()
-        snap["watched"] = len(self.watch)
+        now = time.time()
+        book = self.scalper.book
+        snap = book.snapshot()
+        snap.update({
+            "equity_sol": book.equity_sol(self.scalper.trackers), "updated_at": now, "started_at": self.started,
+            "paper_start_sol": self.cfg.paper_start_sol, "watched": len(self.watch), "stats": self.stats,
+            "entry_block_reasons": dict(sorted(self.scalper.entry_block_reasons.items(), key=lambda kv: -kv[1])[:12]),
+            "watchlist": self._watchlist(now),
+            "settings": {k: getattr(self.cfg, k) for k in (
+                "entry_mode", "entry_confirm", "min_initial_rise_pct", "zone_above_pct", "zone_below_pct",
+                "rug_floor_pct", "max_dev_supply_pct", "max_early_supply_pct", "take_profit_pct",
+                "stop_loss_pct", "max_hold_s", "trade_size_sol", "max_open_positions", "fee_bps", "latency_s")},
+        })
+        for p in snap["open_positions"]:
+            tr = self.scalper.trackers.get(p["mint"])
+            if tr is not None and tr.launch_price:
+                p["vs_opening"] = round(tr.price / tr.launch_price - 1.0, 4)
         save_json("scalp_wallet.json", snap)
 
     def _on_event(self, kind: str, data: dict) -> None:
@@ -82,7 +123,21 @@ class LiveEngine:
                      data["exit_reason"], data["balance_sol"])
         elif kind == "buy_filled":
             log.info("BUY %s at %.3e SOL cost=%.4f", data["symbol"], data["price"], data["cost_sol"])
+        elif kind == "dev_sold":
+            log.info("DEV SOLD %s (%s): token blocked", data["symbol"], data["how"])
         append_jsonl("scalp_events.jsonl", record)
+
+    def _sample(self, kind: str, raw) -> None:
+        """Keep the first few raw messages so field formats can be checked by hand."""
+        if self.raw_samples >= RAW_SAMPLE_LIMIT:
+            return
+        self.raw_samples += 1
+        try:
+            LOG_DIR.mkdir(parents=True, exist_ok=True)
+            with (LOG_DIR / "scalper_raw_samples.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps({"kind": kind, "raw": str(raw)[:4000]}) + "\n")
+        except OSError as exc:
+            log.debug("Could not save raw sample: %s", exc)
 
     # --- PumpPortal: new tokens ---------------------------------------------
     async def pumpportal_loop(self, websockets) -> None:
@@ -91,7 +146,7 @@ class LiveEngine:
         if key:
             url = f"{url}?api-key={key}"
         backoff = 1.0
-        while True:
+        while not self.stopping:
             try:
                 async with websockets.connect(url, ping_interval=20, ping_timeout=20, max_size=2**20) as ws:
                     await ws.send(json.dumps({"method": "subscribeNewToken"}))
@@ -107,18 +162,6 @@ class LiveEngine:
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 30.0)
 
-    def _sample(self, kind: str, raw) -> None:
-        """Keep the first few raw messages so field formats can be checked by hand."""
-        if self.raw_samples >= RAW_SAMPLE_LIMIT:
-            return
-        self.raw_samples += 1
-        try:
-            LOG_DIR.mkdir(parents=True, exist_ok=True)
-            with (LOG_DIR / "scalper_raw_samples.jsonl").open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps({"kind": kind, "raw": str(raw)[:4000]}) + "\n")
-        except OSError as exc:
-            log.debug("Could not save raw sample: %s", exc)
-
     def _on_pumpportal(self, raw: str) -> None:
         try:
             msg = json.loads(raw)
@@ -130,11 +173,18 @@ class LiveEngine:
         if msg.get("pool") not in (None, "pump"):
             return  # other launchpads relayed by PumpPortal
         mint, curve_key = msg.get("mint"), msg.get("bondingCurveKey")
-        if not isinstance(mint, str) or not isinstance(curve_key, str):
+        if not isinstance(mint, str) or not isinstance(curve_key, str) or mint in self.watch:
             return
         self.stats["created_seen"] += 1
         state = state_from_pumpportal(msg)
-        initial_buy_sol = max(0.0, state.virtual_sol - 30.0) if state else 0.0
+        try:
+            initial_buy_sol = float(msg["solAmount"])
+        except (KeyError, TypeError, ValueError):
+            initial_buy_sol = max(0.0, state.virtual_sol - 30.0) if state else 0.0
+        try:
+            dev_tokens = float(msg.get("initialBuy") or 0.0)
+        except (TypeError, ValueError):
+            dev_tokens = 0.0
         if not (self.cfg.min_initial_buy_sol <= initial_buy_sol <= self.cfg.max_initial_buy_sol):
             self.stats["skipped_filter"] += 1
             return
@@ -144,51 +194,89 @@ class LiveEngine:
         now = time.time()
         symbol = str(msg.get("symbol") or "?")[:20]
         creator = str(msg.get("traderPublicKey") or "")
-        self.scalper.on_create(mint, symbol, now, state, creator, curve_key, initial_buy_sol)
+        mayhem = msg.get("is_mayhem_mode") is True
+        self.scalper.on_create(mint, symbol, now, state, creator, curve_key, initial_buy_sol, dev_tokens, mayhem)
         if self.recorder:
-            self.recorder.create(now, mint, symbol, state, creator, curve_key, initial_buy_sol)
+            self.recorder.create(now, mint, symbol, state, creator, curve_key, initial_buy_sol, dev_tokens, mayhem)
         self.watch[mint] = curve_key
         if self.rpc_ready.is_set():
-            asyncio.get_running_loop().create_task(self._subscribe(mint, curve_key))
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._subscribe_curve(mint, curve_key))
+            if creator and self.cfg.watch_creator:
+                loop.create_task(self._subscribe_creator(creator, mint))
+        elif creator:
+            self.creator_mints.setdefault(creator, set()).add(mint)
 
-    # --- RPC: bonding curve updates -----------------------------------------
+    # --- RPC: bonding curves + creator wallets --------------------------------
     async def _send(self, payload: dict) -> None:
         if self.rpc_ws is not None:
             await self.rpc_ws.send(json.dumps(payload))
 
-    async def _subscribe(self, mint: str, curve_key: str) -> None:
+    def _request_id(self) -> int:
         request_id = self.next_id
         self.next_id += 1
-        self.pending_subs[request_id] = mint
+        return request_id
+
+    async def _subscribe_curve(self, mint: str, curve_key: str) -> None:
+        request_id = self._request_id()
+        self.pending[request_id] = ("curve", mint)
         await self._send({"jsonrpc": "2.0", "id": request_id, "method": "accountSubscribe",
                           "params": [curve_key, {"encoding": "base64", "commitment": "processed"}]})
 
+    async def _subscribe_creator(self, creator: str, mint: str) -> None:
+        mints = self.creator_mints.setdefault(creator, set())
+        mints.add(mint)
+        if creator in self.creator_sub or any(k == ("creator", creator) for k in self.pending.values()):
+            return
+        request_id = self._request_id()
+        self.pending[request_id] = ("creator", creator)
+        await self._send({"jsonrpc": "2.0", "id": request_id, "method": "logsSubscribe",
+                          "params": [{"mentions": [creator]}, {"commitment": "processed"}]})
+
     async def _unsubscribe(self, mint: str) -> None:
         self.watch.pop(mint, None)
-        sub = self.sub_by_mint.pop(mint, None)
+        sub = self.curve_sub.pop(mint, None)
         if sub is not None:
-            self.mint_by_sub.pop(sub, None)
-            request_id = self.next_id
-            self.next_id += 1
-            try:
-                await self._send({"jsonrpc": "2.0", "id": request_id, "method": "accountUnsubscribe", "params": [sub]})
-            except Exception:
-                pass
+            self.mint_by_curve_sub.pop(sub, None)
+            await self._safe_send({"jsonrpc": "2.0", "id": self._request_id(), "method": "accountUnsubscribe",
+                                   "params": [sub]})
+        for creator, mints in list(self.creator_mints.items()):
+            if mint in mints:
+                mints.discard(mint)
+                if not mints:
+                    del self.creator_mints[creator]
+                    csub = self.creator_sub.pop(creator, None)
+                    if csub is not None:
+                        self.creator_by_sub.pop(csub, None)
+                        await self._safe_send({"jsonrpc": "2.0", "id": self._request_id(),
+                                               "method": "logsUnsubscribe", "params": [csub]})
+
+    async def _safe_send(self, payload: dict) -> None:
+        try:
+            await self._send(payload)
+        except Exception:
+            pass
 
     async def rpc_loop(self, websockets) -> None:
         backoff = 1.0
-        while True:
+        while not self.stopping:
             try:
                 async with websockets.connect(self.cfg.rpc_ws, ping_interval=20, ping_timeout=20,
                                               max_size=2**22) as ws:
                     self.rpc_ws = ws
-                    self.pending_subs.clear()
-                    self.sub_by_mint.clear()
-                    self.mint_by_sub.clear()
+                    self.pending.clear()
+                    self.curve_sub.clear()
+                    self.mint_by_curve_sub.clear()
+                    self.creator_sub.clear()
+                    self.creator_by_sub.clear()
                     self.rpc_ready.set()
                     log.info("Solana RPC connected (%s); resubscribing %d curves", self.cfg.rpc_ws, len(self.watch))
                     for mint, curve_key in list(self.watch.items()):
-                        await self._subscribe(mint, curve_key)
+                        await self._subscribe_curve(mint, curve_key)
+                    if self.cfg.watch_creator:
+                        for creator, mints in list(self.creator_mints.items()):
+                            for mint in list(mints):
+                                await self._subscribe_creator(creator, mint)
                     backoff = 1.0
                     async for raw in ws:
                         self._on_rpc(raw)
@@ -208,24 +296,43 @@ class LiveEngine:
             msg = json.loads(raw)
         except json.JSONDecodeError:
             return
-        if "id" in msg and msg.get("id") in self.pending_subs:
-            mint = self.pending_subs.pop(msg["id"])
-            if "result" in msg and mint in self.watch:
-                self.sub_by_mint[mint] = msg["result"]
-                self.mint_by_sub[msg["result"]] = mint
-            elif "result" in msg:
-                # Token was dropped while the subscription was in flight: release it.
-                asyncio.get_running_loop().create_task(self._send(
-                    {"jsonrpc": "2.0", "id": 0, "method": "accountUnsubscribe", "params": [msg["result"]]}))
-            elif "error" in msg:
-                log.warning("accountSubscribe failed for %s: %s", mint, msg["error"])
-                self.watch.pop(mint, None)
-                self.scalper.forget(mint)
+        if "id" in msg and msg.get("id") in self.pending:
+            self._on_subscribe_reply(msg)
             return
-        if msg.get("method") != "accountNotification":
-            return
+        method = msg.get("method")
         params = msg.get("params") or {}
-        mint = self.mint_by_sub.get(params.get("subscription"))
+        if method == "accountNotification":
+            self._on_curve_notification(params, raw)
+        elif method == "logsNotification":
+            self._on_creator_logs(params)
+
+    def _on_subscribe_reply(self, msg: dict) -> None:
+        kind, key = self.pending.pop(msg["id"])
+        if "error" in msg:
+            self.stats["sub_errors"] += 1
+            log.warning("%s subscription failed for %s: %s", kind, key, msg["error"])
+            if kind == "curve":
+                self.watch.pop(key, None)
+                self.scalper.forget(key)
+            return
+        sub = msg.get("result")
+        if kind == "curve":
+            if key in self.watch:
+                self.curve_sub[key] = sub
+                self.mint_by_curve_sub[sub] = key
+            else:  # dropped while the request was in flight
+                asyncio.get_running_loop().create_task(self._safe_send(
+                    {"jsonrpc": "2.0", "id": 0, "method": "accountUnsubscribe", "params": [sub]}))
+        else:
+            if self.creator_mints.get(key):
+                self.creator_sub[key] = sub
+                self.creator_by_sub[sub] = key
+            else:
+                asyncio.get_running_loop().create_task(self._safe_send(
+                    {"jsonrpc": "2.0", "id": 0, "method": "logsUnsubscribe", "params": [sub]}))
+
+    def _on_curve_notification(self, params: dict, raw: str) -> None:
+        mint = self.mint_by_curve_sub.get(params.get("subscription"))
         if mint is None:
             return
         self.stats["curve_msgs"] += 1
@@ -243,6 +350,24 @@ class LiveEngine:
             self.recorder.curve(now, mint, state, (result.get("context") or {}).get("slot"))
         self.scalper.on_curve(mint, now, state)
 
+    def _on_creator_logs(self, params: dict) -> None:
+        creator = self.creator_by_sub.get(params.get("subscription"))
+        if creator is None:
+            return
+        self.stats["creator_msgs"] += 1
+        value = (params.get("result") or {}).get("value") or {}
+        if value.get("err") is not None:
+            return
+        logs = value.get("logs") or []
+        if not any("Instruction: Sell" in line for line in logs if isinstance(line, str)):
+            return
+        now = time.time()
+        self.stats["dev_sells"] += 1
+        for mint in list(self.creator_mints.get(creator, ())):
+            if self.recorder:
+                self.recorder.dev_sell(now, mint, "creator_wallet_sell")
+            self.scalper.on_dev_sell(mint, now, "creator_wallet_sell")
+
     # --- clock, housekeeping, status ----------------------------------------
     async def clock_loop(self) -> None:
         last_status = last_save = time.time()
@@ -256,11 +381,11 @@ class LiveEngine:
                     await self._unsubscribe(mint)
                     continue
                 idle = now - (tr.last_update_t or tr.created_at)
-                if tr.age(now) > self.cfg.watch_max_age_s or idle > self.cfg.idle_unwatch_s or \
-                        (tr.state is not None and tr.state.complete):
-                    if self.scalper.forget(mint):
-                        await self._unsubscribe(mint)
-            if now - last_save >= 5:
+                done = tr.age(now) > self.cfg.watch_max_age_s or idle > self.cfg.idle_unwatch_s or \
+                    (tr.state is not None and tr.state.complete) or tr.dev_sold or tr.floor_broken
+                if done and self.scalper.forget(mint):
+                    await self._unsubscribe(mint)
+            if now - last_save >= 2:
                 self._save_wallet()
                 last_save = now
             if now - last_status >= self.cfg.status_every_s:
@@ -273,25 +398,34 @@ class LiveEngine:
         wins = sum(1 for c in closed if c["pnl_sol"] > 0)
         pnl = sum(c["pnl_sol"] for c in closed)
         avg = (sum(c["pnl_pct"] for c in closed) / len(closed)) if closed else 0.0
-        blocks = sorted(self.scalper.entry_block_reasons.items(), key=lambda kv: -kv[1])[:5]
+        blocks = sorted(self.scalper.entry_block_reasons.items(), key=lambda kv: -kv[1])[:6]
         log.info(
             "STATUS up=%.0fm watched=%d open=%d balance=%.4f equity=%.4f | trades=%d wins=%d (%.0f%%) "
             "avg=%+.2f%% pnl=%+.4f SOL fees=%.4f failed_tx=%d | new_tokens=%d curve_msgs=%d decode_fail=%d "
-            "skipped_full=%d | top_entry_blocks=%s",
+            "dev_sells=%d skipped_full=%d | top_entry_blocks=%s",
             (now - self.started) / 60, len(self.watch), len(book.positions), book.balance_sol,
             book.equity_sol(self.scalper.trackers), len(closed), wins, 100 * wins / len(closed) if closed else 0,
             avg * 100, pnl, book.fees_paid_sol, book.failed_tx, self.stats["created_seen"],
-            self.stats["curve_msgs"], self.stats["decode_fail"], self.stats["skipped_full"], blocks,
+            self.stats["curve_msgs"], self.stats["decode_fail"], self.stats["dev_sells"],
+            self.stats["skipped_full"], blocks,
         )
         if self.stats["curve_msgs"] > 50 and self.stats["decode_fail"] > self.stats["curve_msgs"] * 0.5:
             log.error("Most curve updates fail to decode - pump.fun may have changed its account layout. "
                       "See logs/scalper_raw_samples.jsonl")
+
+    def _loop_exception(self, loop, context) -> None:
+        # Windows closes SSL sockets noisily during Ctrl+C shutdown; that is harmless.
+        if self.stopping:
+            log.debug("Ignored during shutdown: %s", context.get("message"))
+            return
+        loop.default_exception_handler(context)
 
     async def run(self) -> None:
         try:
             import websockets
         except ImportError as exc:
             raise SystemExit("The scalper needs the 'websockets' package: run `uv sync`") from exc
+        asyncio.get_running_loop().set_exception_handler(self._loop_exception)
         tasks = [
             asyncio.create_task(self.rpc_loop(websockets), name="rpc"),
             asyncio.create_task(self.pumpportal_loop(websockets), name="pumpportal"),
@@ -300,8 +434,10 @@ class LiveEngine:
         try:
             await asyncio.gather(*tasks)
         finally:
+            self.stopping = True
             for task in tasks:
                 task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             self._save_wallet()
             if self.recorder:
                 self.recorder.close()
@@ -340,11 +476,17 @@ def main() -> None:
     if lock is None:
         log.error("Another scalper instance is already running; exiting")
         return
-    log.info("Scalper (PAPER) starting: size=%.3f SOL, max_open=%d, watch=%d, TP=%+.1f%% SL=-%.1f%% "
-             "max_hold=%.0fs, fee=%.2f%%/side, latency=%.1fs, fail_rate=%.0f%%",
-             cfg.trade_size_sol, cfg.max_open_positions, cfg.max_watched, cfg.take_profit_pct * 100,
-             cfg.stop_loss_pct * 100, cfg.max_hold_s, cfg.fee_bps / 100, cfg.latency_s, cfg.fail_rate * 100)
+    log.info("Scalper (PAPER) starting: mode=%s confirm=%s | rise>=%.0f%% zone=[-%.0f%%, +%.0f%%] of opening "
+             "| filters: dev<=%.0f%% snipers<=%.0f%% dev-sell watch=%s | TP=%+.1f%% SL=-%.1f%% max_hold=%.0fs "
+             "| size=%.3f SOL max_open=%d watch=%d | fee=%.2f%%/side latency=%.1fs fail=%.0f%%",
+             cfg.entry_mode, cfg.entry_confirm, cfg.min_initial_rise_pct * 100, cfg.zone_below_pct * 100,
+             cfg.zone_above_pct * 100, cfg.max_dev_supply_pct * 100, cfg.max_early_supply_pct * 100,
+             cfg.watch_creator, cfg.take_profit_pct * 100, cfg.stop_loss_pct * 100, cfg.max_hold_s,
+             cfg.trade_size_sol, cfg.max_open_positions, cfg.max_watched, cfg.fee_bps / 100, cfg.latency_s,
+             cfg.fail_rate * 100)
+    engine = LiveEngine(cfg)
     try:
-        asyncio.run(LiveEngine(cfg).run())
+        asyncio.run(engine.run())
     except KeyboardInterrupt:
+        engine.stopping = True
         log.info("Scalper stopped")
