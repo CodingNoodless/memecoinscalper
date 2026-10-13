@@ -6,6 +6,8 @@ import os
 
 from .paths import LOG_DIR
 from .config import (
+    CONFIG_WARNINGS,
+    LLM_MODE,
     JUPITER_API_KEY,
     MAX_CANDIDATE_AGE_SECONDS,
     OLLAMA_MODEL,
@@ -82,6 +84,9 @@ def main() -> None:
         MAX_ENTRY_ROUNDTRIP_LOSS_PCT * 100.0,
         MAX_HOLD_HOURS,
     )
+    logging.getLogger(__name__).info("Candidate selector: LLM_MODE=%s", LLM_MODE)
+    for warning in CONFIG_WARNINGS:
+        logging.getLogger(__name__).warning("Config: %s", warning)
     _INSTANCE_LOCK_HANDLE = _acquire_instance_lock(log_dir)
     if _INSTANCE_LOCK_HANDLE is None:
         logging.getLogger(__name__).error(

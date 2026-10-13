@@ -12,6 +12,7 @@ from typing import Any
 import requests
 
 from .config import (
+    LLM_MODE,
     DEXSCREENER_BASE_URL,
     GECKOTERMINAL_BASE_URL,
     HTTP_TIMEOUT_SECONDS,
@@ -945,6 +946,40 @@ def process_tokens_with_ollama(
         return None
 
 
+def select_by_score(top_tokens: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Deterministic pick: the highest selection score among screened candidates.
+
+    Shaped like an Ollama decision so the trader's validation is unchanged.
+    `confidence` mirrors the rounded score and is diagnostic only.
+    """
+    if not top_tokens:
+        return []
+    best = max(top_tokens, key=lambda item: item["selection_score"])
+    return [{
+        "symbol": best["symbol"],
+        "address": best["tokenAddress"],
+        "action": "BUY",
+        "confidence": max(0, min(100, int(round(best["selection_score"])))),
+        "reasoning": "Highest deterministic selection score in the screened set",
+        "selector": "score",
+    }]
+
+
+def _record_llm_shadow(top_tokens: list[dict[str, Any]], scan_id: str, score_pick: dict[str, Any]) -> None:
+    """Ask Ollama after the score pick was published and log whether it agreed."""
+    llm = process_tokens_with_ollama(top_tokens, scan_id)
+    llm_pick = llm[0] if llm else None
+    agreed = bool(llm_pick) and llm_pick.get("address") == score_pick.get("address")
+    logger.info(
+        "LLM shadow scan=%s score_pick=%s llm_pick=%s agreed=%s",
+        scan_id, score_pick.get("symbol"), llm_pick.get("symbol") if llm_pick else None, agreed,
+    )
+    _record_pipeline_event(
+        "llm_shadow_comparison", scan_id=scan_id, score_pick=score_pick,
+        llm_pick=llm_pick, agreed=agreed,
+    )
+
+
 def _empty_snapshot() -> dict[str, Any]:
     snapshot = empty_candidate_snapshot()
     snapshot["generated_at"] = iso_timestamp()
@@ -1083,16 +1118,22 @@ def run_scanner_loop() -> None:
                 rejection_counts_by_source=source_rejection_log,
                 eligible_counts_by_source=dict(eligible_counts_by_source),
             )
-            decisions = process_tokens_with_ollama(top_five, scan_id) if top_five else []
             if not top_five:
-                logger.info("Ollama not called scan=%s because no token passed deterministic filters", scan_id)
+                decisions = []
+            elif LLM_MODE == "on":
+                decisions = process_tokens_with_ollama(top_five, scan_id)
+            else:
+                decisions = select_by_score(top_five)
+            if not top_five:
+                logger.info("No selection scan=%s because no token passed deterministic filters", scan_id)
                 _record_pipeline_event("no_candidates", scan_id=scan_id, feed_count=len(token_feed), rejection_counts=dict(sorted(rejections.items())))
             logger.info(
-                "Scan complete scan=%s: %d feed tokens, %d eligible candidates, %d sent to Ollama, %s decision",
+                "Scan complete scan=%s: %d feed tokens, %d eligible candidates, %d ranked (selector=%s), %s decision",
                 scan_id,
                 len(token_feed),
                 len(candidates),
                 len(top_five),
+                LLM_MODE if LLM_MODE == "on" else "score",
                 "received" if decisions else "no valid",
             )
             if rejections:
@@ -1112,9 +1153,11 @@ def run_scanner_loop() -> None:
                 chosen = decisions[0]
                 mark_token_attempt(
                     chosen.get("address", ""), chosen.get("symbol", "UNKNOWN"),
-                    "ollama_selected_signal",
+                    f"{chosen.get('selector', 'ollama')}_selected_signal",
                 )
                 _record_pipeline_event("signal_published", scan_id=scan_id, selected=decisions[0], candidate_count=len(top_five))
+                if LLM_MODE == "shadow":
+                    _record_llm_shadow(top_five, scan_id, chosen)
             else:
                 _record_pipeline_event("no_signal_published", scan_id=scan_id, candidate_count=len(top_five))
             scan_duration_seconds = round(time.monotonic() - scan_started_monotonic, 2)

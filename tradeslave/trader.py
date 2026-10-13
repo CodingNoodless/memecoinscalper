@@ -705,6 +705,7 @@ def _record_trade_exit(wallet: dict[str, Any], trade: dict[str, Any], quote: dic
             "scan_id": trade.get("scan_id"),
             "selection_score": trade.get("selection_score"),
             "llm_confidence": trade.get("llm_confidence"),
+            "selector": trade.get("selector"),
             "entry_roundtrip_quote_usd": trade.get("entry_roundtrip_quote_usd"),
             "entry_roundtrip_loss_pct": trade.get("entry_roundtrip_loss_pct"),
             "entry_chart_analysis": trade.get("entry_chart_analysis"),
@@ -1116,7 +1117,7 @@ def _try_open_trade(wallet: dict[str, Any]) -> None:
             chart_refresh_interval_seconds=ENTRY_WATCH_RECHECK_SECONDS,
         )
         logger.info(
-            "Trader accepted Ollama signal scan=%s %s (%s) score=%.2f confidence=%d age_seconds=%s reason=%s; starting exclusive %.1fs spot watch",
+            "Trader accepted signal scan=%s %s (%s) score=%.2f confidence=%d age_seconds=%s reason=%s; starting exclusive %.1fs spot watch",
             scan_id, candidate.get("symbol"), candidate.get("tokenAddress"),
             candidate.get("selection_score", 0), decision["confidence"],
             details.get("signal_age_seconds"), decision.get("reasoning", ""),
@@ -1362,6 +1363,7 @@ def _try_open_trade(wallet: dict[str, Any]) -> None:
         "selection_score": candidate["selection_score"],
         "llm_confidence": decision["confidence"],
         "llm_reasoning": decision.get("reasoning", ""),
+        "selector": decision.get("selector", "ollama"),
         "entry_quote_out_raw": token_amount_raw,
         "entry_quote_fee_bps": quote.get("fee_bps"),
         "entry_quote_router": quote.get("router"),

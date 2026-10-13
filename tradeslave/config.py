@@ -11,7 +11,15 @@ from .paths import PROJECT_ROOT
 load_dotenv(dotenv_path=PROJECT_ROOT / ".env")
 
 
+# Names this module reads; used to flag unknown (likely misspelled) .env keys.
+KNOWN_SETTINGS: set[str] = set()
+# Human-readable notes about values that were adjusted or ignored. Logged at
+# startup because logging is not configured yet when this module is imported.
+CONFIG_WARNINGS: list[str] = []
+
+
 def _float_setting(name: str, default: float) -> float:
+    KNOWN_SETTINGS.add(name)
     raw = os.getenv(name)
     if raw is None:
         return default
@@ -21,7 +29,18 @@ def _float_setting(name: str, default: float) -> float:
         raise ValueError(f"{name} must be a number") from exc
 
 
+def _clamped_max(name: str, value: float, ceiling: float) -> float:
+    """Cap a setting and record a warning instead of clamping silently."""
+    if value > ceiling:
+        CONFIG_WARNINGS.append(
+            f"{name}={value:g} exceeds the hard cap; using {ceiling:g}. Update .env to remove this warning."
+        )
+        return ceiling
+    return value
+
+
 def _int_setting(name: str, default: int) -> int:
+    KNOWN_SETTINGS.add(name)
     raw = os.getenv(name)
     if raw is None:
         return default
@@ -43,6 +62,12 @@ JUPITER_PRICE_URL = "https://api.jup.ag/price/v3"
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
 OLLAMA_TIMEOUT_SECONDS = _int_setting("OLLAMA_TIMEOUT_SECONDS", 180)
+# How a candidate is picked from the screened top five:
+#   off    - highest deterministic selection score (default; no LLM latency)
+#   shadow - trade the score pick, then ask Ollama and log whether it agreed
+#   on     - Ollama picks (previous behavior; ~25 s latency per scan)
+LLM_MODE = os.getenv("LLM_MODE", "off").strip().lower()
+KNOWN_SETTINGS.update({"RUGCHECK_API_KEY", "JUPITER_API_KEY", "OLLAMA_URL", "OLLAMA_MODEL", "LLM_MODE"})
 
 # Solana mainnet USDC mint. The paper simulator stores quoted token amounts in
 # raw units and uses USDC quotes for both entry and exit.
@@ -83,7 +108,7 @@ STOP_LOSS_PCT = _float_setting("STOP_LOSS_PCT", -0.20)
 TRAILING_STOP_ACTIVATION = _float_setting("TRAILING_STOP_ACTIVATION", 0.10)
 TRAILING_STOP_PCT = _float_setting("TRAILING_STOP_PCT", 0.12)
 TRAILING_STOP_FLOOR_PCT = _float_setting("TRAILING_STOP_FLOOR_PCT", 0.01)
-MAX_HOLD_HOURS = min(_float_setting("MAX_HOLD_HOURS", 1.0), 2.0)
+MAX_HOLD_HOURS = _clamped_max("MAX_HOLD_HOURS", _float_setting("MAX_HOLD_HOURS", 1.0), 2.0)
 
 SCAN_INTERVAL_SECONDS = _int_setting("SCAN_INTERVAL_SECONDS", 15)
 PAPER_POLL_INTERVAL_SECONDS = _int_setting("PAPER_POLL_INTERVAL_SECONDS", 5)
@@ -92,8 +117,8 @@ JUPITER_MIN_REQUEST_INTERVAL_SECONDS = _float_setting("JUPITER_MIN_REQUEST_INTER
 PAPER_OBSERVATION_INTERVAL_SECONDS = _int_setting("PAPER_OBSERVATION_INTERVAL_SECONDS", 15)
 # A large immediate round-trip loss consumes too much of any plausible
 # short-horizon edge. Cap stale local settings at the 3% paper-strategy budget.
-MAX_ENTRY_ROUNDTRIP_LOSS_PCT = min(
-    _float_setting("MAX_ENTRY_ROUNDTRIP_LOSS_PCT", 0.03), 0.03
+MAX_ENTRY_ROUNDTRIP_LOSS_PCT = _clamped_max(
+    "MAX_ENTRY_ROUNDTRIP_LOSS_PCT", _float_setting("MAX_ENTRY_ROUNDTRIP_LOSS_PCT", 0.03), 0.03
 )
 QUOTE_SHOCK_CONFIRMATION_PCT = _float_setting("QUOTE_SHOCK_CONFIRMATION_PCT", 0.40)
 QUOTE_CONFIRMATION_TOLERANCE_PCT = _float_setting("QUOTE_CONFIRMATION_TOLERANCE_PCT", 0.12)
@@ -188,3 +213,19 @@ if QUOTE_CHART_FAST_EMA_PERIOD <= 0 or QUOTE_CHART_SLOW_EMA_PERIOD <= QUOTE_CHAR
     raise ValueError("Quote chart slow EMA period must exceed a positive fast EMA period")
 if QUOTE_CHART_BEARISH_CONFIRMATIONS <= 0:
     raise ValueError("QUOTE_CHART_BEARISH_CONFIRMATIONS must be positive")
+if LLM_MODE not in {"off", "shadow", "on"}:
+    raise ValueError("LLM_MODE must be one of: off, shadow, on")
+
+
+def _unknown_env_keys() -> list[str]:
+    try:
+        from dotenv import dotenv_values
+
+        keys = dotenv_values(PROJECT_ROOT / ".env").keys()
+    except OSError:
+        return []
+    return sorted(key for key in keys if key and key not in KNOWN_SETTINGS)
+
+
+for _key in _unknown_env_keys():
+    CONFIG_WARNINGS.append(f".env key {_key} is not used by the bot (typo or stale setting?)")
