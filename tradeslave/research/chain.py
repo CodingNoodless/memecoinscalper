@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from pathlib import Path
 
 import requests
 
 PUBLIC_RPC = "https://api.mainnet-beta.solana.com"
-TX_OPTS = {"encoding": "json", "maxSupportedTransactionVersion": 0, "commitment": "confirmed"}
+TX_OPTS = {"encoding": "json", "maxSupportedTransactionVersion": 1, "commitment": "confirmed"}
+_VERSION_HINT = re.compile(r'"?maxSupportedTransactionVersion"?\s*:\s*(\d+)')
+
+
+def _wanted_version(error: dict | None) -> int | None:
+    """The transaction version an RPC error asks for ('... not supported ... maxSupportedTransactionVersion: 1')."""
+    match = _VERSION_HINT.search(str((error or {}).get("message", "")))
+    return int(match.group(1)) if match else None
 
 
 def env_rpc() -> str | None:
@@ -81,11 +89,16 @@ def _gtfa(rpc: Rpc, address: str, t_from: float, t_to: float, max_pages: int):
     txs, token = [], None
     for _ in range(max_pages):
         options = {"transactionDetails": "full", "sortOrder": "asc", "limit": 1000,
-                   "encoding": "json", "maxSupportedTransactionVersion": 0,
+                   "encoding": "json", "maxSupportedTransactionVersion": TX_OPTS["maxSupportedTransactionVersion"],
                    "filters": {"blockTime": {"gte": int(t_from), "lte": int(t_to) + 1}, "status": "succeeded"}}
         if token:
             options["paginationToken"] = token
         result, error = rpc.request("getTransactionsForAddress", [address, options])
+        wanted = _wanted_version(error)
+        if wanted is not None and wanted > TX_OPTS["maxSupportedTransactionVersion"]:
+            TX_OPTS["maxSupportedTransactionVersion"] = wanted     # the chain moved on: accept newer versions
+            options["maxSupportedTransactionVersion"] = wanted
+            result, error = rpc.request("getTransactionsForAddress", [address, options])
         if error is not None:
             return None, error
         data = result.get("data", []) if isinstance(result, dict) else (result or [])
@@ -117,7 +130,11 @@ def _sigs_then_txs(rpc: Rpc, address: str, t_from: float, t_to: float, max_pages
     stats["sigs"] = len(found)
     txs = []
     for sig in reversed(found):                       # oldest first
-        tx = rpc.call("getTransaction", [sig, TX_OPTS])
+        tx, error = rpc.request("getTransaction", [sig, TX_OPTS])
+        wanted = _wanted_version(error)
+        if wanted is not None and wanted > TX_OPTS["maxSupportedTransactionVersion"]:
+            TX_OPTS["maxSupportedTransactionVersion"] = wanted
+            tx, error = rpc.request("getTransaction", [sig, TX_OPTS])
         if tx is None:
             stats["tx_missing"] = stats.get("tx_missing", 0) + 1
             continue
@@ -140,7 +157,7 @@ def address_transactions(rpc: Rpc, address: str, t_from: float, t_to: float, max
             stats["method"] = "gtfa"
             stats["sigs"] = len(txs)
             return txs, stats
-        if rpc.gtfa is None and error.get("code") not in ("too_many", "network"):
+        if rpc.gtfa is None and error.get("code") not in ("too_many", "network") and _wanted_version(error) is None:
             rpc.gtfa = False                          # not available on this plan/endpoint: fall back for good
             print(f"  getTransactionsForAddress unavailable ({error.get('message', error)}); using getTransaction per signature")
         elif error.get("code") == "too_many":

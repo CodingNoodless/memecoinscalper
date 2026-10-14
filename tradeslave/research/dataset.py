@@ -91,6 +91,16 @@ def load_backfill(path: Path | None = None) -> dict[str, dict]:
     out = {}
     for mint, d in done.items():
         trades = sorted(rows.get(mint, []), key=lambda r: (r.get("slot") or 0, r.get("i", 0)))
+        vs, vt = START_VS, START_VT
+        for r in trades:                      # fill SOL amounts the transaction layout didn't expose
+            if r.get("dv") is None:
+                tok = abs(int(r["dc"]))
+                if r["dc"] < 0:
+                    r["dv"] = -(-vs * tok // max(vt - tok, 1))
+                else:
+                    r["dv"] = -(vs * tok // (vt + tok))
+                r["sol"] = abs(r["dv"]) / 1e9
+            vs += int(r["dv"]); vt += int(r["dc"])
         out[mint] = {"t0": float(d["t0"]), "window": float(d.get("window") or 0), "trades": trades}
     return out
 

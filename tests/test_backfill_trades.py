@@ -161,3 +161,40 @@ def test_address_transactions_prefers_bulk_method_and_falls_back():
     assert stats["sigs"] == 2 and stats["tx_missing"] == 1 and [signature_of(t) for t in txs] == ["s1"]
     address_transactions(slow, "addr", 0, 100)
     assert slow.calls.count("getTransactionsForAddress") == 1          # not retried once known unavailable
+
+
+def test_newer_transaction_version_is_requested_when_the_rpc_asks():
+    from tradeslave.research import chain
+
+    class VersionedRpc(FakeRpc):
+        def request(self, method, params):
+            self.calls.append(method)
+            if params[1].get("maxSupportedTransactionVersion", 0) < 2:
+                return None, {"code": -32015, "message": 'Transaction version (2) is not supported by the requesting '
+                              'client. Please try the request again with the following configuration parameter: '
+                              '"maxSupportedTransactionVersion": 2'}
+            return {"data": [{"slot": 1, "blockTime": 10, "meta": {}, "transaction": {"signatures": ["a"]}}],
+                    "paginationToken": None}, None
+
+    saved = dict(chain.TX_OPTS)
+    try:
+        rpc = VersionedRpc(True)
+        txs, stats = chain.address_transactions(rpc, "addr", 0, 100)
+        assert stats["method"] == "gtfa" and len(txs) == 1 and rpc.gtfa is True
+        assert chain.TX_OPTS["maxSupportedTransactionVersion"] == 2
+    finally:
+        chain.TX_OPTS.clear(); chain.TX_OPTS.update(saved)
+
+
+def test_trade_without_visible_curve_key_is_rebuilt_on_replay(tmp_path):
+    t = tx(500_000_000, -15_000_000_000_000)
+    t["transaction"]["message"] = {"staticAccountKeys": [WALLET, "Other"]}   # curve not listed
+    row = bt.parse_trade(t, MINT, CURVE)
+    assert row["dv"] is None and row["b"] == 1 and row["w"] == WALLET
+    s0 = CurveState(START_VT, START_VS)
+    want = -(-START_VS * 15_000_000_000_000 // (START_VT - 15_000_000_000_000))
+    row.update(m="M", t=101.0, slot=5, i=0)
+    path = tmp_path / "b.jsonl"
+    path.write_text(json.dumps(row) + "\n" + json.dumps({"k": "done", "v": bt.VERSION, "m": "M", "t0": 100.0}) + "\n")
+    got = load_backfill(path)["M"]["trades"][0]
+    assert got["dv"] == want and abs(got["sol"] - want / 1e9) < 1e-12

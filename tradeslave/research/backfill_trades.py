@@ -31,12 +31,14 @@ from .chain import PUBLIC_RPC, Rpc, address_transactions, env_rpc, host_of, sign
 
 TRADE_DIR = DATA_DIR / "trades"
 OUT = TRADE_DIR / "backfill.jsonl"
-VERSION = 2   # v1 (2026-10-14 first run) missed launch-tx handling and is ignored
+VERSION = 3   # v1: launch-tx bug; v2: newer-version transactions dropped. Both ignored
 
 
 def account_keys(tx: dict) -> list[str]:
-    message = tx["transaction"]["message"]
-    keys = [k if isinstance(k, str) else k.get("pubkey") for k in message["accountKeys"]]
+    """Static + lookup-table keys, tolerant of message layouts across transaction versions."""
+    message = (tx.get("transaction") or {}).get("message") or {}
+    raw = message.get("accountKeys") or message.get("staticAccountKeys") or []
+    keys = [k if isinstance(k, str) else (k or {}).get("pubkey") for k in raw]
     loaded = (tx.get("meta") or {}).get("loadedAddresses") or {}
     return keys + list(loaded.get("writable") or []) + list(loaded.get("readonly") or [])
 
@@ -70,7 +72,7 @@ def creation_buy(curve_tokens_after: int) -> tuple[int, int] | None:
 
 def normalize(row: dict) -> dict | None:
     """Fix launch rows stored before creation_buy existed (curve tokens went up on a 'buy')."""
-    if row.get("dc", 0) > 0 and row.get("dv", 0) > 0:
+    if (row.get("dc") or 0) > 0 and (row.get("dv") or 0) > 0:
         fixed = creation_buy(row["dc"])
         if fixed is None:
             return None
@@ -84,21 +86,38 @@ def parse_trade(tx: dict, mint: str, curve: str) -> dict | None:
     if meta.get("err") is not None:
         return None
     keys = account_keys(tx)
-    if curve not in keys:
-        return None
-    i = keys.index(curve)
-    d_lamports = meta["postBalances"][i] - meta["preBalances"][i]
     d_tokens = (_token_amount(meta.get("postTokenBalances"), curve, mint)
                 - _token_amount(meta.get("preTokenBalances"), curve, mint))
-    if d_lamports == 0 or d_tokens == 0:
+    if d_tokens == 0:
         return None
+    if curve in keys and meta.get("postBalances") and keys.index(curve) < len(meta["postBalances"]):
+        i = keys.index(curve)
+        d_lamports = meta["postBalances"][i] - meta["preBalances"][i]
+        if d_lamports == 0:
+            return None
+    else:
+        # curve key not visible in this message layout: the side follows from the token
+        # flow, the SOL amount is rebuilt from the curve state when the trades are replayed
+        launch = not any(b.get("owner") == curve and b.get("mint") == mint for b in meta.get("preTokenBalances") or [])
+        d_lamports = 1 if (launch or d_tokens < 0) else -1
+        if launch:
+            fixed = creation_buy(d_tokens)
+            if fixed is None:
+                return None
+            d_lamports, d_tokens = fixed
+            return {"k": "trade", "t": float(tx.get("blockTime") or 0), "m": mint, "w": keys[0] if keys else "",
+                    "b": 1, "sol": d_lamports / 1e9, "tok": -d_tokens / 1e6, "dv": d_lamports, "dc": d_tokens,
+                    "slot": tx.get("slot"), "src": "backfill", "create": 1}
+        return {"k": "trade", "t": float(tx.get("blockTime") or 0), "m": mint, "w": keys[0] if keys else "",
+                "b": int(d_tokens < 0), "sol": None, "tok": abs(d_tokens) / 1e6, "dv": None, "dc": d_tokens,
+                "slot": tx.get("slot"), "src": "backfill"}
     created = d_lamports > 0 and d_tokens > 0          # launch tx: supply minted to the curve
     if created:
         fixed = creation_buy(d_tokens)
         if fixed is None:
             return None                                # launch without a dev buy
         d_lamports, d_tokens = fixed
-    row = {"k": "trade", "t": float(tx.get("blockTime") or 0), "m": mint, "w": keys[0], "b": int(d_lamports > 0),
+    row = {"k": "trade", "t": float(tx.get("blockTime") or 0), "m": mint, "w": keys[0] if keys else "", "b": int(d_lamports > 0),
             "sol": abs(d_lamports) / 1e9, "tok": abs(d_tokens) / 1e6, "dv": d_lamports, "dc": d_tokens,
             "slot": tx.get("slot"), "src": "backfill"}
     if created:
@@ -166,6 +185,8 @@ def main() -> None:
     started, trades_total, skipped, missing = time.time(), 0, 0, 0
     with OUT.open("a", encoding="utf-8") as fh:
         for n, tok in enumerate(todo, 1):
+            if n == 1:
+                print("  fetching the first token...", flush=True)
             txs, stats = address_transactions(rpc, tok["bc"], tok["t0"] - 30, tok["t0"] + args.window, args.max_pages)
             if txs is None:
                 skipped += 1
@@ -184,7 +205,7 @@ def main() -> None:
                                  "window": args.window, **stats}) + "\n")
             fh.flush()
             trades_total += len(rows)
-            if n % 10 == 0 or n == len(todo) or n <= 3:
+            if n % 10 == 0 or n == len(todo) or n <= 5:
                 rate = n / max(time.time() - started, 1)
                 print(f"  {n}/{len(todo)} tokens, {trades_total} trades, {rpc.calls} calls ({stats.get('method')}), "
                       f"~{(len(todo) - n) / rate / 60:.0f} min left, {skipped} skipped, {missing} tx not returned"
