@@ -62,12 +62,17 @@ momentum bot's view moved to http://127.0.0.1:8765/momentum.
 ```
 uv run python -m tradeslave.scalper.backfill_meta --all --narrative  # names/descriptions for recorded tokens
 uv run python -m tradeslave.research.narrative                      # Ollama scores narratives; do high scores win?
+uv run python -m tradeslave.research.backfill_trades --dry-run     # wallet-level trades from chain history (free)
 uv run python -m tradeslave.research.wallets                        # do some wallets reliably buy winners?
 ```
 
 `tradeslave/research/sim.py` is the trade simulator used for all studies (real
 curve fills, fees both ways, network fee, fill delay); it reproduced 61 of 61
-live paper trades exactly. Wallet-level data needs `SCALP_TRADE_FEED=true` and a
+live paper trades exactly. `backfill_trades` rebuilds every trade (wallet, side, exact SOL and token amounts) for
+recorded tokens from Solana transaction history, and replaying those trades gives
+each token's full price path past the scalper's watch window. A free Helius account
+(no card; 1M credits/month, 10 requests/s) is ~100x faster than the public RPC: put
+its URL in `.env` as `RESEARCH_RPC_URL`. Live wallet data alternatively needs `SCALP_TRADE_FEED=true` and a
 `PUMPPORTAL_API_KEY` whose linked wallet holds SOL (0.01 SOL per 10,000
 messages; capped by `SCALP_TRADE_FEED_MAX_EVENTS_PER_DAY`, default 50,000).
 Graduations to PumpSwap are recorded for free.

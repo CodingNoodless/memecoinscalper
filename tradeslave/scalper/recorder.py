@@ -75,25 +75,64 @@ class TickRecorder:
             self._file = None
 
 
+GZIP_HEADER = b"\x1f\x8b\x08"
+
+
+def _members(data: bytes):
+    """Decompressed bytes of each gzip member in `data`.
+
+    The recorder appends a new gzip member every time the scalper starts. If a
+    run is killed mid-write, its member is cut off and the next run's member
+    follows the broken bytes. A plain gzip reader stops at the break and loses
+    everything after it, so here a damaged member gives up what it decoded and
+    reading resumes at the next gzip header."""
+    pos = 0
+    while True:
+        pos = data.find(GZIP_HEADER, pos)
+        if pos < 0:
+            return
+        decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        out, cursor, step, broken = [], pos, 1 << 18, False
+        while cursor < len(data) and not decoder.eof:
+            piece = data[cursor:cursor + step]
+            try:
+                out.append(decoder.decompress(piece))
+            except zlib.error:
+                broken = True
+                out = [_salvage(data[pos:cursor + len(piece)])]
+                break
+            cursor += len(piece)
+        yield b"".join(out)
+        if decoder.eof and not broken:
+            pos = cursor - len(decoder.unused_data)
+        else:
+            pos += len(GZIP_HEADER)
+
+
+def _salvage(member: bytes, step: int = 1024) -> bytes:
+    """What a damaged gzip member decodes to before the damage."""
+    decoder, out = zlib.decompressobj(16 + zlib.MAX_WBITS), []
+    for i in range(0, len(member), step):
+        try:
+            out.append(decoder.decompress(member[i:i + step]))
+        except zlib.error:
+            break
+    return b"".join(out)
+
+
 def read_ticks(paths: list[Path]):
     """Yield recorded dicts from one or more .jsonl.gz files, oldest first per file.
 
-    A file that is still being written (the scalper is running) or was cut off
-    by a crash has no gzip end marker; everything up to the last complete line
-    is still returned."""
+    Tolerates a file that is still being written (no gzip end marker yet) and a
+    file with a damaged stretch from a crashed run: complete lines before and
+    after the damage are returned; a torn line is skipped."""
     for path in sorted(paths):
-        with gzip.open(path, "rt", encoding="utf-8") as handle:
-            while True:
-                try:
-                    line = handle.readline()
-                except (EOFError, OSError, zlib.error):
-                    break  # unfinished or truncated stream: stop at what was flushed
-                if not line:
-                    break
+        for chunk in _members(Path(path).read_bytes()):
+            for line in chunk.split(b"\n"):
                 line = line.strip()
                 if not line:
                     continue
                 try:
                     yield json.loads(line)
-                except json.JSONDecodeError:
-                    continue  # a torn last line
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue

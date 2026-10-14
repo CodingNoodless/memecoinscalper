@@ -2,7 +2,8 @@
 
     uv run python -m tradeslave.research.wallets
 
-Needs wallet-level trades (SCALP_TRADE_FEED=true with a PumpPortal API key).
+Needs wallet-level trades: run research.backfill_trades (free, from chain history)
+or record live with SCALP_TRADE_FEED=true and a PumpPortal API key.
 1. Profiles every wallet on the FIRST half of the recording: realized SOL PnL
    per token (sells - buys, open bags marked at the last price), tokens traded,
    win rate.
@@ -31,8 +32,11 @@ def load_trades(paths=None) -> dict[str, list[tuple]]:
         if r.get("k") == "trade" and r.get("w"):
             out[r["m"]].append((float(r["t"]), r["w"], bool(r.get("b")), float(r.get("sol") or 0.0),
                                 float(r.get("tok") or 0.0)))
+    from .dataset import load_backfill
+    for mint, d in load_backfill().items():
+        out[mint] = [(float(r["t"]), r["w"], bool(r["b"]), float(r["sol"]), float(r["tok"])) for r in d["trades"]]
     for v in out.values():
-        v.sort()
+        v.sort(key=lambda row: row[0])
     return out
 
 
@@ -81,12 +85,28 @@ def main() -> None:
     parser.add_argument("--min-tokens", type=int, default=3)
     parser.add_argument("--min-win-rate", type=float, default=0.5)
     parser.add_argument("--min-sol", type=float, default=0.2, help="ignore follow signals from buys smaller than this")
+    parser.add_argument("--signal-delay", type=float, default=1.0,
+                        help="seconds from the wallet's block time until we decide (feed delay; fill latency is added on top)")
     args = parser.parse_args()
     trades = load_trades()
     n = sum(len(v) for v in trades.values())
     if n == 0:
-        raise SystemExit("No wallet-level trades recorded yet. Set SCALP_TRADE_FEED=true and PUMPPORTAL_API_KEY, then run scalp.py.")
+        raise SystemExit("No wallet-level trades yet. Run: uv run python -m tradeslave.research.backfill_trades")
     toks = load_tokens()
+    from .dataset import load_backfill, replay_error, token_from_trades
+    backfill = load_backfill()
+    errors = []
+    for mint, d in backfill.items():          # full price paths beat the scalper's short watch window
+        replayed = token_from_trades(mint, d["t0"], d["trades"], toks.get(mint))
+        if mint in toks:
+            err = replay_error(toks[mint], replayed)
+            if err is not None:
+                errors.append(err)
+        toks[mint] = replayed
+    if errors:
+        errors.sort()
+        print(f"curve replay check on {len(errors)} tokens: median gap {errors[len(errors) // 2]:.2%}, "
+              f"90th pct {errors[int(len(errors) * 0.9)]:.2%} (should be ~0%)")
     times = sorted(t for v in trades.values() for t, *_ in v)
     t_start, t_mid, t_end = times[0], times[len(times) // 2], times[-1] + 1
     profiles = wallet_profiles(trades, toks, t_mid)
@@ -100,7 +120,7 @@ def main() -> None:
         signals = follow_signals(trades, who, t_mid, t_end, args.min_sol)
         print(f"\n{label}: {len(signals)} signals in the second half")
         for name, pol in policies.items():
-            res = [simulate(toks[m], t, **pol) for t, m in signals if m in toks]
+            res = [simulate(toks[m], t + args.signal_delay, **pol) for t, m in signals if m in toks]
             print(f"  {name:24s} {summary(res)}")
     top = sorted(((p["pnl_sol"], w, p) for w, p in profiles.items() if w in smart), reverse=True)[:10]
     if top:
