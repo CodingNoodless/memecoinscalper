@@ -198,3 +198,23 @@ def test_trade_without_visible_curve_key_is_rebuilt_on_replay(tmp_path):
     path.write_text(json.dumps(row) + "\n" + json.dumps({"k": "done", "v": bt.VERSION, "m": "M", "t0": 100.0}) + "\n")
     got = load_backfill(path)["M"]["trades"][0]
     assert got["dv"] == want and abs(got["sol"] - want / 1e9) < 1e-12
+
+
+def test_flows_report_runs_on_backfill(tmp_path, monkeypatch, capsys):
+    from tradeslave.research import flows, dataset
+    rows = []
+    for k in range(30):
+        m = f"T{k}"
+        trades = [{"k": "trade", "m": m, "t": 100.0 + k, "w": "dev", "dv": 1_000_000_000, "dc": -34_612_903_225_806,
+                   "slot": 10, "i": 0, "create": 1, "b": 1, "sol": 1.0, "tok": 34.6e6},
+                  {"k": "trade", "m": m, "t": 101.0 + k, "w": f"w{k % 2}", "dv": 500_000_000, "dc": -15_000_000_000_000,
+                   "slot": 12, "i": 1, "b": 1, "sol": 0.5, "tok": 15e6},
+                  {"k": "trade", "m": m, "t": 103.0 + k, "w": f"w{k % 2}", "dv": -600_000_000, "dc": 15_000_000_000_000,
+                   "slot": 20, "i": 2, "b": 0, "sol": 0.6, "tok": 15e6}]
+        rows += trades + [{"k": "done", "v": bt.VERSION, "m": m, "t0": 100.0 + k}]
+    path = tmp_path / "b.jsonl"
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    monkeypatch.setattr(flows, "load_backfill", lambda: dataset.load_backfill(path))
+    flows.main()
+    out = capsys.readouterr().out
+    assert "creator wallet" in out and "copy test" in out and "d=8" in out

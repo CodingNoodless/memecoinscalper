@@ -64,6 +64,7 @@ uv run python -m tradeslave.scalper.backfill_meta --all --narrative  # names/des
 uv run python -m tradeslave.research.narrative                      # Ollama scores narratives; do high scores win?
 uv run python -m tradeslave.research.backfill_trades --dry-run     # wallet-level trades from chain history (free)
 uv run python -m tradeslave.research.wallets                        # do some wallets reliably buy winners?
+uv run python -m tradeslave.research.flows                          # who makes money (by role/entry time), skill persistence, copy test
 uv run python -m tradeslave.research.graduations collect          # exact PumpSwap price paths after graduation
 uv run python -m tradeslave.research.graduations analyze          # do post-graduation scalps beat the (lower) fees?
 ```
