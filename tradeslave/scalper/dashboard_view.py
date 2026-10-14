@@ -62,6 +62,25 @@ def _group(rows: list[dict], key: str) -> list[dict]:
     return sorted(groups.values(), key=lambda g: -g["n"])
 
 
+def _autopilot(wallet: dict) -> dict:
+    from ..paths import DATA_DIR
+    base = DATA_DIR / "autopilot"
+    champion, history = None, []
+    try:
+        champion = json.loads((base / "champion.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    try:
+        for line in (base / "history.jsonl").read_text(encoding="utf-8").splitlines()[-30:]:
+            try:
+                history.append(json.loads(line))
+            except ValueError:
+                continue
+    except OSError:
+        pass
+    return {**(wallet.get("autopilot") or {}), "champion": champion, "history": history[::-1]}
+
+
 def build_scalper_snapshot() -> dict:
     now = time.time()
     wallet = load_json("scalp_wallet.json", {}) or {}
@@ -101,6 +120,7 @@ def build_scalper_snapshot() -> dict:
         "engine": wallet.get("stats", {}),
         "decode_fail_reasons": wallet.get("decode_fail_reasons", {}),
         "settings": wallet.get("settings", {}),
+        "autopilot": _autopilot(wallet),
     }
 
 
@@ -127,6 +147,8 @@ a.mint{color:var(--blue);text-decoration:none}
 </style></head><body><main>
 <header class="top"><div class="brand"><span id="orb" class="orb"></span><div><div class="eyebrow">Tradeslave · launch-dip scalper · paper</div><h1>Scalper monitor</h1></div></div>
 <div><div class="nav"><a class="on" href="/">Scalper</a><a href="/momentum">Momentum bot</a></div><div id="updated" class="updated" style="margin-top:7px">Connecting…</div></div></header>
+<section class="panel" style="margin-bottom:14px"><div class="panel-head"><h2>Autopilot · self-learning</h2><span class="eyebrow" id="apStatus">—</span></div>
+<div class="event" id="apChamp">—</div><div id="apHist" class="table-wrap" style="margin-top:10px"></div></section>
 <section class="cards6">
 <div class="card"><div class="label">Equity</div><div id="equity" class="value">—</div><div id="ret" class="sub">—</div></div>
 <div class="card"><div class="label">Realized P&amp;L</div><div id="pnl" class="value">—</div><div id="today" class="sub">Today: —</div></div>
@@ -161,7 +183,7 @@ function safe(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&
 const ago=t=>{if(!t)return'—';const s=Math.max(0,Date.now()/1000-t);return s<60?`${s.toFixed(0)}s`:s<3600?`${Math.floor(s/60)}m`:`${Math.floor(s/3600)}h ${Math.floor(s%3600/60)}m`};
 const hhmm=t=>new Date(t*1000).toLocaleTimeString([], {hour:'numeric',minute:'2-digit',second:'2-digit'});
 const reasonText={take_profit:'Take profit',stop_loss:'Stop loss',time_stop:'Time limit',trailing_giveback:'Gave back gains',dump_detected:'Sudden dump',dev_sold:'Dev sold',support_broken:'Fell below opening',curve_complete:'Graduated'};
-const blockText={too_young:'Token too new',too_old:'Token too old',no_launch_spike_yet:'No launch spike yet',above_buy_zone:'Price above buy zone',below_buy_zone:'Price below buy zone',still_selling:'Sellers still active',waiting_for_uptick:'Waiting for uptick',sniper_window_open:'Sniper window open',snipers_hold_too_much:'Snipers hold too much',dev_holds_too_much:'Dev holds too much',dev_sold:'Dev sold',floor_broken:'Fell below opening',serial_launcher:'Serial launcher',waiting_first_dip:'Waiting for first dip',waiting_recovery:'Waiting for bounce after dip 1',second_dip_not_yet:'Waiting for 2nd dip',first_dip_too_big:'1st dip too big',second_dip_too_deep:'2nd dip too deep',no_socials:'No socials',metadata_pending:'Loading socials',copycat_twitter:'Copycat X link',heavy_selling:'Heavy selling',market_inactive:'Token went quiet',curve_complete:'Graduated',token_entry_limit:'Token entry limit',token_loss_limit:'Token loss limit',reentry_cooldown:'Cooldown',max_open_positions:'Max positions open',daily_loss_limit:'Daily loss limit',max_exposure:'Max exposure',insufficient_balance:'Low balance'};
+const blockText={no_model_yet:'Still learning (no model)',model_not_proven:'Model not proven yet',model_says_no:'Model says skip',outside_model_window:'Outside model age window',too_young:'Token too new',too_old:'Token too old',no_launch_spike_yet:'No launch spike yet',above_buy_zone:'Price above buy zone',below_buy_zone:'Price below buy zone',still_selling:'Sellers still active',waiting_for_uptick:'Waiting for uptick',sniper_window_open:'Sniper window open',snipers_hold_too_much:'Snipers hold too much',dev_holds_too_much:'Dev holds too much',dev_sold:'Dev sold',floor_broken:'Fell below opening',serial_launcher:'Serial launcher',waiting_first_dip:'Waiting for first dip',waiting_recovery:'Waiting for bounce after dip 1',second_dip_not_yet:'Waiting for 2nd dip',first_dip_too_big:'1st dip too big',second_dip_too_deep:'2nd dip too deep',no_socials:'No socials',metadata_pending:'Loading socials',copycat_twitter:'Copycat X link',heavy_selling:'Heavy selling',market_inactive:'Token went quiet',curve_complete:'Graduated',token_entry_limit:'Token entry limit',token_loss_limit:'Token loss limit',reentry_cooldown:'Cooldown',max_open_positions:'Max positions open',daily_loss_limit:'Daily loss limit',max_exposure:'Max exposure',insufficient_balance:'Low balance'};
 function canvasCtx(c){const r=c.getBoundingClientRect(),d=devicePixelRatio||1;c.width=Math.max(1,r.width*d);c.height=Math.max(1,r.height*d);const x=c.getContext('2d');x.scale(d,d);return[x,r.width,r.height]}
 function grid(x,w,h,p,lo,hi,fmt){x.font='11px system-ui';x.textAlign='right';for(let i=0;i<4;i++){const y=p.t+i*(h-p.t-p.b)/3,v=hi-i*(hi-lo)/3;x.strokeStyle='#22322d';x.lineWidth=1;x.beginPath();x.moveTo(p.l,y);x.lineTo(w-p.r,y);x.stroke();x.fillStyle='#93a89e';x.fillText(fmt(v),p.l-8,y+4)}}
 let balGeom=null,barGeom=null;
@@ -204,6 +226,9 @@ const s=d.settings||{};$('settings').innerHTML=Object.keys(s).length?[
 ['Entry',`${s.entry_mode} · confirm: ${s.entry_confirm}`],['Launch spike needed',pct(s.min_initial_rise_pct,0)],['Buy zone vs opening',`${pct(-s.zone_below_pct,0)} to ${pct(s.zone_above_pct,0)}`],['Support broken below',pct(-s.rug_floor_pct,0)],
 ['Max dev bag',`${(s.max_dev_supply_pct*100).toFixed(0)}% of supply`],['Max sniper share (first 3s)',`${(s.max_early_supply_pct*100).toFixed(0)}%`],['Socials required',s.require_socials??'off'],['Take profit / stop (net)',`${pct(s.take_profit_pct,0)} / ${pct(-s.stop_loss_pct,0)}`],['Time limit',`${s.max_hold_s}s`],['Size · max open',`${s.trade_size_sol} SOL · ${s.max_open_positions}`]].map(([k,v])=>`<div>${k}</div><div>${safe(v)}</div>`).join(''):'<div>Start the scalper to see its rules.</div><div></div>';
 const e=d.engine||{};$('health').innerHTML=[['New tokens seen',e.created_seen],['Curve updates',e.curve_msgs],['Decode failures',e.decode_fail],['Dev dumps confirmed',e.dev_sells],['Creator-wallet sells seen',e.creator_sell_logs],['Metadata loaded / failed',`${e.meta_ok??'—'} / ${e.meta_fail??'—'}`],['Tokens with an X link',e.with_twitter],['Skipped (watchlist full)',e.skipped_full],['Reconnects (PumpPortal / RPC)',`${e.pp_reconnects??'—'} / ${e.rpc_reconnects??'—'}`],['Failed transactions (sim)',w.failed_tx],['Decode failure causes',Object.entries(d.decode_fail_reasons||{}).map(([k,v])=>`${k}: ${v}`).join(', ')||'none']].map(([k,v])=>`<div>${k}</div><div>${v??'—'}</div>`).join('');
+const ap=d.autopilot||{},c=ap.champion;$('apStatus').textContent=(ap.status||'scalper offline')+(ap.cycle_running?' · learning cycle running':'');
+$('apChamp').innerHTML=c?`Champion <b>${safe(c.version)}</b> · exits ${safe(c.policy)} · trained on ${c.n_tokens} tokens (${(c.exact_share*100).toFixed(0)}% exact outcomes)<br>Unseen-data test: ${c.holdout.trades} trades, avg ${pct(c.holdout.mean,2)}, median ${pct(c.holdout.median,2)}, win ${(c.holdout.win*100).toFixed(0)}% · ${c.proven?'<span class="tag ok">passed proof gates</span>':c.paper_ok?'<span class="tag">paper only</span>':'<span class="tag bad">not trading</span>'}`:'No model has passed its unseen-data test yet. The bot records, retrains every few hours, and only trades a model that made money on data it never saw.';
+$('apHist').innerHTML=table(['Cycle','Tokens','Samples','Best exits','Unseen trades','Unseen avg','Result'],(ap.history||[]).slice(0,12).map(r=>{const h=r.holdout||{};return`<tr><td>${new Date(r.t*1000).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</td><td>${r.n_tokens??'—'}</td><td>${r.n_samples??'—'}</td><td>${safe(r.policy||'none')}</td><td>${h.trades??0}</td><td class="${cls(h.mean)}">${h.trades?pct(h.mean,2):'—'}</td><td>${r.promoted?'<span class="tag ok">promoted</span>':r.paper_ok?'kept old':'<span class="tag">no edge yet</span>'}</td></tr>`}));
 drawBalance();drawBars()}
 async function refresh(){try{const r=await fetch('/api/scalper',{cache:'no-store'});if(!r.ok)throw Error(`HTTP ${r.status}`);render(await r.json())}catch(e){$('updated').textContent=`Dashboard data unavailable · ${e.message}`}}
 refresh();setInterval(refresh,2000);window.addEventListener('resize',()=>snap&&(drawBalance(),drawBars()));

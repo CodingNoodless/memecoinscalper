@@ -3,6 +3,37 @@
 This project currently runs a paper-only trading loop. It does not load a Solana
 wallet, sign transactions, or send swaps.
 
+## Autopilot: the self-improving loop (default since 2026-10-14)
+
+`uv run python scalp.py` now runs the whole loop by itself, paper only:
+
+1. **Record**: every watched token's curve, metadata, creator sells, graduations.
+2. **Learn** (every 6 h, separate process, log in `logs/autopilot.log`):
+   backfill exact chain outcomes for new tokens (if `RESEARCH_RPC_URL` is set),
+   replay the last 14 recorded days through the scalper's own state machine,
+   snapshot 42 features every 2 s per token, and label each snapshot with what
+   6 exit policies would really have returned (fees, fill delay).
+3. **Test**: train on the oldest 60% of tokens, pick exits + threshold on the
+   next 20%, then judge on the newest 20% it never saw.
+4. **Promote** only a model that made money on that unseen data AND beats the
+   current champion on it. The scalper loads it within a minute
+   (`SCALP_ENTRY_MODE=model`, the default). No champion = no trades.
+5. Repeat as data grows. Each cycle is logged in `data/autopilot/history.jsonl`
+   and shown on the dashboard ("Autopilot · self-learning").
+
+```
+uv sync                                          # adds numpy + scikit-learn
+uv run python scalp.py                           # record + learn + paper-trade
+uv run python -m tradeslave.autopilot status     # what it has learned so far
+uv run python -m tradeslave.autopilot cycle      # run one learning cycle now
+```
+
+It never trades real money. A model marked "passed proof gates" (>= 100
+unseen trades, >= +1% average, positive median, no token > 20% of profit) is
+only a candidate for a real-money decision, which stays a manual step.
+`SCALP_AUTOPILOT=false` turns the loop off; `SCALP_ENTRY_MODE=second_dip` brings
+back the rule-based entries.
+
 ## Launch-dip scalper (new primary strategy)
 
 `uv run python scalp.py` runs a separate PAPER engine built for many small,

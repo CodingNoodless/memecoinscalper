@@ -324,3 +324,20 @@ def exit_signal(
     if held_s >= c.max_hold_s:
         return Signal(True, "time_stop", {"held_s": round(held_s, 1), "pnl": round(net_pnl_pct, 4)})
     return Signal(False, "hold", {})
+
+
+def exit_policy(net_pnl_pct: float, peak_net_pnl_pct: float, held_s: float, tr: TokenTracker,
+                policy: dict) -> Signal:
+    """Exits for model trades: exactly the rules the model was trained and tested with."""
+    if tr.state is not None and tr.state.complete:
+        return Signal(True, "curve_complete", {})
+    if net_pnl_pct >= policy["tp"]:
+        return Signal(True, "take_profit", {"pnl": round(net_pnl_pct, 4)})
+    if net_pnl_pct <= -policy["sl"]:
+        return Signal(True, "stop_loss", {"pnl": round(net_pnl_pct, 4)})
+    trail = policy.get("trail")
+    if trail and peak_net_pnl_pct >= trail[0] and peak_net_pnl_pct - net_pnl_pct >= trail[1]:
+        return Signal(True, "trailing_giveback", {"peak": round(peak_net_pnl_pct, 4), "pnl": round(net_pnl_pct, 4)})
+    if held_s >= policy["hold"]:
+        return Signal(True, "time_stop", {"held_s": round(held_s, 1), "pnl": round(net_pnl_pct, 4)})
+    return Signal(False, "hold", {})

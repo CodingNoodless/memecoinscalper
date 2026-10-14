@@ -66,6 +66,11 @@ class LiveEngine:
         self.last_sub_sent = 0.0
         self.last_curve_msg = time.time()
         self.started = time.time()
+        self.last_model_check = 0.0
+        self.autopilot_proc = None
+        if cfg.entry_mode == "model":
+            from ..autopilot.live import ModelGate
+            self.scalper.model = ModelGate(cfg)
         self._restore_balance()
 
     # --- persistence --------------------------------------------------------
@@ -119,6 +124,9 @@ class LiveEngine:
             "entry_block_reasons": dict(sorted(self.scalper.entry_block_reasons.items(), key=lambda kv: -kv[1])[:12]),
             "decode_fail_reasons": dict(sorted(self.decode_fail_reasons.items(), key=lambda kv: -kv[1])[:6]),
             "watchlist": self._watchlist(now),
+            "autopilot": {"status": self.scalper.model.status if self.scalper.model is not None else
+                          f"off (entry_mode={self.cfg.entry_mode})",
+                          "cycle_running": self.autopilot_proc is not None and self.autopilot_proc.returncode is None},
             "settings": {k: getattr(self.cfg, k) for k in (
                 "entry_mode", "entry_confirm", "min_initial_rise_pct", "zone_above_pct", "zone_below_pct",
                 "rug_floor_pct", "max_dev_supply_pct", "max_early_supply_pct", "require_socials", "take_profit_pct",
@@ -572,6 +580,10 @@ class LiveEngine:
                 await self.rpc_ws.close()
             except Exception:
                 pass
+        if self.scalper.model is not None and now - self.last_model_check >= self.cfg.model_reload_s:
+            self.last_model_check = now
+            if self.scalper.model.reload():
+                log.info("AUTOPILOT now: %s", self.scalper.model.status)
         if now - last_save >= 2:
             self._save_wallet()
             last_save = now
@@ -601,11 +613,42 @@ class LiveEngine:
             self.stats["skipped_full"], self.stats["meta_ok"], self.stats["meta_fail"], self.stats["with_twitter"],
             self.stats["trade_events"], self.stats["migrations"], blocks,
         )
+        if self.scalper.model is not None:
+            log.info("AUTOPILOT %s", self.scalper.model.status)
         if self.decode_fail_reasons:
             log.info("Decode failures by cause: %s", dict(sorted(self.decode_fail_reasons.items(), key=lambda kv: -kv[1])[:6]))
         if self.stats["curve_msgs"] > 50 and self.stats["decode_fail"] > self.stats["curve_msgs"] * 0.5:
             log.error("Most curve updates fail to decode - pump.fun may have changed its account layout. "
                       "See logs/scalper_raw_samples.jsonl")
+
+    async def autopilot_loop(self, first_delay_s: float = 120.0, check_every_s: float = 600.0) -> None:
+        """Run a learning cycle in a separate process every autopilot_every_h hours.
+
+        A separate process keeps training (CPU-heavy) from slowing the live
+        engine; its output goes to logs/autopilot.log."""
+        import sys
+        from ..autopilot.model import HISTORY
+        await asyncio.sleep(first_delay_s)
+        while not self.stopping:
+            try:
+                last = HISTORY.stat().st_mtime if HISTORY.exists() else 0.0
+                if time.time() - last >= self.cfg.autopilot_every_h * 3600:
+                    log.info("AUTOPILOT learning cycle started (details: logs/autopilot.log)")
+                    with (LOG_DIR / "autopilot.log").open("ab") as out:
+                        self.autopilot_proc = await asyncio.create_subprocess_exec(
+                            sys.executable, "-m", "tradeslave.autopilot", "cycle", cwd=str(PROJECT_ROOT),
+                            stdout=out, stderr=asyncio.subprocess.STDOUT)
+                        code = await self.autopilot_proc.wait()
+                    log.info("AUTOPILOT learning cycle finished (exit %s)", code)
+                    if code not in (0, None):
+                        await asyncio.sleep(3600)       # don't hammer a broken setup; try again in an hour
+            except asyncio.CancelledError:
+                if self.autopilot_proc is not None and self.autopilot_proc.returncode is None:
+                    self.autopilot_proc.kill()
+                raise
+            except Exception:
+                log.exception("Autopilot scheduler error; retrying later")
+            await asyncio.sleep(check_every_s)
 
     def _loop_exception(self, loop, context) -> None:
         # Windows closes SSL sockets noisily during Ctrl+C shutdown; that is harmless.
@@ -625,6 +668,8 @@ class LiveEngine:
             asyncio.create_task(self.pumpportal_loop(websockets), name="pumpportal"),
             asyncio.create_task(self.clock_loop(), name="clock"),
         ]
+        if self.cfg.autopilot:
+            tasks.append(asyncio.create_task(self.autopilot_loop(), name="autopilot"))
         try:
             await asyncio.gather(*tasks)
         finally:

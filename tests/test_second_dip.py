@@ -12,7 +12,7 @@ from tradeslave.scalper.config import ScalpConfig
 
 
 def sd(**overrides):
-    base = dict(fail_rate=0.0, latency_s=0.8, seed=1)   # default entry_mode is second_dip
+    base = dict(fail_rate=0.0, latency_s=0.8, seed=1, entry_mode="second_dip")
     base.update(overrides)
     return ScalpConfig(**base)
 

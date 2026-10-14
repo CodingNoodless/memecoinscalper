@@ -11,7 +11,7 @@ from typing import Callable
 from .book import PaperBook
 from .config import ScalpConfig
 from .curve import CurveState
-from .strategy import entry_signal, exit_signal, update_launch_state
+from .strategy import Signal, entry_signal, exit_policy, exit_signal, update_launch_state
 from .tracker import TokenTracker
 
 
@@ -24,6 +24,8 @@ class Scalper:
         self.creator_history: dict[str, list[tuple[float, str]]] = {}   # creator -> [(t, mint)]
         self.twitter_links: dict[str, int] = {}                          # normalised link -> uses
         self.entry_block_reasons: dict[str, int] = {}
+        self.model = None                                  # autopilot champion (entry_mode="model")
+        self.position_policy: dict[str, dict] = {}         # mint -> exit policy of a model trade
 
     # --- inputs -----------------------------------------------------------
     def on_create(self, mint: str, symbol: str, t: float, state: CurveState | None,
@@ -123,11 +125,19 @@ class Scalper:
             pnl = self.book.mark(tr)
             if pnl is None:
                 return
-            signal = exit_signal(pnl, position.peak_pnl_pct, now - position.entry_t, tr, self.cfg)
+            policy = self.position_policy.get(tr.mint)
+            if policy is not None:
+                signal = exit_policy(pnl, position.peak_pnl_pct, now - position.entry_t, tr, policy)
+            else:
+                signal = exit_signal(pnl, position.peak_pnl_pct, now - position.entry_t, tr, self.cfg)
             if signal.ok:
                 self.book.request_sell(tr, now, signal.reason, signal.details)
             return
-        signal = entry_signal(tr, now, self.cfg)
+        self.position_policy.pop(tr.mint, None)           # flat: forget the last trade's exits
+        if self.cfg.entry_mode == "model":
+            signal = self.model.entry(tr, now) if self.model is not None else Signal(False, "no_model_yet", {})
+        else:
+            signal = entry_signal(tr, now, self.cfg)
         if not signal.ok:
             self.entry_block_reasons[signal.reason] = self.entry_block_reasons.get(signal.reason, 0) + 1
             return
@@ -137,4 +147,6 @@ class Scalper:
             return
         tr.entries += 1
         tr.first_dip_done = True
+        if signal.details.get("policy_rules"):
+            self.position_policy[tr.mint] = signal.details["policy_rules"]
         self.book.request_buy(tr, now, signal.reason, {**signal.details, "signal_price": tr.price})

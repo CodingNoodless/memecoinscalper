@@ -167,27 +167,35 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="only count tokens")
     args = parser.parse_args()
 
-    url = args.rpc or env_rpc() or PUBLIC_RPC
-    rps = args.rps or (3.0 if url == PUBLIC_RPC else 8.0)
+    run(rpc_url=args.rpc, rps=args.rps, window=args.window, min_updates=args.min_updates, since=args.since,
+        until=args.until, limit=args.limit, max_pages=args.max_pages, dry_run=args.dry_run)
+
+
+def run(rpc_url=None, rps=None, window=900.0, min_updates=5, since=0.0, until=9e12, limit=0, max_pages=20,
+        dry_run=False, log=None) -> int:
+    """Fetch trades for recorded tokens not yet done. Returns the number of tokens fetched."""
+    log = log or (lambda *a: print(*a, flush=True))
+    url = rpc_url or env_rpc() or PUBLIC_RPC
+    rps = rps or (3.0 if url == PUBLIC_RPC else 8.0)
     paths = sorted(TICK_DIR.glob("*.jsonl.gz"))
-    toks = select_tokens(paths, args.since, args.until, args.min_updates)
+    toks = select_tokens(paths, since, until, min_updates)
     done = done_mints()
     todo = [t for t in toks if t["m"] not in done]
-    if args.limit and len(todo) > args.limit:
+    if limit and len(todo) > limit:
         random.Random(7).shuffle(todo)
-        todo = sorted(todo[:args.limit], key=lambda t: t["t0"])
-    print(f"{len(toks)} recorded tokens with >= {args.min_updates} updates; {len(done)} already done; "
+        todo = sorted(todo[:limit], key=lambda t: t["t0"])
+    log(f"{len(toks)} recorded tokens with >= {min_updates} updates; {len(done)} already done; "
           f"{len(todo)} to fetch via {host_of(url)}")
-    if args.dry_run or not todo:
-        return
+    if dry_run or not todo:
+        return 0
     TRADE_DIR.mkdir(parents=True, exist_ok=True)
     rpc = Rpc(url, rps)
     started, trades_total, skipped, missing = time.time(), 0, 0, 0
     with OUT.open("a", encoding="utf-8") as fh:
         for n, tok in enumerate(todo, 1):
             if n == 1:
-                print("  fetching the first token...", flush=True)
-            txs, stats = address_transactions(rpc, tok["bc"], tok["t0"] - 30, tok["t0"] + args.window, args.max_pages)
+                log("  fetching the first token...")
+            txs, stats = address_transactions(rpc, tok["bc"], tok["t0"] - 30, tok["t0"] + window, max_pages)
             if txs is None:
                 skipped += 1
                 continue
@@ -202,15 +210,16 @@ def main() -> None:
                 fh.write(json.dumps(row, separators=(",", ":")) + "\n")
             missing += stats.get("tx_missing", 0)
             fh.write(json.dumps({"k": "done", "v": VERSION, "m": tok["m"], "t0": tok["t0"], "n": len(rows),
-                                 "window": args.window, **stats}) + "\n")
+                                 "window": window, **stats}) + "\n")
             fh.flush()
             trades_total += len(rows)
             if n % 10 == 0 or n == len(todo) or n <= 5:
                 rate = n / max(time.time() - started, 1)
-                print(f"  {n}/{len(todo)} tokens, {trades_total} trades, {rpc.calls} calls ({stats.get('method')}), "
+                log(f"  {n}/{len(todo)} tokens, {trades_total} trades, {rpc.calls} calls ({stats.get('method')}), "
                       f"~{(len(todo) - n) / rate / 60:.0f} min left, {skipped} skipped, {missing} tx not returned"
-                      + (f", errors {rpc.errors}" if rpc.errors else ""), flush=True)
-    print(f"done: {trades_total} trades written to {OUT}")
+                      + (f", errors {rpc.errors}" if rpc.errors else ""))
+    log(f"done: {trades_total} trades written to {OUT}")
+    return len(todo) - skipped
 
 
 if __name__ == "__main__":

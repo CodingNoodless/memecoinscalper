@@ -33,7 +33,9 @@ class ScalpConfig:
     # initial_zone: Rohit's method - snipers + dev pump the price, it falls back
     #   to around the opening price, buy there once selling stalls, sell the climb.
     # dip_bounce: earlier rule set (dip from peak + bounce), kept for comparison.
-    entry_mode: str = "second_dip"
+    # model (default, 2026-10-14): the autopilot's current champion model decides
+    #   entries and its exit policy; with no proven model yet it doesn't trade.
+    entry_mode: str = "model"
     min_age_s: float = 5.0           # skip the first seconds of chaos
     max_entry_age_s: float = 300.0   # stop opening new trades on old tokens
 
@@ -129,6 +131,12 @@ class ScalpConfig:
     trade_feed_max_events_per_day: int = 50_000   # ~0.05 SOL/day at PumpPortal's price
     record_migrations: bool = True                # free: tokens graduating to PumpSwap
     status_every_s: float = 30.0
+    # --- autopilot (self-improving loop, paper only) ---------------------
+    autopilot: bool = True               # retrain + re-test in the background while recording
+    autopilot_every_h: float = 6.0       # hours between learning cycles
+    autopilot_days: int = 14             # train on the most recent N recorded days
+    autopilot_backfill_limit: int = 600  # exact-outcome tokens fetched per cycle (needs RESEARCH_RPC_URL)
+    model_reload_s: float = 60.0         # check for a newly promoted model this often
 
 
 def _coerce(kind: type, raw: str):
@@ -168,8 +176,9 @@ def _validate(c: ScalpConfig) -> None:
         (0 < c.trade_size_sol <= c.max_exposure_sol, "need 0 < trade_size_sol <= max_exposure_sol"),
         (c.max_open_positions > 0, "max_open_positions must be positive"),
         (c.min_age_s < c.max_entry_age_s <= c.watch_max_age_s, "need min_age_s < max_entry_age_s <= watch_max_age_s"),
-        (c.entry_mode in {"second_dip", "initial_zone", "dip_bounce"},
-         "entry_mode must be second_dip, initial_zone or dip_bounce"),
+        (c.entry_mode in {"model", "second_dip", "initial_zone", "dip_bounce"},
+         "entry_mode must be model, second_dip, initial_zone or dip_bounce"),
+        (c.autopilot_every_h > 0 and c.autopilot_days > 0, "autopilot_every_h and autopilot_days must be positive"),
         (0 < c.first_dip_min_move_pct < c.first_dip_max_pct <= c.second_dip_min_pct < c.second_dip_max_pct < 1,
          "need 0 < first_dip_min_move < first_dip_max <= second_dip_min < second_dip_max < 1"),
         (c.entry_confirm in {"none", "stall", "bounce"}, "entry_confirm must be none, stall or bounce"),
