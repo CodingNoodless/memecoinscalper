@@ -71,7 +71,7 @@ START_VT = 1_073_000_000_000_000     # raw token units (6 decimals)
 
 def load_backfill(path: Path | None = None) -> dict[str, dict]:
     """data/trades/backfill.jsonl -> mint -> {"t0", "trades": [rows in chain order]} for fully fetched tokens."""
-    from .backfill_trades import OUT
+    from .backfill_trades import OUT, VERSION, normalize
     path = path or OUT
     rows, done = {}, {}
     if not path.exists():
@@ -83,8 +83,10 @@ def load_backfill(path: Path | None = None) -> dict[str, dict]:
             except ValueError:
                 continue
             if r.get("k") == "trade":
-                rows.setdefault(r["m"], []).append(r)
-            elif r.get("k") == "done":
+                r = normalize(r)
+                if r is not None:
+                    rows.setdefault(r["m"], []).append(r)
+            elif r.get("k") == "done" and r.get("v") == VERSION:
                 done[r["m"]] = r
     out = {}
     for mint, d in done.items():

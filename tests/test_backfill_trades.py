@@ -65,7 +65,8 @@ def test_replay_matches_curve_math_and_recorded_ticks(tmp_path):
     with path.open("w") as fh:
         for r in rows:
             fh.write(json.dumps(r) + "\n")
-        fh.write(json.dumps({"k": "done", "m": "M", "t0": 100.0, "n": len(rows), "window": 900}) + "\n")
+        fh.write(json.dumps({"k": "done", "v": bt.VERSION, "m": "M", "t0": 100.0, "n": len(rows), "window": 900}) + "\n")
+        fh.write(json.dumps({"k": "done", "m": "OLD", "t0": 1.0, "n": 0}) + "\n")   # v1 marker: ignored
         fh.write(json.dumps({"k": "trade", "m": "PARTIAL", "t": 1, "dv": 1, "dc": -1}) + "\n")  # no done marker
     loaded = load_backfill(path)
     assert set(loaded) == {"M"} and len(loaded["M"]["trades"]) == 4
@@ -102,3 +103,61 @@ def test_select_tokens_and_dry_run(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", ["x", "--dry-run", "--rpc", "https://example.invalid"])
     bt.main()
     assert "1 to fetch" in capsys.readouterr().out
+
+
+def launch_tx(d_lamports, curve_tokens_after):
+    t = tx(d_lamports, 1)
+    t["meta"]["preTokenBalances"] = []
+    t["meta"]["postTokenBalances"] = [{"accountIndex": 1, "mint": MINT, "owner": CURVE,
+                                       "uiTokenAmount": {"amount": str(curve_tokens_after)}}]
+    return t
+
+
+def test_launch_transaction_counts_only_the_dev_buy():
+    bought = 2_115_327_702_796
+    launch = launch_tx(59_259_258 + 1_493_520, bt.TOTAL_SUPPLY_RAW - bought)   # rent + buy; supply minted to the curve
+    row = bt.parse_trade(launch, MINT, CURVE)
+    assert row["create"] == 1 and row["b"] == 1 and row["dc"] == -bought
+    assert abs(row["dv"] - 59_259_258) <= 1                              # rent excluded, matches the create message
+    old = {"k": "trade", "t": 1, "m": "M", "dv": 60_752_778, "dc": bt.TOTAL_SUPPLY_RAW - bought, "b": 1}
+    assert bt.normalize(old)["dc"] == -bought                            # rows saved before the fix are repaired
+    no_buy = launch_tx(1_493_520, bt.TOTAL_SUPPLY_RAW)
+    assert bt.parse_trade(no_buy, MINT, CURVE) is None
+
+
+class FakeRpc:
+    def __init__(self, gtfa_ok):
+        self.gtfa_ok, self.calls, self.errors = gtfa_ok, [], {}
+        self.gtfa = None
+
+    def request(self, method, params):
+        self.calls.append(method)
+        if method == "getTransactionsForAddress":
+            if not self.gtfa_ok:
+                return None, {"code": -32601, "message": "Method not found"}
+            token = params[1].get("paginationToken")
+            page = [{"slot": 1, "blockTime": 10, "meta": {}, "transaction": {"signatures": ["a"], "message": {"accountKeys": []}}}]
+            return ({"data": page, "paginationToken": None if token else "1:0"}), None
+        if method == "getSignaturesForAddress":
+            return [{"signature": "s2", "blockTime": 12, "err": None}, {"signature": "s1", "blockTime": 11, "err": None},
+                    {"signature": "bad", "blockTime": 11, "err": {"x": 1}}], None
+        if method == "getTransaction":
+            return ({"slot": 2, "blockTime": 11, "meta": {}, "transaction": {"message": {"accountKeys": []}}}
+                    if params[0] != "s2" else None), None
+        raise AssertionError(method)
+
+    def call(self, method, params):
+        return self.request(method, params)[0]
+
+
+def test_address_transactions_prefers_bulk_method_and_falls_back():
+    from tradeslave.research.chain import address_transactions, signature_of
+    fast = FakeRpc(True)
+    txs, stats = address_transactions(fast, "addr", 0, 100)
+    assert stats["method"] == "gtfa" and len(txs) == 2 and fast.gtfa is True
+    slow = FakeRpc(False)
+    txs, stats = address_transactions(slow, "addr", 0, 100)
+    assert slow.gtfa is False and stats["method"] == "sigs"
+    assert stats["sigs"] == 2 and stats["tx_missing"] == 1 and [signature_of(t) for t in txs] == ["s1"]
+    address_transactions(slow, "addr", 0, 100)
+    assert slow.calls.count("getTransactionsForAddress") == 1          # not retried once known unavailable
