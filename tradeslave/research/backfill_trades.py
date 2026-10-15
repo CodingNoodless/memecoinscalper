@@ -138,6 +138,34 @@ def select_tokens(paths, since: float, until: float, min_updates: int) -> list[d
     return [c for m, c in creates.items() if updates[m] >= min_updates]
 
 
+LOG_SAMPLES = TRADE_DIR / "log_samples.jsonl"
+_log_budget = {"left": None}
+
+
+def _keep_log_sample(tx: dict, trade: dict, limit: int = 400) -> None:
+    """Keep a few raw program logs next to their exact trade, to build and verify a
+    live trade-event parser (wallet-level live data) against chain truth."""
+    if _log_budget["left"] is None:
+        try:
+            have = sum(1 for _ in LOG_SAMPLES.open(encoding="utf-8")) if LOG_SAMPLES.exists() else 0
+        except OSError:
+            have = limit
+        _log_budget["left"] = max(0, limit - have)
+    if _log_budget["left"] <= 0:
+        return
+    logs = [line for line in ((tx.get("meta") or {}).get("logMessages") or []) if "Program data:" in line]
+    if not logs:
+        return
+    _log_budget["left"] -= 1
+    try:
+        TRADE_DIR.mkdir(parents=True, exist_ok=True)
+        with LOG_SAMPLES.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"m": trade["m"], "w": trade["w"], "dv": trade["dv"], "dc": trade["dc"],
+                                 "slot": trade.get("slot"), "logs": logs[:6]}) + "\n")
+    except OSError:
+        pass
+
+
 def done_mints(path: Path | None = None) -> set[str]:
     path = path or OUT
     out = set()
@@ -239,6 +267,7 @@ def run(rpc_url=None, rps=None, window=900.0, min_updates=5, since=0.0, until=9e
                 if trade:
                     trade["sig"] = signature_of(tx)
                     rows.append(trade)
+                    _keep_log_sample(tx, trade)
             for i, row in enumerate(rows):
                 row["i"] = i  # chain order, needed to replay the curve
                 fh.write(json.dumps(row, separators=(",", ":")) + "\n")

@@ -96,7 +96,8 @@ def cycle(args) -> int:
         h = card.holdout
         _say(f"challenger {card.version}: policy {card.policy}, threshold {card.threshold:+.4f} | holdout "
              f"{h.trades} trades, mean {h.mean * 100:+.2f}%, median {h.median * 100:+.2f}%, win {h.win:.0%}, "
-             f"biggest token share {h.top_token_share:.0%} | paper_ok={card.paper_ok} proven={card.proven}")
+             f"t {h.t_stat:+.1f}, biggest token share {h.top_token_share:.0%} | via {card.scorer} {card.params} "
+             f"| paper_ok={card.paper_ok} proven={card.proven}")
         promoted = compete(card, model, info, log=lambda *a: _say(*a))
         if promoted:
             save_champion(card, model)
@@ -124,8 +125,10 @@ def status(_args) -> int:
         print("\nlearning history (newest last):")
         for line in HISTORY.read_text(encoding="utf-8").splitlines()[-15:]:
             r = json.loads(line)
-            h = r.get("holdout") or {}
+            h = r.get("holdout") if isinstance(r.get("holdout"), dict) else {}
+            ic = ((r.get("chart_skill") or {}).get("60") or {}).get("ic")
             print(f"  {time.strftime('%m-%d %H:%M', time.localtime(r['t']))} samples {r.get('n_samples', 0):7d} "
+                  f"chart IC60 {ic if ic is not None else float('nan'):+.3f} "
                   f"policy {r.get('policy', '-'):22s} holdout {h.get('trades', 0):4d} trades "
                   f"mean {h.get('mean', 0) * 100:+6.2f}%  {'PROMOTED' if r['promoted'] else ''}")
     return 0

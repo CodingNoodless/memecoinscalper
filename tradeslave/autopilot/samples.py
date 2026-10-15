@@ -16,7 +16,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ..paths import DATA_DIR
-from ..research.dataset import load_backfill, load_tokens, token_from_trades
+import numpy as np
+
+from ..research.dataset import load_backfill, load_tokens, slot_ticks, token_from_ticks
 from ..research.sim import simulate
 from ..scalper.config import ScalpConfig
 from ..scalper.core import Scalper
@@ -25,7 +27,7 @@ from ..scalper.recorder import TICK_DIR, read_ticks
 from .features import FEATURES, features, tradeable
 
 CACHE_DIR = DATA_DIR / "autopilot" / "samples"
-CACHE_VERSION = 2   # 2: market heat features, feed-gap handling
+CACHE_VERSION = 3   # 3: chart sequence, exact charts from chain data, forecast targets
 
 # Exit policies the model can choose between (net PnL incl. fees, fill delay).
 POLICIES = {
@@ -38,14 +40,19 @@ POLICIES = {
 }
 
 
+HORIZONS = (10, 30, 60, 120)   # seconds ahead the model learns to forecast (chart-reading skill)
+
+
 @dataclass
 class Sample:
     mint: str
     t: float           # decision time
     t0: float          # token creation time (used to split train/test by token)
-    x: list[float]
+    x: np.ndarray      # float32 features (FEATURES order)
     y: dict[str, float]   # policy -> net return
-    exact: bool        # label from exact chain data
+    exact: bool        # chart + label from exact chain data
+    f: dict = None     # horizon (s) -> future price change (no fees): what "reading the chart" must predict
+    clean: bool = False   # exact chart, or recorded while the feed was verifiably up (no holes)
 
 
 class _Snapshotter(Scalper):
@@ -57,12 +64,16 @@ class _Snapshotter(Scalper):
         self.last: dict[str, float] = {}
         self.snaps: list[tuple[str, float, float, list[float]]] = []
         self.tainted: set[str] = set()       # tokens alive while the feed was down: their history has holes
+        self.markers = False                 # this recording logs feed up/down (newer engine)
+        self.first_marker_t = float("inf")
 
     def feed_down(self, t: float) -> None:
+        self.markers = True
         self.feed_ok = False
         self.tainted.update(m for m, tr in self.trackers.items() if t - tr.created_at <= self.max_age + 60)
 
     def feed_up(self, t: float) -> None:
+        self.markers = True
         self.feed_ok = True
 
     def _decide(self, tr, now):          # never trade while building data
@@ -71,17 +82,40 @@ class _Snapshotter(Scalper):
     def on_curve(self, mint, t, state):
         super().on_curve(mint, t, state)
         tr = self.trackers.get(mint)
-        if tr is None or not self.feed_ok or mint in self.tainted or not tradeable(tr, t, self.min_age, self.max_age):
+        exact = mint in getattr(self, "exact_mints", ())
+        if tr is None or not tradeable(tr, t, self.min_age, self.max_age):
+            return
+        if not exact and (not self.feed_ok or mint in self.tainted):
             return
         if t - self.last.get(mint, -1e18) < self.every_s:
             return
         self.last[mint] = t
-        self.snaps.append((mint, t, tr.created_at, features(tr, t, self.heat(t))))
+        clean = exact or (self.markers and self.feed_ok and tr.created_at >= self.first_marker_t)
+        self.snaps.append((mint, t, tr.created_at, features(tr, t, self.heat(t)), clean))
 
 
-def snapshot_day(path: Path, cfg: ScalpConfig, every_s=2.0, min_age=3.0, max_age=300.0):
-    snap = _Snapshotter(cfg, every_s, min_age, max_age)
+def _records_with_exact_charts(path: Path, exact: dict):
+    """The day's records, with recorded curve updates replaced by exact chain
+    charts for backfilled tokens (no gaps from feed outages), in time order."""
+    records, created = [], {}
     for rec in read_ticks([path]):
+        if rec.get("k") == "curve" and rec.get("m") in exact:
+            continue
+        if rec.get("k") == "create" and rec.get("m") in exact:
+            created[rec["m"]] = float(rec["t"])
+        records.append(rec)
+    for mint, t_seen in created.items():
+        for t, vs, vt in slot_ticks(exact[mint]["trades"], t_seen):
+            records.append({"k": "curve", "t": t, "m": mint, "vs": vs, "vt": vt, "c": 0, "exact": 1})
+    records.sort(key=lambda r: float(r.get("t") or 0))
+    return records, created
+
+
+def snapshot_day(path: Path, cfg: ScalpConfig, every_s=2.0, min_age=3.0, max_age=300.0, exact: dict | None = None):
+    snap = _Snapshotter(cfg, every_s, min_age, max_age)
+    records, created = _records_with_exact_charts(path, exact or {})
+    snap.exact_mints = set(created)
+    for rec in records:
         kind, t = rec.get("k"), float(rec.get("t") or 0)
         if kind == "create":
             state = CurveState(int(rec["vt"]), int(rec["vs"])) if rec.get("vt") and rec.get("vs") else None
@@ -95,27 +129,42 @@ def snapshot_day(path: Path, cfg: ScalpConfig, every_s=2.0, min_age=3.0, max_age
         elif kind == "migr":
             snap.on_migration(t)
         elif kind == "feed":
+            if not snap.markers:
+                snap.first_marker_t = t
             (snap.feed_up if int(rec.get("up") or 0) else snap.feed_down)(t)
         elif kind == "curve":
             snap.on_curve(rec["m"], t, CurveState(int(rec["vt"]), int(rec["vs"]), int(rec.get("rt") or 0),
                                                   int(rec.get("rs") or 0), 0, bool(int(rec.get("c") or 0))))
-    return [x for x in snap.snaps if x[0] not in snap.tainted]
+    return [x[:4] + ((x[4] and x[0] not in snap.tainted) or x[0] in snap.exact_mints,)
+            for x in snap.snaps if x[0] not in snap.tainted or x[0] in snap.exact_mints]
+
+
+def _future(tok, t: float, latency: float) -> dict:
+    i = tok.idx_at(t + latency)
+    if i < 0 or tok.p[i] <= 0:
+        return {}
+    out = {}
+    for h in HORIZONS:
+        j = tok.idx_at(t + latency + h)
+        out[h] = tok.p[j] / tok.p[i] - 1
+    return out
 
 
 def build_day(path: Path, cfg: ScalpConfig, backfill: dict | None = None) -> list[Sample]:
-    snaps = snapshot_day(path, cfg)
+    backfill = backfill if backfill is not None else load_backfill()
+    snaps = snapshot_day(path, cfg, exact=backfill)
     if not snaps:
         return []
     recorded = load_tokens([path])
-    backfill = backfill if backfill is not None else load_backfill()
-    exact = {}
+    t_seen = {m: t0 for m, _, t0, _, _ in snaps}
+    exact_tok = {}
     out = []
-    for mint, t, t0, x in snaps:
+    for mint, t, t0, x, clean in snaps:
         tok, is_exact = None, False
         if mint in backfill:
-            if mint not in exact:
-                exact[mint] = token_from_trades(mint, backfill[mint]["t0"], backfill[mint]["trades"])
-            tok, is_exact = exact[mint], True
+            if mint not in exact_tok:
+                exact_tok[mint] = token_from_ticks(mint, t_seen[mint], slot_ticks(backfill[mint]["trades"], t_seen[mint]))
+            tok, is_exact = exact_tok[mint], True
         elif mint in recorded:
             tok = recorded[mint]
         if tok is None:
@@ -128,8 +177,14 @@ def build_day(path: Path, cfg: ScalpConfig, backfill: dict | None = None) -> lis
                 break
             y[name] = r
         if len(y) == len(POLICIES):
-            out.append(Sample(mint, t, t0, x, y, is_exact))
+            out.append(Sample(mint, t, t0, np.asarray(x, dtype=np.float32), y, is_exact,
+                              _future(tok, t, cfg.latency_s), clean or is_exact))
     return out
+
+
+def _econ(cfg: ScalpConfig) -> tuple:
+    """Trade economics baked into the labels: a change means the cache is stale."""
+    return (cfg.trade_size_sol, cfg.fee_bps, cfg.network_fee_sol, cfg.latency_s)
 
 
 def _day_of(path: Path) -> str:
@@ -153,6 +208,7 @@ def load_samples(cfg: ScalpConfig, days: int = 14, tick_dir: Path | None = None,
                 blob = pickle.loads(cache.read_bytes())
                 mints = blob.get("mints", set())
                 if blob.get("v") == CACHE_VERSION and blob.get("features") == FEATURES \
+                        and blob.get("econ") == _econ(cfg) \
                         and blob.get("policies") == list(POLICIES) and blob.get("mtime") == path.stat().st_mtime \
                         and blob.get("n_exact") == len(mints & backfill.keys()):     # new exact data -> rebuild
                     out.extend(blob["samples"])
@@ -165,6 +221,7 @@ def load_samples(cfg: ScalpConfig, days: int = 14, tick_dir: Path | None = None,
         if day != today:
             mints = {s.mint for s in samples}
             cache.write_bytes(pickle.dumps({"v": CACHE_VERSION, "features": FEATURES, "policies": list(POLICIES),
+                                            "econ": _econ(cfg),
                                             "mtime": path.stat().st_mtime, "samples": samples, "mints": mints,
                                             "n_exact": len(mints & backfill.keys())}))
         out.extend(samples)

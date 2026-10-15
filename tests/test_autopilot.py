@@ -51,7 +51,7 @@ def test_training_snapshots_match_what_the_live_bot_sees(tmp_path):
         rec.curve(T0 + dt, "X", st)
     rec.close()
     snaps = S.snapshot_day(next(tmp_path.glob("*.jsonl.gz")), mcfg())
-    mint, t, t0, x = snaps[3]
+    mint, t, t0, x, clean = snaps[3]
     live = Scalper(mcfg())
     m2 = Market()
     live.on_create("X", "X", T0, m2.move(1.0), "dev", "c", 0.5, 10_000_000, False)
@@ -203,3 +203,27 @@ def test_engine_prefers_helius_websocket(monkeypatch):
     assert eng.rpc_endpoints() == ["wss://mainnet.helius-rpc.com/?api-key=abc", "wss://api.mainnet-beta.solana.com"]
     eng2 = LiveEngine(mcfg(record_ticks=False, entry_mode="second_dip", rpc_ws="wss://x.example"))
     assert eng2.rpc_endpoints()[0] == "wss://x.example"
+
+
+def test_exact_chain_charts_replace_gappy_recordings(tmp_path):
+    from tradeslave.research.dataset import slot_ticks
+    rec = TickRecorder(tmp_path)
+    m = Market()
+    s0 = m.move(1.0)
+    rec.create(T0, "E", "E", s0, "dev", "c", 0.5, 1, False)
+    rec.curve(T0 + 1, "E", m.move(1.01))          # the feed caught only one update...
+    rec.feed(T0 + 2, False)                        # ...then went down
+    rec.feed(T0 + 200, True)
+    rec.close()
+    # chain truth: a buy every slot for 40 slots
+    trades = [{"slot": 1000, "dv": 1_000_000_000, "dc": -34_612_903_225_806, "create": 1}]
+    trades += [{"slot": 1000 + i, "dv": 100_000_000, "dc": -3_000_000_000_000} for i in range(1, 40)]
+    ticks = slot_ticks(trades, T0)
+    assert len(ticks) == 40 and abs(ticks[10][0] - (T0 + 4.0)) < 1e-9
+    path = next(tmp_path.glob("*.jsonl.gz"))
+    no_exact = S.snapshot_day(path, mcfg())
+    assert no_exact == []                                          # the gappy token is dropped
+    snaps = S.snapshot_day(path, mcfg(), exact={"E": {"trades": trades, "t0": T0}})
+    assert snaps and all(x[4] for x in snaps)                      # exact = clean
+    out = S.build_day(path, mcfg(), backfill={"E": {"trades": trades, "t0": T0}})
+    assert out and all(s.exact and s.clean and s.f for s in out)

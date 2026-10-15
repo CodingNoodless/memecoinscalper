@@ -40,6 +40,8 @@ class ModelGate:
             return False
         card, model = load_champion(self.path)
         self.mtime = mtime
+        if card is not None and not hasattr(card, "cols"):
+            card = None                      # built by an older version
         if card is None or card.features != FEATURES or card.policy not in POLICIES:
             log.warning("Ignoring champion at %s: unreadable or built for different features", self.path)
             self.card, self.model = None, None
@@ -57,9 +59,13 @@ class ModelGate:
             return Signal(False, "outside_model_window", {})
         heat = self.heat_source(now) if self.heat_source else (math.nan, math.nan)
         x = [[v if v is not None else math.nan for v in features(tr, now, heat)]]
-        pred = float(self.model.predict(x)[0])
+        if len(x[0]) != len(FEATURES):
+            return Signal(False, "feature_mismatch", {})
+        import numpy as np
+        from .model import score
+        pred = float(score(self.card, self.model, np.asarray(x, dtype=np.float32))[0])
         if pred < self.card.threshold:
             return Signal(False, "model_says_no", {})
         rules = dict(POLICIES[self.card.policy])
-        return Signal(True, "model", {"model": self.card.version, "policy": self.card.policy,
+        return Signal(True, "model", {"model": self.card.version, "policy": self.card.policy, "scorer": self.card.scorer,
                                       "expected": round(pred, 4), "policy_rules": rules})

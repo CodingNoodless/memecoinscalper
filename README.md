@@ -15,6 +15,14 @@ wallet, sign transactions, or send swaps.
    6 exit policies would really have returned (fees, fill delay).
 3. **Test**: train on the oldest 60% of tokens, pick exits + threshold on the
    next 20%, then judge on the newest 20% it never saw.
+   Since 2026-10-15 the model sees the **chart itself** (last 120 s in 3 s bins
+   and 300 s in 30 s bins: price path, SOL bought/sold, trade counts) next to
+   44 summary indicators, trains only on clean charts (exact chain data or
+   recordings made while the feed was up), learns to *rank* entries (robust to
+   fat tails), tries a small grid of regularization settings and two feature
+   sets, and also uses a 60 s chart forecaster as a scorer. Each cycle logs its
+   **chart-reading skill** (rank correlation between forecast and what happened,
+   10/30/60/120 s ahead, on unseen tokens).
 4. **Promote** only a model that made money on that unseen data AND beats the
    current champion on it. The scalper loads it within a minute
    (`SCALP_ENTRY_MODE=model`, the default). No champion = no trades.
@@ -31,6 +39,8 @@ uv run python -m tradeslave.autopilot cycle      # run one learning cycle now
 It never trades real money. A model marked "passed proof gates" (>= 100
 unseen trades, >= +1% average, positive median, no token > 20% of profit) is
 only a candidate for a real-money decision, which stays a manual step.
+(Gates since 2026-10-15: >= 100 unseen trades, >= +1% average, t-stat >= 2,
+no token > 20% of profit.)
 `SCALP_AUTOPILOT=false` turns the loop off; `SCALP_ENTRY_MODE=second_dip` brings
 back the rule-based entries.
 

@@ -20,7 +20,7 @@ load_dotenv(dotenv_path=PROJECT_ROOT / ".env")
 @dataclass(frozen=True)
 class ScalpConfig:
     # --- watchlist -------------------------------------------------------
-    max_watched: int = 40            # tokens tracked at once (one curve subscription each)
+    max_watched: int = 100           # tokens tracked at once (one curve subscription each); more = more training data
     watch_max_age_s: float = 600.0   # stop watching a flat token after this age
     idle_unwatch_s: float = 60.0     # stop watching if no curve change for this long
     min_initial_buy_sol: float = 0.0  # dev's first buy (skip if below)
@@ -103,10 +103,10 @@ class ScalpConfig:
 
     # --- sizing and account risk ----------------------------------------
     paper_start_sol: float = 1.0
-    trade_size_sol: float = 0.05
+    trade_size_sol: float = 0.15     # 0.0003 SOL network fee = 0.2%/side here vs 0.6% at 0.05
     max_open_positions: int = 4
-    daily_loss_limit_sol: float = 0.15   # pause new entries for the UTC day
-    max_exposure_sol: float = 0.25
+    daily_loss_limit_sol: float = 0.30   # pause new entries for the UTC day
+    max_exposure_sol: float = 0.60
 
     # --- execution simulation --------------------------------------------
     fee_bps: int = 125               # pump.fun bonding curve fee per side (1.25%, Sep 2026)
@@ -141,7 +141,7 @@ class ScalpConfig:
     autopilot_days: int = 14             # train on the most recent N recorded days
     autopilot_backfill_limit: int = 600  # exact-outcome tokens fetched per cycle (needs RESEARCH_RPC_URL)
     autopilot_launch_sample: int = 300   # + random tokens from ALL launches (unbiased data for launch research)
-    autopilot_daily_credits: int = 25_000  # Helius free plan = 1M credits/month; leave room for the websocket
+    autopilot_daily_credits: int = 30_000  # Helius free plan = 1M credits/month; leave room for the websocket
     model_reload_s: float = 60.0         # check for a newly promoted model this often
 
 

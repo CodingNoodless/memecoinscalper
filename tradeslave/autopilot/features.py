@@ -23,6 +23,16 @@ FEATURES = [
     "launches_10m", "graduations_1h",
 ] + [f"social_{k}" for k in SOCIAL_KINDS]
 
+# The chart itself, as the model sees it: the last 120 s in 3 s bins and the last
+# 300 s in 30 s bins. Prices are log returns relative to the price now (so every
+# chart is on the same scale); flows are SOL bought / sold in each bin.
+SEQ_BINS, SEQ_STEP = 40, 3.0
+LONG_BINS, LONG_STEP = 10, 30.0
+CHART = ([f"c{i}_{ch}" for i in range(SEQ_BINS) for ch in ("ret", "buy", "sell", "n")]
+         + [f"l{i}_{ch}" for i in range(LONG_BINS) for ch in ("ret", "net")])
+BASE = list(FEATURES)
+FEATURES = BASE + CHART
+
 
 def _social_kind(tr: TokenTracker) -> str:
     s = tr.socials
@@ -84,7 +94,55 @@ def features(tr: TokenTracker, now: float, heat: tuple[float, float] = (math.nan
         math.sin(2 * math.pi * hour / 24), math.cos(2 * math.pi * hour / 24),
         heat[0], heat[1],
     ] + [1.0 if kind == k else 0.0 for k in SOCIAL_KINDS]
-    return vals
+    return vals + chart(tr, now)
+
+
+def chart(tr: TokenTracker, now: float) -> list[float]:
+    """Binned recent chart (see CHART). Bins before the token existed are NaN."""
+    price = tr.price
+    if price <= 0:
+        return [math.nan] * len(CHART)
+    lp = math.log(price)
+    horizon = max(SEQ_BINS * SEQ_STEP, LONG_BINS * LONG_STEP)
+    recent = []
+    for tk in reversed(tr.ticks):
+        if tk.t < now - horizon:
+            break
+        recent.append(tk)
+    recent.reverse()                                  # oldest first
+    before = None                                     # last tick before the window
+    n_recent = len(recent)
+    if n_recent < len(tr.ticks):
+        before = tr.ticks[len(tr.ticks) - n_recent - 1]
+
+    def binned(nbins, step, channels):
+        out = []
+        start = now - nbins * step
+        j = 0
+        last_price = before.price if before is not None else None
+        for b in range(nbins):
+            lo, hi = start + b * step, start + (b + 1) * step
+            buy = sell = 0.0
+            n = 0
+            while j < n_recent and recent[j].t <= hi:
+                tk = recent[j]
+                if tk.t > lo:
+                    n += 1
+                    if tk.flow_sol > 0:
+                        buy += tk.flow_sol
+                    else:
+                        sell -= tk.flow_sol
+                last_price = tk.price
+                j += 1
+            alive = hi >= tr.created_at
+            ret = math.log(last_price) - lp if (last_price and alive) else math.nan
+            if channels == 4:
+                out += [ret, buy if alive else math.nan, sell if alive else math.nan, float(n) if alive else math.nan]
+            else:
+                out += [ret, (buy - sell) if alive else math.nan]
+        return out
+
+    return binned(SEQ_BINS, SEQ_STEP, 4) + binned(LONG_BINS, LONG_STEP, 2)
 
 
 def tradeable(tr: TokenTracker, now: float, min_age: float, max_age: float) -> bool:

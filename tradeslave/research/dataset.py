@@ -133,3 +133,39 @@ def replay_error(recorded: Token, replayed: Token) -> float | None:
         return None
     gaps.sort()
     return gaps[len(gaps) // 2]
+
+
+SLOT_S = 0.4
+
+
+def slot_ticks(trades: list[dict], t_launch_seen: float) -> list[tuple[float, int, int]]:
+    """Exact curve states as a live feed would deliver them: one update per slot
+    (state after the slot's last trade), timed from when the launch was seen
+    plus 0.4 s per slot. Block times are whole seconds; slots are precise."""
+    if not trades:
+        return []
+    s0 = trades[0].get("slot") or 0
+    vs, vt = START_VS, START_VT
+    out: list[tuple[float, int, int]] = []
+    last_slot = None
+    for r in trades:
+        vs += int(r["dv"]); vt += int(r["dc"])
+        if vs <= 0 or vt <= 0:
+            break
+        slot = r.get("slot") or s0
+        t = t_launch_seen + (slot - s0) * SLOT_S
+        if slot == last_slot and out:
+            out[-1] = (t, vs, vt)
+        else:
+            out.append((t, vs, vt))
+        last_slot = slot
+    return out
+
+
+def token_from_ticks(mint: str, t0: float, ticks: list[tuple[float, int, int]]) -> Token:
+    tok = Token(mint, t0)
+    tok.t.append(t0); tok.vs.append(START_VS); tok.vt.append(START_VT)
+    for t, vs, vt in ticks:
+        tok.t.append(max(t, tok.t[-1])); tok.vs.append(vs); tok.vt.append(vt)
+    tok.p = [price(a, b) for a, b in zip(tok.vs, tok.vt)]
+    return tok

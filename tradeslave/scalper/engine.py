@@ -67,6 +67,7 @@ class LiveEngine:
         self.last_curve_msg = time.time()
         self.started = time.time()
         self.last_model_check = 0.0
+        self.last_feed_mark = 0.0
         self.autopilot_proc = None
         if cfg.entry_mode == "model":
             from ..autopilot.live import ModelGate
@@ -615,6 +616,9 @@ class LiveEngine:
                 await self.rpc_ws.close()
             except Exception:
                 pass
+        if self.recorder and self.scalper.feed_ok and now - self.last_feed_mark >= 600:
+            self.recorder.feed(now, True)      # heartbeat: every day file says whether the feed was up
+            self.last_feed_mark = now
         if self.scalper.model is not None and now - self.last_model_check >= self.cfg.model_reload_s:
             self.last_model_check = now
             if self.scalper.model.reload():
