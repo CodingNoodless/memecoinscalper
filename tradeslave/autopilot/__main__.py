@@ -15,7 +15,7 @@ import time
 from ..paths import PROJECT_ROOT
 from ..research.chain import env_rpc
 from ..scalper.config import load_config
-from .model import AUTO_DIR, HISTORY, compete, record_history, save_champion, train_cycle
+from .model import AUTO_DIR, HISTORY, compete, record_history, save_champion, save_shadow, train_cycle
 from .samples import load_samples
 
 
@@ -88,19 +88,22 @@ def cycle(args) -> int:
                 pass
     elif not args.no_backfill:
         _say("no RESEARCH_RPC_URL in .env: labels come from recorded ticks only (exact chain outcomes are better)")
-    samples = load_samples(cfg, cfg.autopilot_days, log=lambda *a: _say(*a))
+    paths: dict = {}
+    samples = load_samples(cfg, cfg.autopilot_days, log=lambda *a: _say(*a), price_paths=paths)
     _say(f"{len(samples)} samples from {len({s.mint for s in samples})} tokens")
-    card, model, info = train_cycle(samples, log=lambda *a: _say(*a))
+    econ = dict(size=cfg.trade_size_sol, latency=cfg.latency_s, fee_bps=cfg.fee_bps, network_fee=cfg.network_fee_sol)
+    card, model, info = train_cycle(samples, log=lambda *a: _say(*a), paths=paths, econ=econ)
+    save_shadow(info, log=lambda *a: _say(*a))
     promoted = False
     if card is not None:
         h = card.holdout
-        _say(f"challenger {card.version}: policy {card.policy}, threshold {card.threshold:+.4f} | holdout "
+        _say(f"challenger {card.version}: policy {card.policy}{' ' + str({k: v for k, v in card.exit.items() if k != 'cols'}) if card.exit else ''}, threshold {card.threshold:+.4f} | holdout "
              f"{h.trades} trades, mean {h.mean * 100:+.2f}%, median {h.median * 100:+.2f}%, win {h.win:.0%}, "
              f"t {h.t_stat:+.1f}, biggest token share {h.top_token_share:.0%} | via {card.scorer} {card.params} "
              f"| paper_ok={card.paper_ok} proven={card.proven}")
-        promoted = compete(card, model, info, log=lambda *a: _say(*a))
+        promoted = compete(card, model, info, log=lambda *a: _say(*a), paths=paths, econ=econ)
         if promoted:
-            save_champion(card, model)
+            save_champion(card, model, exit_model=info.get("exit_model"))
             _say(f"PROMOTED {card.version} -> the scalper picks it up within a minute")
         elif not card.paper_ok:
             _say("not promoted: it lost money on the unseen holdout (or had too few trades). Nothing changes.")
@@ -121,6 +124,21 @@ def status(_args) -> int:
               f"| paper_ok={c['paper_ok']} proven={c['proven']}")
     else:
         print("no champion yet: still learning")
+    if (AUTO_DIR / "shadow.json").exists():
+        c = json.loads((AUTO_DIR / "shadow.json").read_text())
+        h = c["holdout"]
+        print(f"shadow   {c['version']}: {c['policy']} via {c['scorer']} | holdout {h['trades']} trades "
+              f"mean {h['mean'] * 100:+.2f}%")
+    trades_file = PROJECT_ROOT / "scalp_shadow_trades.jsonl"
+    if trades_file.exists():
+        rows = [json.loads(line) for line in trades_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+        by_model: dict = {}
+        for r in rows:
+            by_model.setdefault((r.get("entry_details") or {}).get("model", "?"), []).append(r["pnl_pct"])
+        print("\nshadow forward test (live paper, never-seen data):")
+        for version, pnls in by_model.items():
+            print(f"  model {version}: {len(pnls)} trades, mean {sum(pnls) / len(pnls) * 100:+.2f}%, "
+                  f"win {sum(p > 0 for p in pnls) / len(pnls):.0%}")
     if HISTORY.exists():
         print("\nlearning history (newest last):")
         for line in HISTORY.read_text(encoding="utf-8").splitlines()[-15:]:

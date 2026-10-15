@@ -64,6 +64,7 @@ class PaperBook:
         self.fees_paid_sol = 0.0
         self.failed_tx = 0
         self._emit = on_event or (lambda kind, data: None)
+        self.mutate_tracker = True     # False for a shadow book: leave per-token cooldown/loss counters alone
 
     # --- risk -------------------------------------------------------------
     def exposure_sol(self) -> float:
@@ -128,7 +129,8 @@ class PaperBook:
                 self._emit("sell_failed_retrying", {"mint": tr.mint, "t": now, "attempts": order.attempts})
             else:
                 del self.orders[tr.mint]
-                tr.last_exit_t = now
+                if self.mutate_tracker:
+                    tr.last_exit_t = now
                 self._emit("buy_failed", {"mint": tr.mint, "t": now})
             return
         del self.orders[tr.mint]
@@ -165,9 +167,10 @@ class PaperBook:
         pnl = proceeds - position.cost_sol
         self._roll_day(now)
         self.day_pnl_sol += pnl
-        tr.last_exit_t = now
-        if pnl < 0:
-            tr.losses += 1
+        if self.mutate_tracker:
+            tr.last_exit_t = now
+            if pnl < 0:
+                tr.losses += 1
         record = {
             "trade_id": position.trade_id, "mint": tr.mint, "symbol": tr.symbol, "kind": position.kind,
             "entry_t": position.entry_t, "exit_t": now, "held_s": round(now - position.entry_t, 2),

@@ -35,6 +35,39 @@ wallet, sign transactions, or send swaps.
 6. Repeat as data grows. Each cycle is logged in `data/autopilot/history.jsonl`
    and shown on the dashboard ("Autopilot · self-learning").
 
+Since 2026-10-15 (v3):
+
+* **Learned exits.** Besides the 6 fixed exit policies, the model can sell by
+  itself: it re-scores an open position whenever training would have taken a
+  snapshot (fresh curve update, at most every 2 s, token age 3-300 s) and sells
+  when the score falls below an exit threshold, with a hard stop (-15% net) and
+  a time cap (120 or 300 s). The simulator replays each token's exact price path
+  for this, so learned exits are judged with the same fills and fees.
+* **Market mood features.** `mkt_med_30m`, `mkt_up_30m`, `mkt_n_30m`,
+  `mkt_med_10m`: how recently launched tokens actually did (price at ~120 s of age
+  vs ~15 s), known at decision time, identical live and in replay.
+* **Cost gate.** An extra scorer learns each exit policy's expected NET return
+  (fees included) and only trades when it clears 0 / +1% / +3%, instead of only
+  taking the top-ranked entries.
+* **Stricter selection.** Tokens launched within 10 min after each split
+  boundary are dropped (embargo); a candidate must make money in BOTH halves of
+  validation, and the best worse-half wins. The log prints the t-stat that the
+  best of N candidates would reach by luck alone.
+* **Shadow forward test.** Every cycle's best validation candidate is saved as
+  `data/autopilot/shadow.pkl` and paper-trades in its own wallet
+  (`scalp_shadow_wallet.json`, `scalp_shadow_trades.jsonl`) whatever its holdout
+  said: a real-time test on data no model has seen. STATUS lines show it as
+  `SHADOW ...`; `autopilot status` shows its results per model.
+  `SCALP_SHADOW=false` turns it off.
+* **Faster history mining.** Add free RPC endpoints to `.env` as
+  `HISTORY_RPC_URLS` (comma separated, `#rps=N` per endpoint); the miner runs one
+  worker per endpoint and hands tokens an endpoint can't serve to another.
+  Tested 2026-10-15 on free plans: Alchemy and QuickNode serve
+  `getSignaturesForAddress` + `getTransaction` (works); Chainstack's free plan
+  rejects `getSignaturesForAddress` ("Archive ... requests are not available");
+  an Ankr free key only reached devnet. Example:
+  `HISTORY_RPC_URLS=https://solana-mainnet.g.alchemy.com/v2/KEY#rps=5,https://NAME.solana-mainnet.quiknode.pro/KEY/#rps=5`
+
 ```
 uv sync                                          # adds numpy + scikit-learn
 uv run python scalp.py                           # record + learn + paper-trade

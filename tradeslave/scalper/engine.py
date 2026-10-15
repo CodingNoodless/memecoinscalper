@@ -77,11 +77,21 @@ class LiveEngine:
             from ..autopilot.live import ModelGate
             self.scalper.model = ModelGate(cfg)
             self.scalper.model.heat_source = self.scalper.heat
+            self.scalper.model.regime_source = self.scalper.regime
+            if cfg.shadow:
+                shadow_gate = ModelGate(cfg, shadow=True)
+                shadow_gate.heat_source, shadow_gate.regime_source = self.scalper.heat, self.scalper.regime
+                self.scalper.add_shadow(shadow_gate, on_event=self._on_shadow_event)
         self._restore_balance()
 
     # --- persistence --------------------------------------------------------
     def _restore_balance(self) -> None:
-        path = state_path("scalp_wallet.json")
+        self._restore_book(self.scalper.book, "scalp_wallet.json")
+        if self.scalper.shadow is not None:
+            self._restore_book(self.scalper.shadow.book, "scalp_shadow_wallet.json")
+
+    def _restore_book(self, book, name: str) -> None:
+        path = state_path(name)
         if not path.exists():
             return
         try:
@@ -89,13 +99,13 @@ class LiveEngine:
             balance = float(data["balance_sol"])
             carried = sum(float(p["cost_sol"]) * (1.0 + float(p.get("last_pnl_pct", 0.0)))
                           for p in data.get("open_positions", []))
-            self.scalper.book.balance_sol = balance + carried
+            book.balance_sol = balance + carried
             if carried:
-                log.warning("Previous run left %d open paper positions; credited at last mark (%.4f SOL)",
-                            len(data.get("open_positions", [])), carried)
-            log.info("Restored paper balance %.4f SOL", self.scalper.book.balance_sol)
+                log.warning("Previous run left %d open paper positions in %s; credited at last mark (%.4f SOL)",
+                            len(data.get("open_positions", [])), name, carried)
+            log.info("Restored paper balance %.4f SOL (%s)", book.balance_sol, name)
         except (OSError, ValueError, KeyError, TypeError) as exc:
-            log.warning("Could not restore scalp_wallet.json (%s); starting at %.4f SOL", exc, self.cfg.paper_start_sol)
+            log.warning("Could not restore %s (%s); starting at %.4f SOL", name, exc, self.cfg.paper_start_sol)
 
     def _watchlist(self, now: float) -> list[dict]:
         rows = []
@@ -143,6 +153,20 @@ class LiveEngine:
             if tr is not None and tr.launch_price:
                 p["vs_opening"] = round(tr.price / tr.launch_price - 1.0, 4)
         save_json("scalp_wallet.json", snap)
+        lane = self.scalper.shadow
+        if lane is not None:
+            shadow = lane.book.snapshot()
+            shadow.update({"equity_sol": lane.book.equity_sol(self.scalper.trackers), "updated_at": now,
+                           "paper_start_sol": self.cfg.paper_start_sol, "status": lane.gate.status,
+                           "model": lane.gate.card.version if lane.gate.card is not None else None})
+            save_json("scalp_shadow_wallet.json", shadow)
+
+    def _on_shadow_event(self, kind: str, data: dict) -> None:
+        if kind == "trade_closed":
+            append_jsonl("scalp_shadow_trades.jsonl", {"event": kind, **data})
+            log.info("SHADOW CLOSED %s %+.2f%% (%+.5f SOL) held %.1fs reason=%s balance=%.4f",
+                     data["symbol"], data["pnl_pct"] * 100, data["pnl_sol"], data["held_s"],
+                     data["exit_reason"], data["balance_sol"])
 
     def _on_event(self, kind: str, data: dict) -> None:
         record = {"event": kind, **data}
@@ -685,6 +709,8 @@ class LiveEngine:
             self.last_model_check = now
             if self.scalper.model.reload():
                 log.info("AUTOPILOT now: %s", self.scalper.model.status)
+            if self.scalper.shadow is not None and self.scalper.shadow.gate.reload():
+                log.info("SHADOW now: %s", self.scalper.shadow.gate.status)
         if now - last_save >= 2:
             self._save_wallet()
             last_save = now
@@ -716,6 +742,14 @@ class LiveEngine:
         )
         if self.scalper.model is not None:
             log.info("AUTOPILOT %s", self.scalper.model.status)
+        lane = self.scalper.shadow
+        if lane is not None:
+            sc = lane.book.closed
+            s_wins = sum(1 for c in sc if c["pnl_sol"] > 0)
+            log.info("SHADOW %s | open=%d trades=%d wins=%d avg=%+.2f%% pnl=%+.4f SOL balance=%.4f",
+                     lane.gate.status, len(lane.book.positions), len(sc), s_wins,
+                     (sum(c["pnl_pct"] for c in sc) / len(sc) * 100) if sc else 0.0,
+                     sum(c["pnl_sol"] for c in sc), lane.book.balance_sol)
         if self.cfg.wallet_feed:
             mb = self.stats.get("wallet_log_mb", 0.0)
             hours = max((now - self.started) / 3600, 1e-6)

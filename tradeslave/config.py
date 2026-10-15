@@ -67,7 +67,8 @@ OLLAMA_TIMEOUT_SECONDS = _int_setting("OLLAMA_TIMEOUT_SECONDS", 180)
 #   shadow - trade the score pick, then ask Ollama and log whether it agreed
 #   on     - Ollama picks (previous behavior; ~25 s latency per scan)
 LLM_MODE = os.getenv("LLM_MODE", "off").strip().lower()
-KNOWN_SETTINGS.update({"RUGCHECK_API_KEY", "JUPITER_API_KEY", "OLLAMA_URL", "OLLAMA_MODEL", "LLM_MODE"})
+KNOWN_SETTINGS.update({"RUGCHECK_API_KEY", "JUPITER_API_KEY", "OLLAMA_URL", "OLLAMA_MODEL", "LLM_MODE",
+                       "RESEARCH_RPC_URL", "HISTORY_RPC_URLS"})
 
 # Solana mainnet USDC mint. The paper simulator stores quoted token amounts in
 # raw units and uses USDC quotes for both entry and exit.

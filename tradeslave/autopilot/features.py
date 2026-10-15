@@ -21,7 +21,11 @@ FEATURES = [
     "early_supply", "dev_supply", "dev_buy_sol", "creator_launches", "creator_sells",
     "twitter_reuse", "desc_len", "has_website", "has_telegram", "hour_sin", "hour_cos",
     "launches_10m", "graduations_1h",
-] + [f"social_{k}" for k in SOCIAL_KINDS]
+] + [f"social_{k}" for k in SOCIAL_KINDS] + [
+    # market regime: how recent launches actually did (see Scalper.regime)
+    "mkt_med_30m", "mkt_up_30m", "mkt_n_30m", "mkt_med_10m",
+]
+NAN4 = (math.nan, math.nan, math.nan, math.nan)
 
 # The chart itself, as the model sees it: the last 120 s in 3 s bins and the last
 # 300 s in 30 s bins. Prices are log returns relative to the price now (so every
@@ -52,7 +56,8 @@ def _truthy(v) -> bool:
     return v not in (None, "", "None", False, "False", 0, "0")
 
 
-def features(tr: TokenTracker, now: float, heat: tuple[float, float] = (math.nan, math.nan)) -> list[float]:
+def features(tr: TokenTracker, now: float, heat: tuple[float, float] = (math.nan, math.nan),
+             regime: tuple = NAN4) -> list[float]:
     ticks = tr.ticks
     price = tr.price
     launch = tr.launch_price or price or 1e-18
@@ -97,7 +102,7 @@ def features(tr: TokenTracker, now: float, heat: tuple[float, float] = (math.nan
         float(_truthy(s.get("website"))), float(_truthy(s.get("telegram"))),
         math.sin(2 * math.pi * hour / 24), math.cos(2 * math.pi * hour / 24),
         heat[0], heat[1],
-    ] + [1.0 if kind == k else 0.0 for k in SOCIAL_KINDS]
+    ] + [1.0 if kind == k else 0.0 for k in SOCIAL_KINDS] + list(regime)
     return vals + chart(tr, now) + wallet_features(tr, now)
 
 

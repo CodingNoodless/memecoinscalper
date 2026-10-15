@@ -77,6 +77,8 @@ class TokenTracker:
     dev_sold_tokens: float = 0.0
     socials: dict | None = None         # parsed metadata; None until fetched
     twitter_reuse: int = 0              # earlier tokens that used the same Twitter link
+    p_ref: float = 0.0                  # market regime: price at the first update after REGIME_FROM_S of age
+    regime_logged: bool = False         # this token's outcome is in the market-regime record
 
     def update(self, t: float, state: CurveState) -> Tick | None:
         """Add a new curve state. Returns the tick, or None if nothing changed."""

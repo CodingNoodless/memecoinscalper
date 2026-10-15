@@ -58,7 +58,7 @@ def test_training_snapshots_match_what_the_live_bot_sees(tmp_path):
     for dt, st in states:
         if T0 + dt <= t:
             live.on_curve("X", T0 + dt, st)
-    y = F.features(live.trackers["X"], t, live.heat(t))
+    y = F.features(live.trackers["X"], t, live.heat(t), live.regime(t))
     assert len(x) == len(F.FEATURES)
     assert all((u == v) or (math.isnan(u) and math.isnan(v)) for u, v in zip(x, y))
 
@@ -227,3 +227,20 @@ def test_exact_chain_charts_replace_gappy_recordings(tmp_path):
     assert snaps and all(x[4] for x in snaps)                      # exact = clean
     out = S.build_day(path, mcfg(), backfill={"E": {"trades": trades, "t0": T0}})
     assert out and all(s.exact and s.clean and s.f for s in out)
+
+
+def test_market_regime_from_recent_outcomes():
+    s = Scalper(mcfg())
+    assert all(math.isnan(v) for i, v in enumerate(s.regime(T0)) if i != 2)
+    # 6 tokens: price at 15 s of age vs 120 s; 4 rose 10%, 2 fell 20%
+    for i in range(6):
+        f = 1.10 if i < 4 else 0.80
+        feed(s, f"R{i}", [(10, 1.001), (16, 1.001), (60, 1.001), (100, f), (121, 1.001)], start=T0 + i)
+    med30, up30, n30, med10 = s.regime(T0 + 200)
+    rise = math.log(1.10 * 1.001 ** 2)
+    assert n30 == 6 and up30 == pytest.approx(4 / 6) and med30 == pytest.approx(rise, rel=1e-3)
+    assert med10 == pytest.approx(rise, rel=1e-3)
+    assert s.regime(T0 + 3000)[2] == 0                      # older than 30 min: forgotten
+    # a token that went quiet longer than the idle window would not be watched live: not counted
+    feed(s, "Q", [(16, 1.001), (119, 1.001), (300, 0.5)], start=T0)
+    assert s.regime(T0 + 400)[2] == 6

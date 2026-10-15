@@ -27,7 +27,7 @@ from ..scalper.recorder import TICK_DIR, read_ticks
 from .features import FEATURES, features, tradeable
 
 CACHE_DIR = DATA_DIR / "autopilot" / "samples"
-CACHE_VERSION = 4   # 4: wallet features (trade events)
+CACHE_VERSION = 5   # 4: wallet features (trade events); 5: market regime features
 
 # Exit policies the model can choose between (net PnL incl. fees, fill delay).
 POLICIES = {
@@ -41,6 +41,7 @@ POLICIES = {
 
 
 WALLET_FEED_DELAY_S = 1.0
+SNAP_EVERY_S, SNAP_MIN_AGE_S, SNAP_MAX_AGE_S = 2.0, 3.0, 300.0   # when training snapshots (and live re-scores) happen
 HORIZONS = (10, 30, 60, 120)   # seconds ahead the model learns to forecast (chart-reading skill)
 
 
@@ -92,7 +93,7 @@ class _Snapshotter(Scalper):
             return
         self.last[mint] = t
         clean = exact or (self.markers and self.feed_ok and tr.created_at >= self.first_marker_t)
-        self.snaps.append((mint, t, tr.created_at, features(tr, t, self.heat(t)), clean))
+        self.snaps.append((mint, t, tr.created_at, features(tr, t, self.heat(t), self.regime(t)), clean))
 
 
 def _records_with_exact_charts(path: Path, exact: dict):
@@ -120,7 +121,8 @@ def _records_with_exact_charts(path: Path, exact: dict):
     return records, created
 
 
-def snapshot_day(path: Path, cfg: ScalpConfig, every_s=2.0, min_age=3.0, max_age=300.0, exact: dict | None = None):
+def snapshot_day(path: Path, cfg: ScalpConfig, every_s=SNAP_EVERY_S, min_age=SNAP_MIN_AGE_S, max_age=SNAP_MAX_AGE_S,
+                 exact: dict | None = None):
     snap = _Snapshotter(cfg, every_s, min_age, max_age)
     records, created = _records_with_exact_charts(path, exact or {})
     snap.exact_mints = set(created)
@@ -164,7 +166,14 @@ def _future(tok, t: float, latency: float) -> dict:
     return out
 
 
-def build_day(path: Path, cfg: ScalpConfig, backfill: dict | None = None) -> list[Sample]:
+def compact_path(tok) -> tuple:
+    """(t, vs, vt) arrays of a token's price path: what the learned-exit simulator replays."""
+    return (np.asarray(tok.t, dtype=np.float64), np.asarray(tok.vs, dtype=np.int64), np.asarray(tok.vt, dtype=np.int64))
+
+
+def build_day(path: Path, cfg: ScalpConfig, backfill: dict | None = None, paths: dict | None = None) -> list[Sample]:
+    """Samples of one recorded day. If `paths` is given, it is filled with mint -> compact_path
+    for every token that has samples (the learned-exit simulator needs the whole price path)."""
     backfill = backfill if backfill is not None else load_backfill()
     snaps = snapshot_day(path, cfg, exact=backfill)
     if not snaps:
@@ -193,6 +202,8 @@ def build_day(path: Path, cfg: ScalpConfig, backfill: dict | None = None) -> lis
         if len(y) == len(POLICIES):
             out.append(Sample(mint, t, t0, np.asarray(x, dtype=np.float32), y, is_exact,
                               _future(tok, t, cfg.latency_s), clean or is_exact))
+            if paths is not None and mint not in paths:
+                paths[mint] = compact_path(tok)
     return out
 
 
@@ -206,8 +217,9 @@ def _day_of(path: Path) -> str:
 
 
 def load_samples(cfg: ScalpConfig, days: int = 14, tick_dir: Path | None = None, cache_dir: Path | None = None,
-                 log=print) -> list[Sample]:
-    """Samples for the most recent `days` recorded days (finished days cached)."""
+                 log=print, price_paths: dict | None = None) -> list[Sample]:
+    """Samples for the most recent `days` recorded days (finished days cached). `price_paths` (optional
+    dict) is filled with each sampled token's price path, for the learned-exit simulator."""
     tick_dir, cache_dir = tick_dir or TICK_DIR, cache_dir or CACHE_DIR
     cache_dir.mkdir(parents=True, exist_ok=True)
     paths = sorted(tick_dir.glob("*.jsonl.gz"))[-days:]
@@ -226,17 +238,22 @@ def load_samples(cfg: ScalpConfig, days: int = 14, tick_dir: Path | None = None,
                         and blob.get("policies") == list(POLICIES) and blob.get("mtime") == path.stat().st_mtime \
                         and blob.get("n_exact") == len(mints & backfill.keys()):     # new exact data -> rebuild
                     out.extend(blob["samples"])
+                    if price_paths is not None:
+                        price_paths.update(blob.get("paths") or {})
                     continue
             except Exception:  # noqa: BLE001 - a bad cache is rebuilt
                 pass
         started = time.time()
-        samples = build_day(path, cfg, backfill)
+        day_paths: dict = {}
+        samples = build_day(path, cfg, backfill, day_paths)
+        if price_paths is not None:
+            price_paths.update(day_paths)
         log(f"  samples {day}: {len(samples)} ({sum(s.exact for s in samples)} exact) in {time.time() - started:.0f}s")
         if day != today:
             mints = {s.mint for s in samples}
             cache.write_bytes(pickle.dumps({"v": CACHE_VERSION, "features": FEATURES, "policies": list(POLICIES),
                                             "econ": _econ(cfg),
-                                            "mtime": path.stat().st_mtime, "samples": samples, "mints": mints,
+                                            "mtime": path.stat().st_mtime, "samples": samples, "mints": mints, "paths": day_paths,
                                             "n_exact": len(mints & backfill.keys())}))
         out.extend(samples)
     return out

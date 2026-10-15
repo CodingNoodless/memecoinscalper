@@ -61,3 +61,32 @@ def test_mine_writes_charts_skips_and_merges(tmp_path, monkeypatch):
         + json.dumps({"k": "done", "v": bt.VERSION, "m": MINT, "t0": T}) + "\n")
     merged = load_backfill()
     assert len(merged[MINT]["trades"]) == 1 and merged[MINT]["trades"][0]["w"] == "x"
+
+
+def test_endpoints_parse_public_first_rates_and_dedup():
+    eps = hm.endpoints(3.0, extra="https://a.example/k1#rps=8, https://b.example/k2,https://a.example/k1,"
+                                  + hm.PUBLIC_RPC)
+    assert eps == [(hm.PUBLIC_RPC, 3.0), ("https://a.example/k1", 8.0), ("https://b.example/k2", 3.0)]
+
+
+def test_mine_hands_a_token_to_another_endpoint(tmp_path, monkeypatch):
+    for mod in (bt, hm):
+        monkeypatch.setattr(mod, "TRADE_DIR", tmp_path)
+    monkeypatch.setattr(bt, "HISTORY_OUT", tmp_path / "history.jsonl")
+    monkeypatch.setattr(hm, "HISTORY_OUT", tmp_path / "history.jsonl")
+    monkeypatch.setattr(hm, "SKIPS", tmp_path / "skips.jsonl")
+    monkeypatch.setattr(hm.time, "sleep", lambda s: None)
+    seen = []
+
+    def fake(rpc, address, t_from, t_to, max_pages=5):
+        seen.append(rpc.url)
+        if rpc.url == "pruned":                 # this endpoint has no history for the token
+            return [], {"method": "sigs", "sigs": 1, "tx_missing": 1}
+        return [tx(500_000_000, -15_000_000_000_000)], {"method": "sigs", "sigs": 1}
+
+    monkeypatch.setattr(hm, "address_transactions", fake)
+    rpcs = [type("R", (), {"errors": {}, "url": u})() for u in ("pruned", "https://full.example/k")]
+    todo = [{"m": MINT, "bc": CURVE, "t0": T}, {"m": "X2", "bc": CURVE, "t0": T + 1}]
+    n = hm.mine(rpcs, todo, 900.0, 5, log=lambda *a: None)
+    assert n == 2 and "https://full.example/k" in seen
+    assert MINT in bt.done_mints()
