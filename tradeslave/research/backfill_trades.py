@@ -31,6 +31,7 @@ from .chain import PUBLIC_RPC, Rpc, address_transactions, env_rpc, host_of, sign
 
 TRADE_DIR = DATA_DIR / "trades"
 OUT = TRADE_DIR / "backfill.jsonl"
+HISTORY_OUT = TRADE_DIR / "history.jsonl"     # written by research.history_miner (public RPC)
 VERSION = 3   # v1: launch-tx bug; v2: newer-version transactions dropped. Both ignored
 
 
@@ -167,7 +168,8 @@ def _keep_log_sample(tx: dict, trade: dict, limit: int = 400) -> None:
 
 
 def done_mints(path: Path | None = None) -> set[str]:
-    path = path or OUT
+    if path is None:
+        return done_mints(OUT) | done_mints(HISTORY_OUT)
     out = set()
     if path.exists():
         with path.open(encoding="utf-8") as fh:

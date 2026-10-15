@@ -689,6 +689,26 @@ class LiveEngine:
                 log.exception("Autopilot scheduler error; retrying later")
             await asyncio.sleep(check_every_s)
 
+    async def history_miner_loop(self, first_delay_s: float = 30.0) -> None:
+        """Keep the history miner (separate process, public RPC) running; restart it if it exits."""
+        import sys
+        await asyncio.sleep(first_delay_s)
+        proc = None
+        try:
+            while not self.stopping:
+                log.info("HISTORY MINER started (public RPC; details: logs/history_miner.log)")
+                with (LOG_DIR / "history_miner.log").open("ab") as out:
+                    proc = await asyncio.create_subprocess_exec(
+                        sys.executable, "-m", "tradeslave.research.history_miner", cwd=str(PROJECT_ROOT),
+                        stdout=out, stderr=asyncio.subprocess.STDOUT)
+                    code = await proc.wait()
+                log.warning("History miner exited (code %s); restarting in 5 min", code)
+                await asyncio.sleep(300)
+        except asyncio.CancelledError:
+            if proc is not None and proc.returncode is None:
+                proc.kill()
+            raise
+
     def _loop_exception(self, loop, context) -> None:
         # Windows closes SSL sockets noisily during Ctrl+C shutdown; that is harmless.
         if self.stopping:
@@ -709,6 +729,8 @@ class LiveEngine:
         ]
         if self.cfg.autopilot:
             tasks.append(asyncio.create_task(self.autopilot_loop(), name="autopilot"))
+        if self.cfg.history_miner:
+            tasks.append(asyncio.create_task(self.history_miner_loop(), name="history_miner"))
         try:
             await asyncio.gather(*tasks)
         finally:

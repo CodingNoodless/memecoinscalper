@@ -26,7 +26,13 @@ wallet, sign transactions, or send swaps.
 4. **Promote** only a model that made money on that unseen data AND beats the
    current champion on it. The scalper loads it within a minute
    (`SCALP_ENTRY_MODE=model`, the default). No champion = no trades.
-5. Repeat as data grows. Each cycle is logged in `data/autopilot/history.jsonl`
+5. **Mine history** (separate process, free public RPC, `logs/history_miner.log`):
+   rebuild the exact chart of every launch the bot has logged (~30k by Oct 15),
+   busiest first, into `data/trades/history.jsonl`. Training uses these charts
+   too, weighted by recency (weight halves every 3 days). Run it alone with
+   `uv run python -m tradeslave.research.history_miner`; `SCALP_HISTORY_MINER=false`
+   stops scalp.py from starting it.
+6. Repeat as data grows. Each cycle is logged in `data/autopilot/history.jsonl`
    and shown on the dashboard ("Autopilot · self-learning").
 
 ```

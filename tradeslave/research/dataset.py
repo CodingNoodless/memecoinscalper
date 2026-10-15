@@ -69,13 +69,11 @@ START_VS = 30_000_000_000            # lamports, a fresh pump.fun curve
 START_VT = 1_073_000_000_000_000     # raw token units (6 decimals)
 
 
-def load_backfill(path: Path | None = None) -> dict[str, dict]:
-    """data/trades/backfill.jsonl -> mint -> {"t0", "trades": [rows in chain order]} for fully fetched tokens."""
-    from .backfill_trades import OUT, VERSION, normalize
-    path = path or OUT
+def _read_trade_file(path: Path):
+    from .backfill_trades import VERSION, normalize
     rows, done = {}, {}
     if not path.exists():
-        return {}
+        return rows, done
     with path.open(encoding="utf-8") as fh:
         for line in fh:
             try:
@@ -87,10 +85,28 @@ def load_backfill(path: Path | None = None) -> dict[str, dict]:
                 if r is not None:
                     rows.setdefault(r["m"], []).append(r)
             elif r.get("k") == "done" and r.get("v") == VERSION:
-                done[r["m"]] = r
+                done.setdefault(r["m"], r)
+    return rows, done
+
+
+def load_backfill(path: Path | None = None) -> dict[str, dict]:
+    """Exact chain trades -> mint -> {"t0", "trades": [rows in chain order]} for fully fetched tokens.
+
+    Default: data/trades/backfill.jsonl (autopilot, Helius) and data/trades/history.jsonl
+    (history miner, public RPC). A token fetched by both is taken from the first file
+    only, so its trades are never counted twice."""
+    from .backfill_trades import OUT, HISTORY_OUT
+    paths = [path] if path is not None else [OUT, HISTORY_OUT]
+    merged_rows, merged_done = {}, {}
+    for p in paths:
+        rows, done = _read_trade_file(p)
+        for mint, d in done.items():
+            if mint not in merged_done:
+                merged_done[mint] = d
+                merged_rows[mint] = rows.get(mint, [])
     out = {}
-    for mint, d in done.items():
-        trades = sorted(rows.get(mint, []), key=lambda r: (r.get("slot") or 0, r.get("i", 0)))
+    for mint, d in merged_done.items():
+        trades = sorted(merged_rows.get(mint, []), key=lambda r: (r.get("slot") or 0, r.get("i", 0)))
         vs, vt = START_VS, START_VT
         for r in trades:                      # fill SOL amounts the transaction layout didn't expose
             if r.get("dv") is None:

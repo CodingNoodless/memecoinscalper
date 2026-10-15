@@ -28,3 +28,5 @@ scalp_trades.jsonl
 scalp_events.jsonl
 .scalper.lock
 backtests/
+.autopilot.lock
+.history_miner.lock

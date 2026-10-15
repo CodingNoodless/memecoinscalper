@@ -106,10 +106,24 @@ def _rank(y):
     return np.argsort(np.argsort(y)) / max(len(y) - 1, 1)
 
 
+HALF_LIFE_DAYS = 3.0     # older charts still teach, but the market drifts: their weight halves every 3 days
+
+
+def recency_weights(samples):
+    """Sample weights: newest token = 1, halving every HALF_LIFE_DAYS (floor 0.05)."""
+    import numpy as np
+    t0 = np.array([s.t0 for s in samples], dtype=float)
+    if not len(t0):
+        return t0
+    age_days = (t0.max() - t0) / 86400.0
+    return np.maximum(0.5 ** (age_days / HALF_LIFE_DAYS), 0.05)
+
+
 def fit(samples, policy, X=None, leaf=400, nodes=15):
     """Learns to ORDER entries by how well they'll do (rank target): robust to the fat tails."""
     X = _X(samples) if X is None else X
-    return _regressor(leaf, nodes).fit(X, _rank([s.y[policy] for s in samples]))
+    return _regressor(leaf, nodes).fit(X, _rank([s.y[policy] for s in samples]),
+                                       sample_weight=recency_weights(samples))
 
 
 def rank_ic(pred, actual) -> float:
@@ -211,11 +225,13 @@ def train_cycle(samples: list[Sample], log=print) -> tuple[Card | None, object |
     candidates = []          # (val Eval, policy, threshold, model, cols, scorer, params)
     # 1) chart reader: forecast the next 60 s, then try it with every exit policy
     f_idx = [i for i, s in enumerate(train) if s.f and 60 in s.f]
+    w_tr = recency_weights(train)
     for fs, cols in feature_sets.items():
         for leaf, nodes in GRID:
             if len(f_idx) < 2000:
                 break
-            m = _regressor(leaf, nodes).fit(cols_of(Xtr, cols)[f_idx], _rank([train[i].f[60] for i in f_idx]))
+            m = _regressor(leaf, nodes).fit(cols_of(Xtr, cols)[f_idx], _rank([train[i].f[60] for i in f_idx]),
+                                            sample_weight=w_tr[f_idx])
             p_tr, p_val = m.predict(cols_of(Xtr, cols)), m.predict(cols_of(Xval, cols))
             for policy in POLICIES:
                 for q in (0.90, 0.95, 0.98, 0.99, 0.995):

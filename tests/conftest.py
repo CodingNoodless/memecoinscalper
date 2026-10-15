@@ -10,6 +10,7 @@ TEST_SETTINGS = {
     "LLM_MODE": "off",
     "SCALP_ENTRY_MODE": "second_dip",   # rule-based tests; model mode has its own tests
     "SCALP_AUTOPILOT": "false",
+    "SCALP_HISTORY_MINER": "false",
     "PAPER_STARTING_BALANCE": "100",
     "TRADE_SIZE_USD": "50",
     "PAPER_EXECUTION_SLIPPAGE_BPS": "50",

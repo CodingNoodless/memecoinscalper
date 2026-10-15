@@ -124,6 +124,7 @@ def _sigs_then_txs(rpc: Rpc, address: str, t_from: float, t_to: float, max_pages
             options["before"] = before
         page = rpc.call("getSignaturesForAddress", [address, options])
         if page is None:
+            stats["why"] = "rpc_error"
             return None
         for item in page:
             bt = item.get("blockTime") or 0
@@ -133,6 +134,7 @@ def _sigs_then_txs(rpc: Rpc, address: str, t_from: float, t_to: float, max_pages
             break
         before = page[-1]["signature"]
     else:
+        stats["why"] = "too_many"
         return None
     stats["sigs"] = len(found)
     txs = []
