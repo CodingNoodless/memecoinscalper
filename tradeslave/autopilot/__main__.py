@@ -57,15 +57,35 @@ def cycle(args) -> int:
     _say(f"cycle start: last {cfg.autopilot_days} days")
     if env_rpc() and not args.no_backfill:
         from ..research.backfill_trades import run as backfill
+        budget_file = AUTO_DIR / "credits.json"
+        day = time.strftime("%Y-%m-%d", time.gmtime())
         try:
-            backfill(since=time.time() - cfg.autopilot_days * 86400, until=time.time() - 900, window=900.0,
-                     limit=cfg.autopilot_backfill_limit, log=lambda *a: _say(*a))
-            if cfg.autopilot_launch_sample:
+            used = json.loads(budget_file.read_text()).get(day, 0)
+        except (OSError, ValueError):
+            used = 0
+        left = cfg.autopilot_daily_credits - used
+        _say(f"Helius credits used today by backfills: ~{used} of {cfg.autopilot_daily_credits}")
+        try:
+            if left > 0:
+                backfill(since=time.time() - cfg.autopilot_days * 86400, until=time.time() - 900, window=900.0,
+                         limit=cfg.autopilot_backfill_limit, max_credits=int(left * 0.8), log=lambda *a: _say(*a))
+                used += getattr(backfill, "last_credits", 0)
+                left = cfg.autopilot_daily_credits - used
+            if cfg.autopilot_launch_sample and left > 0:
                 _say("unbiased launch sample (all launches, for launch research):")
                 backfill(since=time.time() - 2 * 86400, until=time.time() - 900, window=900.0, min_updates=0,
-                         limit=cfg.autopilot_launch_sample, sample="all", log=lambda *a: _say(*a))
+                         limit=cfg.autopilot_launch_sample, sample="all", max_credits=left,
+                         log=lambda *a: _say(*a))
+                used += getattr(backfill, "last_credits", 0)
+            if left <= 0:
+                _say("daily credit budget used up: skipping backfill until tomorrow (UTC)")
         except Exception as exc:  # noqa: BLE001 - learning continues on recorded data
             _say(f"backfill failed ({type(exc).__name__}: {exc}); continuing with what we have")
+        finally:
+            try:
+                budget_file.write_text(json.dumps({day: used}))
+            except OSError:
+                pass
     elif not args.no_backfill:
         _say("no RESEARCH_RPC_URL in .env: labels come from recorded ticks only (exact chain outcomes are better)")
     samples = load_samples(cfg, cfg.autopilot_days, log=lambda *a: _say(*a))

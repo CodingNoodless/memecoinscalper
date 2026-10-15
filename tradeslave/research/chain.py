@@ -41,6 +41,7 @@ class Rpc:
         self.url, self.min_gap, self.last = url, 1.0 / max(rps, 0.1), 0.0
         self.session = requests.Session()
         self.calls = 0
+        self.credits = 0          # Helius credit estimate: 1 per standard call, 10 per 100 txs for gTFA
         self.errors: dict[str, int] = {}
         self.gtfa: bool | None = None if "helius" in url else False   # Helius-only method, probed on first use
 
@@ -76,7 +77,13 @@ class Rpc:
                     time.sleep(2.0 * (attempt + 1))
                     continue
                 break
-            return body.get("result"), None
+            result = body.get("result")
+            if method == "getTransactionsForAddress":
+                n = len(result.get("data", [])) if isinstance(result, dict) else len(result or [])
+                self.credits += max(10, 10 * -(-n // 100))
+            else:
+                self.credits += 1
+            return result, None
         key = f"{method}:{(error or {}).get('code')}"
         self.errors[key] = self.errors.get(key, 0) + 1
         return None, error

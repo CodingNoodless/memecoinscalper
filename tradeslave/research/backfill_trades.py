@@ -189,7 +189,7 @@ def sampled_mints(tag: str = "all", path: Path | None = None) -> set[str]:
 
 
 def run(rpc_url=None, rps=None, window=900.0, min_updates=5, since=0.0, until=9e12, limit=0, max_pages=20,
-        dry_run=False, log=None, sample: str | None = None) -> int:
+        dry_run=False, log=None, sample: str | None = None, max_credits: int = 0) -> int:
     """Fetch trades for recorded tokens not yet done. Returns the number of tokens fetched."""
     log = log or (lambda *a: print(*a, flush=True))
     url = rpc_url or env_rpc() or PUBLIC_RPC
@@ -224,6 +224,9 @@ def run(rpc_url=None, rps=None, window=900.0, min_updates=5, since=0.0, until=9e
     started, trades_total, skipped, missing = time.time(), 0, 0, 0
     with OUT.open("a", encoding="utf-8") as fh:
         for n, tok in enumerate(todo, 1):
+            if max_credits and rpc.credits >= max_credits:
+                log(f"  credit budget reached (~{rpc.credits} credits); stopping at {n - 1}/{len(todo)} tokens")
+                break
             if n == 1:
                 log("  fetching the first token...")
             txs, stats = address_transactions(rpc, tok["bc"], tok["t0"] - 30, tok["t0"] + window, max_pages)
@@ -249,7 +252,8 @@ def run(rpc_url=None, rps=None, window=900.0, min_updates=5, since=0.0, until=9e
                 log(f"  {n}/{len(todo)} tokens, {trades_total} trades, {rpc.calls} calls ({stats.get('method')}), "
                       f"~{(len(todo) - n) / rate / 60:.0f} min left, {skipped} skipped, {missing} tx not returned"
                       + (f", errors {rpc.errors}" if rpc.errors else ""))
-    log(f"done: {trades_total} trades written to {OUT}")
+    log(f"done: {trades_total} trades written to {OUT} (~{rpc.credits} Helius credits)")
+    run.last_credits = rpc.credits
     return len(todo) - skipped
 
 

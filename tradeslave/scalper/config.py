@@ -141,6 +141,7 @@ class ScalpConfig:
     autopilot_days: int = 14             # train on the most recent N recorded days
     autopilot_backfill_limit: int = 600  # exact-outcome tokens fetched per cycle (needs RESEARCH_RPC_URL)
     autopilot_launch_sample: int = 300   # + random tokens from ALL launches (unbiased data for launch research)
+    autopilot_daily_credits: int = 25_000  # Helius free plan = 1M credits/month; leave room for the websocket
     model_reload_s: float = 60.0         # check for a newly promoted model this often
 
 
