@@ -25,7 +25,7 @@ from ..scalper.recorder import TICK_DIR, read_ticks
 from .features import FEATURES, features, tradeable
 
 CACHE_DIR = DATA_DIR / "autopilot" / "samples"
-CACHE_VERSION = 1
+CACHE_VERSION = 2   # 2: market heat features, feed-gap handling
 
 # Exit policies the model can choose between (net PnL incl. fees, fill delay).
 POLICIES = {
@@ -56,6 +56,14 @@ class _Snapshotter(Scalper):
         self.every_s, self.min_age, self.max_age = every_s, min_age, max_age
         self.last: dict[str, float] = {}
         self.snaps: list[tuple[str, float, float, list[float]]] = []
+        self.tainted: set[str] = set()       # tokens alive while the feed was down: their history has holes
+
+    def feed_down(self, t: float) -> None:
+        self.feed_ok = False
+        self.tainted.update(m for m, tr in self.trackers.items() if t - tr.created_at <= self.max_age + 60)
+
+    def feed_up(self, t: float) -> None:
+        self.feed_ok = True
 
     def _decide(self, tr, now):          # never trade while building data
         return
@@ -63,12 +71,12 @@ class _Snapshotter(Scalper):
     def on_curve(self, mint, t, state):
         super().on_curve(mint, t, state)
         tr = self.trackers.get(mint)
-        if tr is None or not tradeable(tr, t, self.min_age, self.max_age):
+        if tr is None or not self.feed_ok or mint in self.tainted or not tradeable(tr, t, self.min_age, self.max_age):
             return
         if t - self.last.get(mint, -1e18) < self.every_s:
             return
         self.last[mint] = t
-        self.snaps.append((mint, t, tr.created_at, features(tr, t)))
+        self.snaps.append((mint, t, tr.created_at, features(tr, t, self.heat(t))))
 
 
 def snapshot_day(path: Path, cfg: ScalpConfig, every_s=2.0, min_age=3.0, max_age=300.0):
@@ -84,10 +92,14 @@ def snapshot_day(path: Path, cfg: ScalpConfig, every_s=2.0, min_age=3.0, max_age
             snap.on_metadata(rec["m"], t, {k[2:]: v for k, v in rec.items() if k.startswith("x_")})
         elif kind in ("csell", "devsell"):
             snap.on_creator_sell(rec["m"], t)
+        elif kind == "migr":
+            snap.on_migration(t)
+        elif kind == "feed":
+            (snap.feed_up if int(rec.get("up") or 0) else snap.feed_down)(t)
         elif kind == "curve":
             snap.on_curve(rec["m"], t, CurveState(int(rec["vt"]), int(rec["vs"]), int(rec.get("rt") or 0),
                                                   int(rec.get("rs") or 0), 0, bool(int(rec.get("c") or 0))))
-    return snap.snaps
+    return [x for x in snap.snaps if x[0] not in snap.tainted]
 
 
 def build_day(path: Path, cfg: ScalpConfig, backfill: dict | None = None) -> list[Sample]:

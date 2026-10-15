@@ -171,8 +171,25 @@ def main() -> None:
         until=args.until, limit=args.limit, max_pages=args.max_pages, dry_run=args.dry_run)
 
 
+def sampled_mints(tag: str = "all", path: Path | None = None) -> set[str]:
+    """Mints drawn at random for an unbiased sample (see run(sample=...))."""
+    path = path or OUT
+    out = set()
+    if path.exists():
+        with path.open(encoding="utf-8") as fh:
+            for line in fh:
+                if '"sample"' in line:
+                    try:
+                        r = json.loads(line)
+                    except ValueError:
+                        continue
+                    if r.get("k") == "sample" and r.get("tag") == tag:
+                        out.add(r["m"])
+    return out
+
+
 def run(rpc_url=None, rps=None, window=900.0, min_updates=5, since=0.0, until=9e12, limit=0, max_pages=20,
-        dry_run=False, log=None) -> int:
+        dry_run=False, log=None, sample: str | None = None) -> int:
     """Fetch trades for recorded tokens not yet done. Returns the number of tokens fetched."""
     log = log or (lambda *a: print(*a, flush=True))
     url = rpc_url or env_rpc() or PUBLIC_RPC
@@ -180,8 +197,22 @@ def run(rpc_url=None, rps=None, window=900.0, min_updates=5, since=0.0, until=9e
     paths = sorted(TICK_DIR.glob("*.jsonl.gz"))
     toks = select_tokens(paths, since, until, min_updates)
     done = done_mints()
-    todo = [t for t in toks if t["m"] not in done]
-    if limit and len(todo) > limit:
+    if sample:
+        # Unbiased draw from ALL launches in the window (already-fetched tokens count as drawn),
+        # so launch-time research isn't skewed toward tokens that turned out active.
+        already = sampled_mints(sample)
+        pool = [t for t in toks if t["m"] not in already]
+        random.Random(int(time.time())).shuffle(pool)
+        chosen = pool[:limit] if limit else pool
+        if not dry_run and chosen:
+            TRADE_DIR.mkdir(parents=True, exist_ok=True)
+            with OUT.open("a", encoding="utf-8") as fh:
+                for t in chosen:
+                    fh.write(json.dumps({"k": "sample", "tag": sample, "m": t["m"], "t0": t["t0"]}) + "\n")
+        todo = sorted((t for t in chosen if t["m"] not in done), key=lambda t: t["t0"])
+    else:
+        todo = [t for t in toks if t["m"] not in done]
+    if not sample and limit and len(todo) > limit:
         random.Random(7).shuffle(todo)
         todo = sorted(todo[:limit], key=lambda t: t["t0"])
     log(f"{len(toks)} recorded tokens with >= {min_updates} updates; {len(done)} already done; "

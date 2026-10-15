@@ -218,3 +218,38 @@ def test_flows_report_runs_on_backfill(tmp_path, monkeypatch, capsys):
     flows.main()
     out = capsys.readouterr().out
     assert "creator wallet" in out and "copy test" in out and "d=8" in out
+
+
+def test_unbiased_sample_draws_from_all_launches(tmp_path, monkeypatch):
+    from tradeslave.scalper.recorder import TickRecorder
+    rec = TickRecorder(tmp_path)
+    s = CurveState(START_VT, START_VS)
+    for i in range(10):
+        rec.create(1791936000.0 + i, f"M{i}", "S", s, "dev", f"curve{i}")   # no curve updates: inactive
+    rec.close()
+    monkeypatch.setattr(bt, "TICK_DIR", tmp_path)
+    monkeypatch.setattr(bt, "OUT", tmp_path / "b.jsonl")
+    monkeypatch.setattr(bt, "TRADE_DIR", tmp_path)
+    fetched = []
+
+    def fake(rpc, address, t_from, t_to, max_pages=20):
+        fetched.append(address)
+        return [], {"method": "gtfa", "sigs": 0}
+
+    monkeypatch.setattr(bt, "address_transactions", fake)
+    n = bt.run(rpc_url="https://example.invalid", min_updates=0, limit=4, sample="all", log=lambda *a: None)
+    assert n == 4 and len(fetched) == 4
+    assert len(bt.sampled_mints("all", tmp_path / "b.jsonl")) == 4
+    bt.run(rpc_url="https://example.invalid", min_updates=0, limit=4, sample="all", log=lambda *a: None)
+    assert len(bt.sampled_mints("all", tmp_path / "b.jsonl")) == 8 and len(set(fetched)) == 8
+
+
+def test_launch_snipe_returns_follow_the_curve():
+    from tradeslave.research.launch_snipe import snipe_returns
+    launch = {"create": 1, "slot": 100, "dv": 1_000_000_000, "dc": -34_612_903_225_806}
+    pump = [{"slot": 100 + i, "dv": 2_000_000_000, "dc": -50_000_000_000_000} for i in range(5, 200, 5)]
+    r = snipe_returns([launch] + pump)
+    assert r[(4, 30)] > 0.5                       # bought before a steady flood of buyers
+    flat = snipe_returns([launch])
+    assert -0.05 < flat[(4, 10)] < -0.03          # nothing happens: fees + network fees only
+    assert snipe_returns([{"slot": 1, "dv": 5, "dc": -5}]) is None

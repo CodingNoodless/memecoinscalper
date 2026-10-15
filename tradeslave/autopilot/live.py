@@ -19,6 +19,7 @@ class ModelGate:
     def __init__(self, cfg: ScalpConfig, path: Path | None = None):
         self.cfg, self.path = cfg, path or CHAMPION_PKL
         self.card, self.model, self.mtime = None, None, None
+        self.heat_source = None            # set by the engine: Scalper.heat
         self.reload()
 
     @property
@@ -54,7 +55,8 @@ class ModelGate:
             return Signal(False, "model_not_proven", {})
         if not tradeable(tr, now, self.cfg.min_age_s, self.cfg.max_entry_age_s):
             return Signal(False, "outside_model_window", {})
-        x = [[v if v is not None else math.nan for v in features(tr, now)]]
+        heat = self.heat_source(now) if self.heat_source else (math.nan, math.nan)
+        x = [[v if v is not None else math.nan for v in features(tr, now, heat)]]
         pred = float(self.model.predict(x)[0])
         if pred < self.card.threshold:
             return Signal(False, "model_says_no", {})

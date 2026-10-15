@@ -65,6 +65,10 @@ class TickRecorder:
     def migration(self, t, mint, fields: dict) -> None:
         self.write({"k": "migr", "t": round(t, 3), "m": mint, **{f"x_{k}": v for k, v in fields.items()}})
 
+    def feed(self, t, up: bool, source: str = "rpc") -> None:
+        """The curve feed went up or down. Data recorded while it was down is incomplete."""
+        self.write({"k": "feed", "t": round(t, 3), "src": source, "up": int(bool(up))})
+
     def creator_sell(self, t, mint) -> None:
         """The creator wallet sold something (not necessarily this token)."""
         self.write({"k": "csell", "t": round(t, 3), "m": mint})

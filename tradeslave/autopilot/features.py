@@ -20,6 +20,7 @@ FEATURES = [
     "quiet", "since_sell", "chg5", "chg10", "chg30",
     "early_supply", "dev_supply", "dev_buy_sol", "creator_launches", "creator_sells",
     "twitter_reuse", "desc_len", "has_website", "has_telegram", "hour_sin", "hour_cos",
+    "launches_10m", "graduations_1h",
 ] + [f"social_{k}" for k in SOCIAL_KINDS]
 
 
@@ -37,7 +38,7 @@ def _truthy(v) -> bool:
     return v not in (None, "", "None", False, "False", 0, "0")
 
 
-def features(tr: TokenTracker, now: float) -> list[float]:
+def features(tr: TokenTracker, now: float, heat: tuple[float, float] = (math.nan, math.nan)) -> list[float]:
     ticks = tr.ticks
     price = tr.price
     launch = tr.launch_price or price or 1e-18
@@ -81,6 +82,7 @@ def features(tr: TokenTracker, now: float) -> list[float]:
         float(tr.twitter_reuse), float(s.get("desc_len") or 0) if str(s.get("desc_len", "0")).isdigit() else 0.0,
         float(_truthy(s.get("website"))), float(_truthy(s.get("telegram"))),
         math.sin(2 * math.pi * hour / 24), math.cos(2 * math.pi * hour / 24),
+        heat[0], heat[1],
     ] + [1.0 if kind == k else 0.0 for k in SOCIAL_KINDS]
     return vals
 

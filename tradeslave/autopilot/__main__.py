@@ -60,6 +60,10 @@ def cycle(args) -> int:
         try:
             backfill(since=time.time() - cfg.autopilot_days * 86400, until=time.time() - 900, window=900.0,
                      limit=cfg.autopilot_backfill_limit, log=lambda *a: _say(*a))
+            if cfg.autopilot_launch_sample:
+                _say("unbiased launch sample (all launches, for launch research):")
+                backfill(since=time.time() - 2 * 86400, until=time.time() - 900, window=900.0, min_updates=0,
+                         limit=cfg.autopilot_launch_sample, sample="all", log=lambda *a: _say(*a))
         except Exception as exc:  # noqa: BLE001 - learning continues on recorded data
             _say(f"backfill failed ({type(exc).__name__}: {exc}); continuing with what we have")
     elif not args.no_backfill:

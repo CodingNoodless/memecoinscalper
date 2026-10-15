@@ -118,7 +118,11 @@ class ScalpConfig:
 
     # --- infrastructure --------------------------------------------------
     pumpportal_ws: str = "wss://pumpportal.fun/api/data"
-    rpc_ws: str = "wss://api.mainnet-beta.solana.com"
+    # "" = auto: SCALP_RPC_WS if set, else the Helius websocket derived from
+    # RESEARCH_RPC_URL (free plan, far steadier), else the public endpoint below.
+    rpc_ws: str = ""
+    rpc_ws_fallback: str = "wss://api.mainnet-beta.solana.com"
+    rpc_max_backoff_s: float = 30.0    # longest wait between reconnects (data is lost while down)
     rpc_subs_per_s: float = 4.0        # pace subscribe requests (public RPC rate-limits bursts)
     rpc_rate_limit_backoff_s: float = 60.0
     rpc_stable_after_s: float = 60.0   # a connection must last this long before backoff resets
@@ -136,6 +140,7 @@ class ScalpConfig:
     autopilot_every_h: float = 6.0       # hours between learning cycles
     autopilot_days: int = 14             # train on the most recent N recorded days
     autopilot_backfill_limit: int = 600  # exact-outcome tokens fetched per cycle (needs RESEARCH_RPC_URL)
+    autopilot_launch_sample: int = 300   # + random tokens from ALL launches (unbiased data for launch research)
     model_reload_s: float = 60.0         # check for a newly promoted model this often
 
 

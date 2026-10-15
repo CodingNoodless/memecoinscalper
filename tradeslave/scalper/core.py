@@ -6,6 +6,7 @@ per token, asks the strategy what to do and routes orders to the paper book.
 
 from __future__ import annotations
 
+import bisect
 from typing import Callable
 
 from .book import PaperBook
@@ -24,6 +25,9 @@ class Scalper:
         self.creator_history: dict[str, list[tuple[float, str]]] = {}   # creator -> [(t, mint)]
         self.twitter_links: dict[str, int] = {}                          # normalised link -> uses
         self.entry_block_reasons: dict[str, int] = {}
+        self.feed_ok = True                                # curve feed connected (no entries while it's down)
+        self.create_times: list[float] = []                # market heat: recent launches (time order)
+        self.migration_times: list[float] = []             # market heat: recent graduations
         self.model = None                                  # autopilot champion (entry_mode="model")
         self.position_policy: dict[str, dict] = {}         # mint -> exit policy of a model trade
 
@@ -31,6 +35,7 @@ class Scalper:
     def on_create(self, mint: str, symbol: str, t: float, state: CurveState | None,
                   creator: str = "", curve_key: str = "", initial_buy_sol: float = 0.0,
                   dev_tokens: float = 0.0, mayhem: bool = False) -> TokenTracker:
+        self._remember(self.create_times, t)
         tr = TokenTracker(mint=mint, symbol=symbol, created_at=t, creator=creator,
                           curve_key=curve_key, initial_buy_sol=initial_buy_sol,
                           dev_tokens=dev_tokens, mayhem=mayhem)
@@ -47,6 +52,24 @@ class Scalper:
                 if other_tr is not None:
                     other_tr.creator_launches = len(history)
         return tr
+
+    @staticmethod
+    def _remember(times: list[float], t: float, keep_s: float = 3600.0) -> None:
+        if times and t < times[-1]:
+            bisect.insort(times, t)
+        else:
+            times.append(t)
+        if len(times) > 4096 and times[0] < t - keep_s:
+            del times[:bisect.bisect_left(times, t - keep_s)]
+
+    def on_migration(self, t: float) -> None:
+        self._remember(self.migration_times, t)
+
+    def heat(self, now: float) -> tuple[float, float]:
+        """(launches in the last 10 min, graduations in the last hour): how hot the market is."""
+        def count(times, window):
+            return bisect.bisect_right(times, now) - bisect.bisect_left(times, now - window)
+        return float(count(self.create_times, 600)), float(count(self.migration_times, 3600))
 
     def on_metadata(self, mint: str, t: float, socials: dict) -> None:
         """Socials arrived for a token. Copycats re-using an earlier token's
@@ -134,7 +157,9 @@ class Scalper:
                 self.book.request_sell(tr, now, signal.reason, signal.details)
             return
         self.position_policy.pop(tr.mint, None)           # flat: forget the last trade's exits
-        if self.cfg.entry_mode == "model":
+        if not self.feed_ok:
+            signal = Signal(False, "feed_down", {})
+        elif self.cfg.entry_mode == "model":
             signal = self.model.entry(tr, now) if self.model is not None else Signal(False, "no_model_yet", {})
         else:
             signal = entry_signal(tr, now, self.cfg)

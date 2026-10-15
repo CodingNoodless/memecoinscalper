@@ -71,6 +71,7 @@ class LiveEngine:
         if cfg.entry_mode == "model":
             from ..autopilot.live import ModelGate
             self.scalper.model = ModelGate(cfg)
+            self.scalper.model.heat_source = self.scalper.heat
         self._restore_balance()
 
     # --- persistence --------------------------------------------------------
@@ -255,6 +256,7 @@ class LiveEngine:
             return
         if tx != "create" and isinstance(msg.get("mint"), str) and ("pool" in msg or tx == "migrate"):
             self.stats["migrations"] += 1
+            self.scalper.on_migration(time.time())
             self._sample("pumpportal_migration", raw)
             if self.recorder:
                 self.recorder.migration(time.time(), msg["mint"], {k: v for k, v in msg.items()
@@ -395,13 +397,30 @@ class LiveEngine:
         except Exception:
             pass
 
+    def rpc_endpoints(self) -> list[str]:
+        """Websocket endpoints in order of preference (see ScalpConfig.rpc_ws)."""
+        first = self.cfg.rpc_ws or os.environ.get("SCALP_RPC_WS", "")
+        if not first:
+            from ..research.chain import env_rpc
+            research = env_rpc() or ""
+            if "helius" in research:
+                first = research.replace("https://", "wss://").replace("http://", "ws://")
+        out = [u for u in (first, self.cfg.rpc_ws_fallback) if u]
+        return list(dict.fromkeys(out))
+
     async def rpc_loop(self, websockets) -> None:
+        from ..research.chain import host_of
         backoff = 1.0
+        endpoints = self.rpc_endpoints()
+        current = 0
+        quick_failures = 0
         while not self.stopping:
             connected_at = None
             rate_limited = False
+            url = endpoints[current % len(endpoints)]
+            error = ""
             try:
-                async with websockets.connect(self.cfg.rpc_ws, ping_interval=20, ping_timeout=20,
+                async with websockets.connect(url, ping_interval=30, ping_timeout=60, close_timeout=5,
                                               max_size=2**22) as ws:
                     self.rpc_ws = ws
                     self.pending.clear()
@@ -412,7 +431,10 @@ class LiveEngine:
                     self.rpc_ready.set()
                     connected_at = time.monotonic()
                     self.last_curve_msg = time.time()
-                    log.info("Solana RPC connected (%s); resubscribing %d curves", self.cfg.rpc_ws, len(self.watch))
+                    log.info("Solana RPC connected (%s); resubscribing %d curves", host_of(url), len(self.watch))
+                    self.scalper.feed_ok = True
+                    if self.recorder:
+                        self.recorder.feed(time.time(), True)
                     for mint, curve_key in list(self.watch.items()):
                         await self._subscribe_curve(mint, curve_key)
                     if self.cfg.watch_creator:
@@ -425,21 +447,34 @@ class LiveEngine:
                 raise
             except Exception as exc:
                 self.stats["rpc_reconnects"] += 1
+                error = f"{type(exc).__name__}: {str(exc)[:160]}"
                 rate_limited = "rate limit" in str(exc).lower() or "1013" in str(exc)
                 if rate_limited:
                     self.stats["rate_limited"] += 1
             finally:
                 self.rpc_ready.clear()
                 self.rpc_ws = None
-            stable = connected_at is not None and time.monotonic() - connected_at >= self.cfg.rpc_stable_after_s
+                if self.scalper.feed_ok:
+                    self.scalper.feed_ok = False
+                    if self.recorder:
+                        self.recorder.feed(time.time(), False)
+            lasted = time.monotonic() - connected_at if connected_at is not None else 0.0
+            stable = lasted >= self.cfg.rpc_stable_after_s
             if stable:
-                backoff = 1.0          # only a connection that held up resets the backoff
+                backoff, quick_failures = 1.0, 0     # only a connection that held up resets the backoff
+            else:
+                quick_failures += 1
+            if quick_failures >= 2 and len(endpoints) > 1:
+                current += 1                         # this endpoint keeps dropping us: try the next one
+                quick_failures = 0
+                backoff = 1.0
             if rate_limited:
-                backoff = max(backoff, self.cfg.rpc_rate_limit_backoff_s)
-            log.warning("RPC connection lost%s; reconnecting in %.0fs", " (rate limited by the RPC)" if rate_limited else "",
-                        backoff)
+                backoff = max(backoff, min(self.cfg.rpc_rate_limit_backoff_s, self.cfg.rpc_max_backoff_s))
+            log.warning("RPC connection to %s lost after %.0fs%s (%s); reconnecting to %s in %.0fs", host_of(url),
+                        lasted, " (rate limited)" if rate_limited else "", error or "closed",
+                        host_of(endpoints[current % len(endpoints)]), backoff)
             await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, 300.0)
+            backoff = min(backoff * 2, self.cfg.rpc_max_backoff_s)
 
     def _on_rpc(self, raw: str) -> None:
         try:

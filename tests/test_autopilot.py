@@ -58,7 +58,7 @@ def test_training_snapshots_match_what_the_live_bot_sees(tmp_path):
     for dt, st in states:
         if T0 + dt <= t:
             live.on_curve("X", T0 + dt, st)
-    y = F.features(live.trackers["X"], t)
+    y = F.features(live.trackers["X"], t, live.heat(t))
     assert len(x) == len(F.FEATURES)
     assert all((u == v) or (math.isnan(u) and math.isnan(v)) for u, v in zip(x, y))
 
@@ -168,3 +168,38 @@ def test_live_engine_in_model_mode_has_a_gate_and_reports_status(monkeypatch, tm
     monkeypatch.setattr(live, "CHAMPION_PKL", tmp_path / "none.pkl")
     eng = LiveEngine(mcfg(record_ticks=False))
     assert eng.scalper.model is not None and "learning" in eng.scalper.model.status
+
+
+def test_market_heat_and_feed_gaps(tmp_path):
+    s = Scalper(mcfg())
+    for i in range(5):
+        s.on_create(f"T{i}", "T", T0 + i * 100, None)
+    s.on_migration(T0 + 10)
+    s.on_migration(T0 - 4000)                                  # older than an hour: not counted
+    assert s.heat(T0 + 450) == (5.0, 1.0)
+    assert s.heat(T0 + 900) == (2.0, 1.0)                      # launches before T0+300 left the 10-min window
+    # tokens alive while the feed was down are dropped from training data
+    rec = TickRecorder(tmp_path)
+    m1, m2 = Market(), Market()
+    rec.create(T0, "A", "A", m1.move(1.0), "dev", "c", 0.5, 1, False)
+    rec.create(T0, "B", "B", m2.move(1.0), "dev", "c", 0.5, 1, False)
+    for i in range(1, 30):
+        rec.curve(T0 + i, "A", m1.move(1.01))
+    rec.feed(T0 + 31, False)
+    rec.feed(T0 + 90, True)
+    rec.create(T0 + 100, "C", "C", Market().move(1.0), "dev", "c", 0.5, 1, False)
+    m3 = Market()
+    for i in range(1, 30):
+        rec.curve(T0 + 100 + i, "C", m3.move(1.01))
+    rec.close()
+    snaps = S.snapshot_day(next(tmp_path.glob("*.jsonl.gz")), mcfg())
+    assert {x[0] for x in snaps} == {"C"}
+
+
+def test_engine_prefers_helius_websocket(monkeypatch):
+    from tradeslave.scalper.engine import LiveEngine
+    monkeypatch.setenv("RESEARCH_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=abc")
+    eng = LiveEngine(mcfg(record_ticks=False, entry_mode="second_dip"))
+    assert eng.rpc_endpoints() == ["wss://mainnet.helius-rpc.com/?api-key=abc", "wss://api.mainnet-beta.solana.com"]
+    eng2 = LiveEngine(mcfg(record_ticks=False, entry_mode="second_dip", rpc_ws="wss://x.example"))
+    assert eng2.rpc_endpoints()[0] == "wss://x.example"
