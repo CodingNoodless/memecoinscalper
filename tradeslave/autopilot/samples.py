@@ -18,7 +18,7 @@ from pathlib import Path
 from ..paths import DATA_DIR
 import numpy as np
 
-from ..research.dataset import load_backfill, load_tokens, slot_ticks, token_from_ticks
+from ..research.dataset import SLOT_S, load_backfill, load_tokens, slot_ticks, token_from_ticks
 from ..research.sim import simulate
 from ..scalper.config import ScalpConfig
 from ..scalper.core import Scalper
@@ -27,7 +27,7 @@ from ..scalper.recorder import TICK_DIR, read_ticks
 from .features import FEATURES, features, tradeable
 
 CACHE_DIR = DATA_DIR / "autopilot" / "samples"
-CACHE_VERSION = 3   # 3: chart sequence, exact charts from chain data, forecast targets
+CACHE_VERSION = 4   # 4: wallet features (trade events)
 
 # Exit policies the model can choose between (net PnL incl. fees, fill delay).
 POLICIES = {
@@ -40,6 +40,7 @@ POLICIES = {
 }
 
 
+WALLET_FEED_DELAY_S = 1.0
 HORIZONS = (10, 30, 60, 120)   # seconds ahead the model learns to forecast (chart-reading skill)
 
 
@@ -105,8 +106,16 @@ def _records_with_exact_charts(path: Path, exact: dict):
             created[rec["m"]] = float(rec["t"])
         records.append(rec)
     for mint, t_seen in created.items():
-        for t, vs, vt in slot_ticks(exact[mint]["trades"], t_seen):
+        trades = exact[mint]["trades"]
+        for t, vs, vt in slot_ticks(trades, t_seen):
             records.append({"k": "curve", "t": t, "m": mint, "vs": vs, "vt": vt, "c": 0, "exact": 1})
+        s0 = trades[0].get("slot") or 0 if trades else 0
+        for r in trades:      # wallet trades, as the live trade-event feed would see them
+            t = t_seen + ((r.get("slot") or s0) - s0) * SLOT_S
+            if t < t_seen + WALLET_FEED_DELAY_S:
+                continue      # live, the logs subscription starts ~1 s after the launch is seen
+            records.append({"k": "trade", "t": t + 0.001, "m": mint, "w": r.get("w"), "b": int(int(r["dv"]) > 0),
+                            "sol": abs(int(r["dv"])) / 1e9, "tok": abs(int(r["dc"])) / 1e6, "exact": 1})
     records.sort(key=lambda r: float(r.get("t") or 0))
     return records, created
 
@@ -128,6 +137,11 @@ def snapshot_day(path: Path, cfg: ScalpConfig, every_s=2.0, min_age=3.0, max_age
             snap.on_creator_sell(rec["m"], t)
         elif kind == "migr":
             snap.on_migration(t)
+        elif kind == "trade" and rec.get("w"):
+            if rec.get("m") in snap.exact_mints and not rec.get("exact"):
+                continue          # live-recorded duplicate of an exact token: keep one source
+            snap.on_trade(rec["m"], t, rec["w"], bool(int(rec.get("b") or 0)), float(rec.get("sol") or 0),
+                          float(rec.get("tok") or 0) * 1e6)
         elif kind == "feed":
             if not snap.markers:
                 snap.first_marker_t = t

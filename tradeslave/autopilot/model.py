@@ -208,7 +208,7 @@ def clean_only(samples: list[Sample], log=print) -> list[Sample]:
 
 def train_cycle(samples: list[Sample], log=print) -> tuple[Card | None, object | None, dict]:
     import numpy as np
-    from .features import BASE
+    from .features import BASE, CHART
     samples = clean_only(samples, log)
     train, val, hold = split(samples)
     info = {"n_samples": len(samples), "n_train": len(train), "n_val": len(val), "n_holdout": len(hold)}
@@ -217,7 +217,7 @@ def train_cycle(samples: list[Sample], log=print) -> tuple[Card | None, object |
         return None, None, info
     Xtr, Xval, Xhold = _X(train), _X(val), _X(hold)
     info["chart_skill"] = chart_skill(train, hold, Xtr, Xhold, log=log)
-    feature_sets = {"all": None, "chart": list(range(len(BASE), len(FEATURES)))}
+    feature_sets = {"all": None, "chart": list(range(len(BASE), len(BASE) + len(CHART)))}
 
     def cols_of(X, cols):
         return X if cols is None else X[:, cols]

@@ -131,6 +131,8 @@ class ScalpConfig:
     # --- wallet-level data (who buys/sells) --------------------------------
     # PumpPortal token-trade stream: needs PUMPPORTAL_API_KEY with a funded linked
     # wallet; billed 0.01 SOL per 10,000 messages. Off by default; capped per day.
+    wallet_feed: bool = True      # logsSubscribe per watched curve -> pump.fun trade events with wallets
+    wallet_feed_max_mb_per_day: float = 1000.0   # Helius bills 20 credits/MB: 1,000 MB = 20k credits/day cap
     trade_feed: bool = False
     trade_feed_max_events_per_day: int = 50_000   # ~0.05 SOL/day at PumpPortal's price
     record_migrations: bool = True                # free: tokens graduating to PumpSwap
@@ -141,7 +143,7 @@ class ScalpConfig:
     autopilot_days: int = 14             # train on the most recent N recorded days
     autopilot_backfill_limit: int = 600  # exact-outcome tokens fetched per cycle (needs RESEARCH_RPC_URL)
     autopilot_launch_sample: int = 300   # + random tokens from ALL launches (unbiased data for launch research)
-    autopilot_daily_credits: int = 30_000  # Helius free plan = 1M credits/month; leave room for the websocket
+    autopilot_daily_credits: int = 8_000   # the wallet feed (logs) also uses credits; history comes from the free miner  # Helius free plan = 1M credits/month; leave room for the websocket
     model_reload_s: float = 60.0         # check for a newly promoted model this often
     history_miner: bool = True           # background process: exact charts of logged launches via the free public RPC
 

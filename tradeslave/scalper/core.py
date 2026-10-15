@@ -62,6 +62,12 @@ class Scalper:
         if len(times) > 4096 and times[0] < t - keep_s:
             del times[:bisect.bisect_left(times, t - keep_s)]
 
+    def on_trade(self, mint: str, t: float, wallet: str, is_buy: bool, sol: float, tokens_raw: float) -> None:
+        """A trade with its wallet (live trade-event logs / exact chain data). Curve updates still drive decisions."""
+        tr = self.trackers.get(mint)
+        if tr is not None:
+            tr.on_trade(t, wallet, is_buy, sol, tokens_raw)
+
     def on_migration(self, t: float) -> None:
         self._remember(self.migration_times, t)
 

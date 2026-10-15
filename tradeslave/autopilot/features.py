@@ -31,7 +31,11 @@ LONG_BINS, LONG_STEP = 10, 30.0
 CHART = ([f"c{i}_{ch}" for i in range(SEQ_BINS) for ch in ("ret", "buy", "sell", "n")]
          + [f"l{i}_{ch}" for i in range(LONG_BINS) for ch in ("ret", "net")])
 BASE = list(FEATURES)
-FEATURES = BASE + CHART
+# Who is trading (pump.fun trade events): breadth of buyers, concentration, bots, the dev.
+WALLET = ["w_trades", "w_buyers", "w_sellers", "w_unique_ratio", "w_avg_buy", "w_med_buy", "w_big_buys",
+          "w_holders", "w_top1", "w_top5", "w_dev_sold_frac", "w_bot_share", "w_buyers_30s", "w_sellers_30s",
+          "w_buy_sol_30s", "w_new_buyers_30s"]
+FEATURES = BASE + CHART + WALLET
 
 
 def _social_kind(tr: TokenTracker) -> str:
@@ -94,7 +98,7 @@ def features(tr: TokenTracker, now: float, heat: tuple[float, float] = (math.nan
         math.sin(2 * math.pi * hour / 24), math.cos(2 * math.pi * hour / 24),
         heat[0], heat[1],
     ] + [1.0 if kind == k else 0.0 for k in SOCIAL_KINDS]
-    return vals + chart(tr, now)
+    return vals + chart(tr, now) + wallet_features(tr, now)
 
 
 def chart(tr: TokenTracker, now: float) -> list[float]:
@@ -143,6 +147,30 @@ def chart(tr: TokenTracker, now: float) -> list[float]:
         return out
 
     return binned(SEQ_BINS, SEQ_STEP, 4) + binned(LONG_BINS, LONG_STEP, 2)
+
+
+def wallet_features(tr: TokenTracker, now: float) -> list[float]:
+    if not tr.wallet_seen:
+        return [math.nan] * len(WALLET)
+    n = max(tr.w_trades, 1)
+    sizes = sorted(tr.w_buy_sizes)
+    held = sorted((v for w, v in tr.w_positions.items() if v > 0 and w != tr.creator), reverse=True)
+    total_held = sum(held) or 1.0
+    bots = sum(c for c in tr.w_counts.values() if c >= 4)
+    recent = [r for r in tr.w_recent if r[0] >= now - 30]
+    first_seen: dict = {}
+    for t, w, buy, _ in tr.w_recent:
+        first_seen.setdefault(w, t)
+    return [
+        float(tr.w_trades), float(len(tr.w_buyers)), float(len(tr.w_sellers)), len(tr.w_counts) / n,
+        sum(sizes) / len(sizes) if sizes else 0.0, sizes[len(sizes) // 2] if sizes else 0.0,
+        float(sum(1 for x in sizes if x >= 1.0)), float(len(held)),
+        held[0] / total_held if held else 0.0, sum(held[:5]) / total_held if held else 0.0,
+        (tr.dev_sold_tokens / tr.dev_tokens) if tr.dev_tokens else 0.0, bots / n,
+        float(len({w for _, w, b, _ in recent if b})), float(len({w for _, w, b, _ in recent if not b})),
+        sum(s for _, _, b, s in recent if b) - sum(s for _, _, b, s in recent if not b),
+        float(sum(1 for w, t in first_seen.items() if t >= now - 30)),
+    ]
 
 
 def tradeable(tr: TokenTracker, now: float, min_age: float, max_age: float) -> bool:

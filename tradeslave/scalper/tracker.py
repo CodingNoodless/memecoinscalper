@@ -65,6 +65,16 @@ class TokenTracker:
     sd_h2_t: float = 0.0
     sd_invalid_reason: str = ""
     sd_setup_t: float | None = None     # first time the second dip entered the buy zone
+    # wallet-level book from pump.fun trade events (live logs, or exact chain data in training)
+    wallet_seen: bool = False
+    w_trades: int = 0
+    w_positions: dict = field(default_factory=dict)      # wallet -> net tokens (raw units)
+    w_counts: dict = field(default_factory=dict)         # wallet -> number of trades
+    w_buyers: set = field(default_factory=set)
+    w_sellers: set = field(default_factory=set)
+    w_buy_sizes: list = field(default_factory=list)      # SOL per buy
+    w_recent: deque = field(default_factory=lambda: deque(maxlen=2000))   # (t, wallet, is_buy, sol)
+    dev_sold_tokens: float = 0.0
     socials: dict | None = None         # parsed metadata; None until fetched
     twitter_reuse: int = 0              # earlier tokens that used the same Twitter link
 
@@ -149,3 +159,22 @@ class TokenTracker:
         if at_cutoff is None:
             return None
         return max(0.0, (CURVE_START_VIRTUAL_TOKENS - at_cutoff.virtual_tokens) / TOTAL_SUPPLY_TOKENS)
+
+    def on_trade(self, t: float, wallet: str, is_buy: bool, sol: float, tokens_raw: float) -> None:
+        """One trade with its wallet (see trade_events). Positions start from the dev's launch buy."""
+        if not self.wallet_seen:
+            self.wallet_seen = True
+            if self.creator and self.dev_tokens:
+                self.w_positions.setdefault(self.creator, self.dev_tokens * TOKEN_UNIT)
+        self.w_trades += 1
+        self.w_counts[wallet] = self.w_counts.get(wallet, 0) + 1
+        if is_buy:
+            self.w_buyers.add(wallet)
+            self.w_buy_sizes.append(sol)
+            self.w_positions[wallet] = self.w_positions.get(wallet, 0.0) + tokens_raw
+        else:
+            self.w_sellers.add(wallet)
+            self.w_positions[wallet] = self.w_positions.get(wallet, 0.0) - tokens_raw
+            if wallet == self.creator:
+                self.dev_sold_tokens += tokens_raw / TOKEN_UNIT
+        self.w_recent.append((t, wallet, is_buy, sol))

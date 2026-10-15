@@ -30,6 +30,7 @@ from .curve import GRADUATED, decode_bonding_curve, decode_failure_reason, state
 from .recorder import TickRecorder
 from .socials import fetch_metadata, parse_socials
 from .strategy import entry_signal, safety_block
+from .trade_events import parse_trade_events
 
 log = logging.getLogger("scalper")
 RAW_SAMPLE_LIMIT = 10   # per message kind
@@ -49,6 +50,9 @@ class LiveEngine:
         self.mint_by_curve_sub: dict[int, str] = {}
         self.creator_sub: dict[str, int] = {}              # creator -> subscription
         self.creator_by_sub: dict[int, str] = {}
+        self.wlog_sub: dict[str, int] = {}                 # mint -> trade-event logs subscription
+        self.mint_by_wlog_sub: dict[int, str] = {}
+        self.wlog_day, self.wlog_mb_today, self.wallet_feed_paused = "", 0.0, False
         self.creator_mints: dict[str, set[str]] = {}       # creator -> watched mints
         self.watch: dict[str, str] = {}                    # mint -> curve account
         self.pp_ws = None
@@ -58,7 +62,7 @@ class LiveEngine:
         self.trade_feed_paused = False
         self.stats = {"created_seen": 0, "skipped_full": 0, "skipped_filter": 0, "curve_msgs": 0,
                       "trade_events": 0, "migrations": 0, "decode_fail": 0, "graduated": 0, "closed_accounts": 0, "rate_limited": 0, "stall_reconnects": 0, "meta_ok": 0, "meta_fail": 0, "with_twitter": 0, "handler_errors": 0, "creator_msgs": 0, "creator_sell_logs": 0, "dev_sells": 0, "pp_reconnects": 0,
-                      "rpc_reconnects": 0, "sub_errors": 0}
+                      "rpc_reconnects": 0, "sub_errors": 0, "wallet_events": 0}
         self.raw_samples: dict[str, int] = {}
         self.decode_fail_reasons: dict[str, int] = {}
         self.meta_slots = asyncio.Semaphore(6)
@@ -304,6 +308,8 @@ class LiveEngine:
         if self.rpc_ready.is_set():
             loop = asyncio.get_running_loop()
             loop.create_task(self._subscribe_curve(mint, curve_key))
+            if self.cfg.wallet_feed and not self.wallet_feed_paused:
+                loop.create_task(self._subscribe_wallet_logs(mint, curve_key))
             if self._trade_feed_on():
                 loop.create_task(self._trade_sub(mint))
             if creator and self.cfg.watch_creator:
@@ -362,6 +368,16 @@ class LiveEngine:
                                        "params": [curve_key, {"encoding": "base64", "commitment": "processed"}]}):
             self.pending.pop(request_id, None)
 
+    async def _subscribe_wallet_logs(self, mint: str, curve_key: str) -> None:
+        """Every transaction on this token's curve, with pump.fun's trade event (wallet, side, amounts)."""
+        if mint not in self.watch:
+            return
+        request_id = self._request_id()
+        self.pending[request_id] = ("wlogs", mint)
+        if not await self._paced_send({"jsonrpc": "2.0", "id": request_id, "method": "logsSubscribe",
+                                       "params": [{"mentions": [curve_key]}, {"commitment": "processed"}]}):
+            self.pending.pop(request_id, None)
+
     async def _subscribe_creator(self, creator: str, mint: str) -> None:
         mints = self.creator_mints.setdefault(creator, set())
         mints.add(mint)
@@ -376,6 +392,11 @@ class LiveEngine:
     async def _unsubscribe(self, mint: str) -> None:
         self.watch.pop(mint, None)
         await self._trade_unsub([mint])
+        wsub = self.wlog_sub.pop(mint, None)
+        if wsub is not None:
+            self.mint_by_wlog_sub.pop(wsub, None)
+            await self._safe_send({"jsonrpc": "2.0", "id": self._request_id(), "method": "logsUnsubscribe",
+                                   "params": [wsub]})
         sub = self.curve_sub.pop(mint, None)
         if sub is not None:
             self.mint_by_curve_sub.pop(sub, None)
@@ -429,6 +450,8 @@ class LiveEngine:
                     self.mint_by_curve_sub.clear()
                     self.creator_sub.clear()
                     self.creator_by_sub.clear()
+                    self.wlog_sub.clear()
+                    self.mint_by_wlog_sub.clear()
                     self.rpc_ready.set()
                     connected_at = time.monotonic()
                     self.last_curve_msg = time.time()
@@ -438,6 +461,8 @@ class LiveEngine:
                         self.recorder.feed(time.time(), True)
                     for mint, curve_key in list(self.watch.items()):
                         await self._subscribe_curve(mint, curve_key)
+                        if self.cfg.wallet_feed:
+                            await self._subscribe_wallet_logs(mint, curve_key)
                     if self.cfg.watch_creator:
                         for creator, mints in list(self.creator_mints.items()):
                             for mint in list(mints):
@@ -490,7 +515,19 @@ class LiveEngine:
         if method == "accountNotification":
             self._on_curve_notification(params, raw)
         elif method == "logsNotification":
-            self._on_creator_logs(params)
+            if params.get("subscription") in self.mint_by_wlog_sub:
+                self.stats["wallet_log_mb"] = round(self.stats.get("wallet_log_mb", 0.0) + len(raw) / 1e6, 3)
+                day = time.strftime("%Y-%m-%d", time.gmtime())
+                if day != self.wlog_day:
+                    self.wlog_day, self.wlog_mb_today, self.wallet_feed_paused = day, 0.0, False
+                self.wlog_mb_today += len(raw) / 1e6
+                if not self.wallet_feed_paused and self.wlog_mb_today > self.cfg.wallet_feed_max_mb_per_day:
+                    self.wallet_feed_paused = True
+                    log.warning("Wallet feed hit its daily data cap (%.0f MB): no new wallet subscriptions until "
+                                "00:00 UTC", self.cfg.wallet_feed_max_mb_per_day)
+                self._on_wallet_logs(params)
+            else:
+                self._on_creator_logs(params)
 
     def _on_subscribe_reply(self, msg: dict) -> None:
         kind, key = self.pending.pop(msg["id"])
@@ -502,6 +539,14 @@ class LiveEngine:
                 self.scalper.forget(key)
             return
         sub = msg.get("result")
+        if kind == "wlogs":
+            if key in self.watch:
+                self.wlog_sub[key] = sub
+                self.mint_by_wlog_sub[sub] = key
+            else:
+                asyncio.get_running_loop().create_task(self._safe_send(
+                    {"jsonrpc": "2.0", "id": 0, "method": "logsUnsubscribe", "params": [sub]}))
+            return
         if kind == "curve":
             if key in self.watch:
                 self.curve_sub[key] = sub
@@ -553,6 +598,23 @@ class LiveEngine:
         if self.recorder:
             self.recorder.curve(now, mint, state, (result.get("context") or {}).get("slot"))
         self.scalper.on_curve(mint, now, state)
+
+    def _on_wallet_logs(self, params: dict) -> None:
+        mint = self.mint_by_wlog_sub.get(params.get("subscription"))
+        if mint is None:
+            return
+        value = (params.get("result") or {}).get("value") or {}
+        if value.get("err") is not None:
+            return
+        now = time.time()
+        for ev in parse_trade_events(value.get("logs") or []):
+            if ev["mint"] != mint:
+                continue
+            self.stats["wallet_events"] += 1
+            if self.recorder:
+                self.recorder.trade(now, mint, ev["user"], ev["buy"], ev["sol"] / 1e9, ev["tok"] / 1e6,
+                                    ev["vs"], ev["vt"], value.get("signature"))
+            self.scalper.on_trade(mint, now, ev["user"], ev["buy"], ev["sol"] / 1e9, float(ev["tok"]))
 
     def _on_creator_logs(self, params: dict) -> None:
         creator = self.creator_by_sub.get(params.get("subscription"))
@@ -642,7 +704,7 @@ class LiveEngine:
             "STATUS up=%.0fm watched=%d open=%d balance=%.4f equity=%.4f | trades=%d wins=%d (%.0f%%) "
             "avg=%+.2f%% pnl=%+.4f SOL fees=%.4f failed_tx=%d | new_tokens=%d curve_msgs=%d decode_fail=%d "
             "dev_sells=%d (creator sell logs %d) graduated=%d closed=%d rate_limited=%d errors=%d skipped_full=%d | metadata ok=%d fail=%d "
-            "twitter=%d wallet_trades=%d migrations=%d | top_entry_blocks=%s",
+            "twitter=%d wallet_trades=%d migrations=%d wallet_events=%d | top_entry_blocks=%s",
             (now - self.started) / 60, len(self.watch), len(book.positions), book.balance_sol,
             book.equity_sol(self.scalper.trackers), len(closed), wins, 100 * wins / len(closed) if closed else 0,
             avg * 100, pnl, book.fees_paid_sol, book.failed_tx, self.stats["created_seen"],
@@ -650,10 +712,15 @@ class LiveEngine:
             self.stats["creator_sell_logs"], self.stats["graduated"], self.stats["closed_accounts"],
             self.stats["rate_limited"], self.stats["handler_errors"],
             self.stats["skipped_full"], self.stats["meta_ok"], self.stats["meta_fail"], self.stats["with_twitter"],
-            self.stats["trade_events"], self.stats["migrations"], blocks,
+            self.stats["trade_events"], self.stats["migrations"], self.stats["wallet_events"], blocks,
         )
         if self.scalper.model is not None:
             log.info("AUTOPILOT %s", self.scalper.model.status)
+        if self.cfg.wallet_feed:
+            mb = self.stats.get("wallet_log_mb", 0.0)
+            hours = max((now - self.started) / 3600, 1e-6)
+            log.info("WALLET FEED %d trade events, %.1f MB so far (~%.0f Helius credits/day at this rate)",
+                     self.stats["wallet_events"], mb, mb / hours * 24 * 20)
         if self.decode_fail_reasons:
             log.info("Decode failures by cause: %s", dict(sorted(self.decode_fail_reasons.items(), key=lambda kv: -kv[1])[:6]))
         if self.stats["curve_msgs"] > 50 and self.stats["decode_fail"] > self.stats["curve_msgs"] * 0.5:
