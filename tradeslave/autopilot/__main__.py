@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import statistics
 import os
 import sys
 import time
@@ -124,21 +126,28 @@ def status(_args) -> int:
               f"| paper_ok={c['paper_ok']} proven={c['proven']}")
     else:
         print("no champion yet: still learning")
-    if (AUTO_DIR / "shadow.json").exists():
-        c = json.loads((AUTO_DIR / "shadow.json").read_text())
-        h = c["holdout"]
-        print(f"shadow   {c['version']}: {c['policy']} via {c['scorer']} | holdout {h['trades']} trades "
-              f"mean {h['mean'] * 100:+.2f}%")
+    from .model import shadow_name
+    for lane in range(8):
+        f = AUTO_DIR / f"{shadow_name(lane)}.json"
+        if not f.exists():
+            continue
+        c = json.loads(f.read_text())
+        v, h = c["validation"], c["holdout"]
+        print(f"shadow{lane}  {c['version']}: {c['policy']} via {c['scorer']} | validation {v['trades']} trades "
+              f"mean {v['mean'] * 100:+.2f}% | holdout {h['trades']} trades mean {h['mean'] * 100:+.2f}%")
     trades_file = PROJECT_ROOT / "scalp_shadow_trades.jsonl"
     if trades_file.exists():
         rows = [json.loads(line) for line in trades_file.read_text(encoding="utf-8").splitlines() if line.strip()]
         by_model: dict = {}
         for r in rows:
             by_model.setdefault((r.get("entry_details") or {}).get("model", "?"), []).append(r["pnl_pct"])
-        print("\nshadow forward test (live paper, never-seen data):")
+        print("\nshadow forward test (live paper, never-seen data; t >= 2 with 100+ trades is the bar):")
         for version, pnls in by_model.items():
-            print(f"  model {version}: {len(pnls)} trades, mean {sum(pnls) / len(pnls) * 100:+.2f}%, "
-                  f"win {sum(p > 0 for p in pnls) / len(pnls):.0%}")
+            n, mean = len(pnls), sum(pnls) / len(pnls)
+            sd = statistics.pstdev(pnls) if n > 1 else 0.0
+            t = mean / (sd / math.sqrt(n)) if sd > 0 else 0.0
+            print(f"  model {version}: {n:4d} trades, mean {mean * 100:+.2f}%, median "
+                  f"{statistics.median(pnls) * 100:+.2f}%, win {sum(p > 0 for p in pnls) / n:.0%}, t {t:+.1f}")
     if HISTORY.exists():
         print("\nlearning history (newest last):")
         for line in HISTORY.read_text(encoding="utf-8").splitlines()[-15:]:

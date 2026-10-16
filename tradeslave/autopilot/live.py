@@ -29,6 +29,7 @@ class ModelGate:
         self.heat_source = None            # set by the engine: Scalper.heat
         self.regime_source = None          # set by the engine: Scalper.regime
         self.last_exit_score: dict[str, float] = {}
+        self.last_entry_score: dict[str, float] = {}
         self.reload()
 
     @property
@@ -59,6 +60,7 @@ class ModelGate:
             return False
         self.card, self.model, self.exit_model = card, model, exit_model
         self.last_exit_score.clear()
+        self.last_entry_score.clear()
         log.info("Autopilot model loaded: %s", self.status)
         return True
 
@@ -78,6 +80,16 @@ class ModelGate:
             return Signal(False, "model_not_proven", {})
         if not tradeable(tr, now, self.cfg.min_age_s, self.cfg.max_entry_age_s):
             return Signal(False, "outside_model_window", {})
+        # Score only where training took snapshots: on a fresh curve update, at most every
+        # SNAP_EVERY_S per token. Scoring every update would take the max of many noisy
+        # scores, i.e. many more (and worse) entries than the holdout ever saw.
+        if tr.last_update_t != now:
+            return Signal(False, "not_snapshot_time", {})
+        if 0 < now - self.last_entry_score.get(tr.mint, -1e18) < SNAP_EVERY_S:
+            return Signal(False, "not_snapshot_time", {})
+        self.last_entry_score[tr.mint] = now
+        if len(self.last_entry_score) > 20_000:
+            self.last_entry_score = {m: t for m, t in self.last_entry_score.items() if now - t < 900}
         X = self._x(tr, now)
         if X is None:
             return Signal(False, "feature_mismatch", {})

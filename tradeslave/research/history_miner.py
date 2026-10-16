@@ -42,6 +42,9 @@ from .backfill_trades import HISTORY_OUT, TRADE_DIR, VERSION, done_mints, parse_
 from .chain import PUBLIC_RPC, Rpc, address_transactions, host_of, signature_of
 
 SKIPS = TRADE_DIR / "history_skips.jsonl"
+# An endpoint that fails this many tokens in a row is rested (rate-limited or out of free quota):
+# grinding through its 429 back-offs once stalled a whole pass for 8 hours.
+REST_AFTER_FAILS, REST_S = 4, 600.0
 
 
 def candidates(tick_dir: Path, min_age_s: float = 1200.0) -> list[dict]:
@@ -166,7 +169,7 @@ def mine(rpcs, todo: list[dict], window: float, max_pages: int, log, stop_after_
                 state["trades"] += len(rows)
                 per_host[hosts[i]] += 1
                 n = state["n"]
-                if n % 25 == 0 or n <= 3:
+                if n % 10 == 0 or n <= 3:
                     rate = n / max(time.time() - started, 1) * 3600
                     errors = collections.Counter()
                     for r in rpcs:
@@ -194,6 +197,14 @@ def mine(rpcs, todo: list[dict], window: float, max_pages: int, log, stop_after_
                 except Exception as exc:  # noqa: BLE001 - one bad token must not stop the pass
                     status, rows, stats = "retry", None, {"why": type(exc).__name__}
                 if status == "retry":
+                    fails[i] += 1
+                    if fails[i] >= REST_AFTER_FAILS:
+                        log(f"  {hosts[i]}: {fails[i]} tokens failed in a row ({stats.get('why') or 'missing transactions'})"
+                            f"; resting it {REST_S / 60:.0f} min")
+                        fails[i] = 0
+                        if stop.wait(REST_S):
+                            work.put((tok, failed))
+                            return
                     tried = failed | {i}
                     if len(tried) < len(rpcs):
                         work.put((tok, tried))
@@ -201,8 +212,10 @@ def mine(rpcs, todo: list[dict], window: float, max_pages: int, log, stop_after_
                     finish(tok, "retry", None, stats, i)     # every endpoint failed: try again next pass
                     time.sleep(5 if len(rpcs) == 1 else 1)   # RPC trouble: slow down a bit
                     continue
+                fails[i] = 0
                 finish(tok, status, rows, stats, i)
 
+        fails = collections.Counter()
         if len(rpcs) == 1:
             worker(0, rpcs[0])
         else:
@@ -238,6 +251,7 @@ def main() -> None:
     for url, rps in urls:
         rpc = Rpc(url, rps)
         rpc.gtfa = False                  # per-signature fetches only: no bulk methods that cost credits
+        rpc.attempts, rpc.fail_fast = 4, True   # a struggling endpoint hands the token on instead of grinding
         rpcs.append(rpc)
     log(f"history miner on {len(rpcs)} endpoint(s): " + ", ".join(f"{host_of(u)} at {r:g} req/s" for u, r in urls))
     while True:

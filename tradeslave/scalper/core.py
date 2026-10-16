@@ -42,14 +42,20 @@ class Scalper:
         self.outcomes: list[float] = []                    # ... and the outcome (log return, 15 s -> 120 s of age)
         self.model = None                                  # autopilot champion (entry_mode="model")
         self.position_policy: dict[str, dict] = {}         # mint -> exit policy of a model trade
-        self.shadow: ShadowLane | None = None              # forward-test model with its own paper wallet
+        self.shadows: list[ShadowLane] = []                # forward-test models, each with its own paper wallet
+
+    @property
+    def shadow(self) -> "ShadowLane | None":
+        return self.shadows[0] if self.shadows else None
 
     def add_shadow(self, gate, on_event: Callable[[str, dict], None] | None = None) -> "ShadowLane":
-        """Run a second model (the autopilot's shadow) side by side in its own paper wallet."""
+        """Run another model (an autopilot shadow) side by side in its own paper wallet."""
         book = PaperBook(self.cfg, on_event=on_event)
         book.mutate_tracker = False                         # never touch the main lane's per-token state
-        self.shadow = ShadowLane(gate, book)
-        return self.shadow
+        book.daily_loss_limit_sol = math.inf                # a forward test must not stop after one bad hour
+        lane = ShadowLane(gate, book)
+        self.shadows.append(lane)
+        return lane
 
     # --- inputs -----------------------------------------------------------
     def on_create(self, mint: str, symbol: str, t: float, state: CurveState | None,
@@ -159,8 +165,8 @@ class Scalper:
             return
         # Fill any order that came due BEFORE this new state existed.
         self.book.fill_due(tr, t)
-        if self.shadow is not None:
-            self.shadow.book.fill_due(tr, t)
+        for lane in self.shadows:
+            lane.book.fill_due(tr, t)
         prev_update_t = tr.last_update_t or tr.created_at
         if tr.update(t, state) is None:
             return
@@ -191,8 +197,8 @@ class Scalper:
             tr = self.trackers.get(mint)
             if tr is not None and not self.book.busy(mint):
                 self._decide_main(tr, now)
-        if self.shadow is not None:
-            sb = self.shadow.book
+        for lane in self.shadows:
+            sb = lane.book
             for mint in list(sb.orders):
                 tr = self.trackers.get(mint)
                 if tr is not None:
@@ -200,13 +206,13 @@ class Scalper:
             for mint in list(sb.positions):
                 tr = self.trackers.get(mint)
                 if tr is not None and not sb.busy(mint):
-                    self._decide_shadow(tr, now)
+                    self._decide_shadow(lane, tr, now)
 
     def forget(self, mint: str) -> bool:
         """Drop a tracker unless it still has a position or order (in any lane)."""
         if mint in self.book.positions or mint in self.book.orders:
             return False
-        if self.shadow is not None and (mint in self.shadow.book.positions or mint in self.shadow.book.orders):
+        if any(mint in lane.book.positions or mint in lane.book.orders for lane in self.shadows):
             return False
         self.trackers.pop(mint, None)
         return True
@@ -214,8 +220,8 @@ class Scalper:
     # --- decisions --------------------------------------------------------
     def _decide(self, tr: TokenTracker, now: float) -> None:
         self._decide_main(tr, now)
-        if self.shadow is not None:
-            self._decide_shadow(tr, now)
+        for lane in self.shadows:
+            self._decide_shadow(lane, tr, now)
 
     @staticmethod
     def _manage(book: PaperBook, policies: dict, gate, tr: TokenTracker, now: float, cfg: ScalpConfig) -> None:
@@ -234,8 +240,7 @@ class Scalper:
         if signal.ok:
             book.request_sell(tr, now, signal.reason, {**signal.details, "pnl_at_signal": round(pnl, 4)})
 
-    def _decide_shadow(self, tr: TokenTracker, now: float) -> None:
-        lane = self.shadow
+    def _decide_shadow(self, lane: "ShadowLane", tr: TokenTracker, now: float) -> None:
         if lane.book.busy(tr.mint):
             return
         if tr.mint in lane.book.positions:
@@ -247,6 +252,7 @@ class Scalper:
         signal = lane.gate.entry(tr, now)
         if not signal.ok:
             return
+        lane.top_up()
         allowed, _ = lane.book.can_open(now)
         if not allowed:
             return
@@ -286,3 +292,18 @@ class ShadowLane:
     def __init__(self, gate, book: PaperBook):
         self.gate, self.book = gate, book
         self.position_policy: dict[str, dict] = {}
+        self.refills = 0
+
+    def top_up(self) -> None:
+        """Keep the test running: a drained wallet is refilled (results are judged per trade, not by balance)."""
+        b = self.book
+        if not b.positions and not b.orders and b.balance_sol < b.cfg.trade_size_sol + 2 * b.cfg.network_fee_sol:
+            b.balance_sol = b.cfg.paper_start_sol
+            self.refills += 1
+
+    def reset(self) -> None:
+        """A new model takes over this lane: fresh wallet (open positions finish under their own rules)."""
+        b = self.book
+        if not b.positions and not b.orders:
+            b.balance_sol = b.cfg.paper_start_sol
+        b.day_pnl_sol, b.closed = 0.0, []

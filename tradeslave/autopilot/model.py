@@ -356,6 +356,38 @@ def robust_key(c: Candidate) -> float:
     return min(c.val.half_means) * c.val.trades / 2
 
 
+SHADOW_LANES = 4             # forward-test this many of each cycle's candidates live (one paper wallet each)
+SHADOW_MIN_VAL_TRADES = 60   # a shadow pick needs enough validation trades to trade often enough live to judge
+
+
+def _family(c: Candidate) -> str:
+    return "learned exit" if c.exit else "cost gate (abs)" if c.scorer == "abs" else "fixed exit"
+
+
+def shadow_picks(good: list[Candidate], enough: list[Candidate], n: int = SHADOW_LANES) -> list[Candidate]:
+    """The candidates to forward-test live. Robust first: the best eligible one, then the best
+    of each exit family by its WORSE validation half (a big mean from one lucky stretch, or from a
+    handful of trades at a 99% threshold, is exactly what the forward test keeps failing on).
+    Frequent traders are preferred so each lane collects enough live trades in a day."""
+    picks: list[Candidate] = []
+    key = lambda c: (min(c.val.half_means) if len(c.val.half_means) == 2 else c.val.mean)
+    if good:
+        picks.append(max(good, key=robust_key))
+    pool = [c for c in enough if c.val.trades >= SHADOW_MIN_VAL_TRADES] or enough
+    by_fam = collections.defaultdict(list)
+    for c in pool:
+        by_fam[_family(c)].append(c)
+    ranked = sorted((max(cs, key=key) for cs in by_fam.values()), key=key, reverse=True)
+    rest = sorted(pool, key=key, reverse=True)
+    for c in ranked + rest:
+        if len(picks) >= n:
+            break
+        if all(c is not p and (c.policy, c.scorer, c.params, c.threshold) != (p.policy, p.scorer, p.params, p.threshold)
+               for p in picks):
+            picks.append(c)
+    return picks
+
+
 def train_cycle(samples: list[Sample], log=print, paths: dict | None = None,
                 econ: dict | None = None) -> tuple[Card | None, object | None, dict]:
     import numpy as np
@@ -443,7 +475,7 @@ def train_cycle(samples: list[Sample], log=print, paths: dict | None = None,
             f"trades, mean {near.val.mean * 100:+.2f}%, median {near.val.median * 100:+.2f}%, win {near.val.win:.0%}")
     families = collections.defaultdict(list)
     for c in enough:
-        families["learned exit" if c.exit else "cost gate (abs)" if c.scorer == "abs" else "fixed exit"].append(c)
+        families[_family(c)].append(c)
     info["family_best_val"] = {}
     for fam, cs in sorted(families.items()):
         b = max(cs, key=lambda c: c.val.mean)
@@ -452,10 +484,11 @@ def train_cycle(samples: list[Sample], log=print, paths: dict | None = None,
         log(f"  best {fam:15s} on validation: {b.policy} via {b.scorer}: {b.val.trades} trades, mean "
             f"{b.val.mean * 100:+.2f}%, halves {', '.join(f'{h * 100:+.1f}%' for h in b.val.half_means)}")
     best = max(good, key=robust_key) if good else None
-    shadow = best or near
-    if shadow is not None:
-        info["shadow_card"] = _card(shadow, samples, hold, Xhold, paths, econ, shadow=True)
-        info["shadow_models"] = (shadow.model, shadow.exit_model)
+    info["shadows"] = []
+    for i, c in enumerate(shadow_picks(good, enough)):
+        sc = _card(c, samples, hold, Xhold, paths, econ, shadow=True)
+        sc.version = f"{sc.version}-s{i}"
+        info["shadows"].append((sc, c.model, c.exit_model))
     if best is None:
         return None, None, info
     card = _card(best, samples, hold, Xhold, paths, econ)
@@ -532,17 +565,21 @@ def save_champion(card: Card, model, directory: Path | None = None, exit_model=N
     (directory / f"{name}.json").write_text(json.dumps(asdict(card), indent=2))
 
 
+def shadow_name(lane: int) -> str:
+    """File name of a shadow lane's model: shadow.pkl, shadow_1.pkl, ..."""
+    return "shadow" if lane == 0 else f"shadow_{lane}"
+
+
 def save_shadow(info: dict, directory: Path | None = None, log=print) -> bool:
-    """Save this cycle's best validation candidate as the shadow model (forward test)."""
-    card = info.get("shadow_card")
-    if card is None:
-        return False
-    model, exit_model = info["shadow_models"]
-    save_champion(card, model, directory, exit_model=exit_model, name="shadow")
-    h = card.holdout
-    log(f"  shadow model {card.version} ({card.policy} via {card.scorer}) saved for forward paper testing "
-        f"| its holdout: {h.trades} trades, mean {h.mean * 100:+.2f}%")
-    return True
+    """Save this cycle's shadow picks, one per lane, for forward paper testing."""
+    shadows = info.get("shadows") or []
+    for lane, (card, model, exit_model) in enumerate(shadows):
+        save_champion(card, model, directory, exit_model=exit_model, name=shadow_name(lane))
+        v, h = card.validation, card.holdout
+        log(f"  shadow lane {lane}: model {card.version} ({card.policy} via {card.scorer} {card.params}) | "
+            f"validation {v.trades} trades {v.mean * 100:+.2f}% (halves "
+            f"{', '.join(f'{x * 100:+.1f}%' for x in v.half_means)}) | holdout {h.trades} trades {h.mean * 100:+.2f}%")
+    return bool(shadows)
 
 
 def compete(card: Card, model, info: dict, log=print, paths: dict | None = None, econ: dict | None = None) -> bool:
@@ -565,16 +602,16 @@ def compete(card: Card, model, info: dict, log=print, paths: dict | None = None,
 def record_history(card: Card | None, info: dict, promoted: bool, directory: Path | None = None) -> dict:
     directory = directory or AUTO_DIR
     directory.mkdir(parents=True, exist_ok=True)
-    skip = ("holdout_samples", "shadow_card", "shadow_models", "exit_model")
+    skip = ("holdout_samples", "shadows", "exit_model")
     row = {"t": time.time(), "promoted": promoted, **{k: v for k, v in info.items() if k not in skip}}
     if card is not None:
         row.update(version=card.version, policy=card.policy, threshold=card.threshold, n_tokens=card.n_tokens,
                    exact_share=round(card.exact_share, 3), paper_ok=card.paper_ok, proven=card.proven,
                    val=asdict(card.validation), holdout=asdict(card.holdout), exit=card.exit)
-    sh = info.get("shadow_card")
-    if sh is not None:
-        row["shadow"] = {"version": sh.version, "policy": sh.policy, "scorer": sh.scorer, "exit": sh.exit,
-                         "val": asdict(sh.validation), "holdout": asdict(sh.holdout)}
+    shadows = [{"version": sh.version, "policy": sh.policy, "scorer": sh.scorer, "exit": sh.exit, "params": sh.params,
+                "val": asdict(sh.validation), "holdout": asdict(sh.holdout)} for sh, _, _ in info.get("shadows") or []]
+    if shadows:
+        row["shadow"], row["shadows"] = shadows[0], shadows
     with (directory / "history.jsonl").open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(row) + "\n")
     return row

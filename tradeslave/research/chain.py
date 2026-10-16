@@ -44,11 +44,13 @@ class Rpc:
         self.credits = 0          # Helius credit estimate: 1 per standard call, 10 per 100 txs for gTFA
         self.errors: dict[str, int] = {}
         self.gtfa: bool | None = None if "helius" in url else False   # Helius-only method, probed on first use
+        self.attempts = 8          # tries per request (rate limits / transient errors) before giving up
+        self.fail_fast = False     # stop fetching a chart at its first missing transaction (it'd be retried anyway)
 
     def request(self, method: str, params: list):
         """(result, error) with pacing and retries on rate limits / transient failures."""
         error = None
-        for attempt in range(8):
+        for attempt in range(self.attempts):
             wait = self.min_gap - (time.monotonic() - self.last)
             if wait > 0:
                 time.sleep(wait)
@@ -146,6 +148,8 @@ def _sigs_then_txs(rpc: Rpc, address: str, t_from: float, t_to: float, max_pages
             tx, error = rpc.request("getTransaction", [sig, TX_OPTS])
         if tx is None:
             stats["tx_missing"] = stats.get("tx_missing", 0) + 1
+            if getattr(rpc, "fail_fast", False):
+                break                                 # an incomplete chart is never written: don't fetch the rest
             continue
         tx.setdefault("transaction", {}).setdefault("signatures", [sig])
         txs.append(tx)

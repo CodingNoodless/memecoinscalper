@@ -36,6 +36,9 @@ log = logging.getLogger("scalper")
 RAW_SAMPLE_LIMIT = 10   # per message kind
 
 
+
+WALLET_PACE_SLACK = 0.05   # the wallet feed may run this share of the day's data budget ahead of the clock
+
 class LiveEngine:
     def __init__(self, cfg: ScalpConfig):
         self.cfg = cfg
@@ -79,23 +82,32 @@ class LiveEngine:
             self.scalper.model.heat_source = self.scalper.heat
             self.scalper.model.regime_source = self.scalper.regime
             if cfg.shadow:
-                shadow_gate = ModelGate(cfg, shadow=True)
-                shadow_gate.heat_source, shadow_gate.regime_source = self.scalper.heat, self.scalper.regime
-                self.scalper.add_shadow(shadow_gate, on_event=self._on_shadow_event)
+                from ..autopilot.model import AUTO_DIR, shadow_name
+                for i in range(max(cfg.shadow_lanes, 1)):
+                    shadow_gate = ModelGate(cfg, path=AUTO_DIR / f"{shadow_name(i)}.pkl", shadow=True)
+                    shadow_gate.heat_source, shadow_gate.regime_source = self.scalper.heat, self.scalper.regime
+                    self.scalper.add_shadow(shadow_gate, on_event=lambda kind, data, i=i: self._on_shadow_event(i, kind, data))
         self._restore_balance()
 
     # --- persistence --------------------------------------------------------
     def _restore_balance(self) -> None:
         self._restore_book(self.scalper.book, "scalp_wallet.json")
-        if self.scalper.shadow is not None:
-            self._restore_book(self.scalper.shadow.book, "scalp_shadow_wallet.json")
+        for i, lane in enumerate(self.scalper.shadows):
+            card = lane.gate.card
+            self._restore_book(lane.book, self._shadow_wallet(i), model=card.version if card is not None else None)
 
-    def _restore_book(self, book, name: str) -> None:
+    @staticmethod
+    def _shadow_wallet(lane: int) -> str:
+        return "scalp_shadow_wallet.json" if lane == 0 else f"scalp_shadow_wallet_{lane}.json"
+
+    def _restore_book(self, book, name: str, model: str | None = "") -> None:
         path = state_path(name)
         if not path.exists():
             return
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
+            if model != "" and data.get("model") != model:
+                return                     # a shadow lane with a new model starts with a fresh wallet
             balance = float(data["balance_sol"])
             carried = sum(float(p["cost_sol"]) * (1.0 + float(p.get("last_pnl_pct", 0.0)))
                           for p in data.get("open_positions", []))
@@ -153,18 +165,18 @@ class LiveEngine:
             if tr is not None and tr.launch_price:
                 p["vs_opening"] = round(tr.price / tr.launch_price - 1.0, 4)
         save_json("scalp_wallet.json", snap)
-        lane = self.scalper.shadow
-        if lane is not None:
+        for i, lane in enumerate(self.scalper.shadows):
             shadow = lane.book.snapshot()
             shadow.update({"equity_sol": lane.book.equity_sol(self.scalper.trackers), "updated_at": now,
-                           "paper_start_sol": self.cfg.paper_start_sol, "status": lane.gate.status,
+                           "paper_start_sol": self.cfg.paper_start_sol, "status": lane.gate.status, "lane": i,
+                           "refills": lane.refills,
                            "model": lane.gate.card.version if lane.gate.card is not None else None})
-            save_json("scalp_shadow_wallet.json", shadow)
+            save_json(self._shadow_wallet(i), shadow)
 
-    def _on_shadow_event(self, kind: str, data: dict) -> None:
+    def _on_shadow_event(self, lane: int, kind: str, data: dict) -> None:
         if kind == "trade_closed":
-            append_jsonl("scalp_shadow_trades.jsonl", {"event": kind, **data})
-            log.info("SHADOW CLOSED %s %+.2f%% (%+.5f SOL) held %.1fs reason=%s balance=%.4f",
+            append_jsonl("scalp_shadow_trades.jsonl", {"event": kind, "lane": lane, **data})
+            log.info("SHADOW%d CLOSED %s %+.2f%% (%+.5f SOL) held %.1fs reason=%s balance=%.4f", lane,
                      data["symbol"], data["pnl_pct"] * 100, data["pnl_sol"], data["held_s"],
                      data["exit_reason"], data["balance_sol"])
 
@@ -332,7 +344,7 @@ class LiveEngine:
         if self.rpc_ready.is_set():
             loop = asyncio.get_running_loop()
             loop.create_task(self._subscribe_curve(mint, curve_key))
-            if self.cfg.wallet_feed and not self.wallet_feed_paused:
+            if self._wallet_feed_on(time.time()):
                 loop.create_task(self._subscribe_wallet_logs(mint, curve_key))
             if self._trade_feed_on():
                 loop.create_task(self._trade_sub(mint))
@@ -340,6 +352,31 @@ class LiveEngine:
                 loop.create_task(self._subscribe_creator(creator, mint))
         elif creator:
             self.creator_mints.setdefault(creator, set()).add(mint)
+
+    def _roll_wallet_day(self, now: float) -> None:
+        """New UTC day: the wallet feed's data budget starts over (also un-pauses a hit cap)."""
+        day = time.strftime("%Y-%m-%d", time.gmtime(now))
+        if day != self.wlog_day:
+            if self.wallet_feed_paused:
+                log.info("Wallet feed: new UTC day, data budget reset; subscribing again")
+            self.wlog_day, self.wlog_mb_today, self.wallet_feed_paused = day, 0.0, False
+
+    def _wallet_feed_on(self, now: float) -> bool:
+        """Subscribe this launch's trade-event logs? Rolls the UTC day here, where subscriptions are
+        decided (a paused feed receives no messages, so it can't un-pause itself), and paces the daily
+        data budget across the day: spend at most the elapsed share of the day (+ WALLET_PACE_SLACK),
+        so wallet features exist all day for a sample of launches instead of for every launch until
+        mid-morning and none after."""
+        if not self.cfg.wallet_feed:
+            return False
+        self._roll_wallet_day(now)
+        if self.wallet_feed_paused:
+            return False
+        elapsed = (now % 86400.0) / 86400.0
+        if self.wlog_mb_today > self.cfg.wallet_feed_max_mb_per_day * min(1.0, elapsed + WALLET_PACE_SLACK):
+            self.stats["wallet_paced"] = self.stats.get("wallet_paced", 0) + 1
+            return False
+        return True
 
     async def _load_metadata(self, mint: str, uri) -> None:
         """Fetch the token's metadata (socials, description) without blocking the loop."""
@@ -485,7 +522,7 @@ class LiveEngine:
                         self.recorder.feed(time.time(), True)
                     for mint, curve_key in list(self.watch.items()):
                         await self._subscribe_curve(mint, curve_key)
-                        if self.cfg.wallet_feed:
+                        if self._wallet_feed_on(time.time()):
                             await self._subscribe_wallet_logs(mint, curve_key)
                     if self.cfg.watch_creator:
                         for creator, mints in list(self.creator_mints.items()):
@@ -541,9 +578,7 @@ class LiveEngine:
         elif method == "logsNotification":
             if params.get("subscription") in self.mint_by_wlog_sub:
                 self.stats["wallet_log_mb"] = round(self.stats.get("wallet_log_mb", 0.0) + len(raw) / 1e6, 3)
-                day = time.strftime("%Y-%m-%d", time.gmtime())
-                if day != self.wlog_day:
-                    self.wlog_day, self.wlog_mb_today, self.wallet_feed_paused = day, 0.0, False
+                self._roll_wallet_day(time.time())
                 self.wlog_mb_today += len(raw) / 1e6
                 if not self.wallet_feed_paused and self.wlog_mb_today > self.cfg.wallet_feed_max_mb_per_day:
                     self.wallet_feed_paused = True
@@ -709,8 +744,10 @@ class LiveEngine:
             self.last_model_check = now
             if self.scalper.model.reload():
                 log.info("AUTOPILOT now: %s", self.scalper.model.status)
-            if self.scalper.shadow is not None and self.scalper.shadow.gate.reload():
-                log.info("SHADOW now: %s", self.scalper.shadow.gate.status)
+            for i, lane in enumerate(self.scalper.shadows):
+                if lane.gate.reload():
+                    lane.reset()
+                    log.info("SHADOW%d now: %s", i, lane.gate.status)
         if now - last_save >= 2:
             self._save_wallet()
             last_save = now
@@ -742,19 +779,21 @@ class LiveEngine:
         )
         if self.scalper.model is not None:
             log.info("AUTOPILOT %s", self.scalper.model.status)
-        lane = self.scalper.shadow
-        if lane is not None:
+        for i, lane in enumerate(self.scalper.shadows):
             sc = lane.book.closed
             s_wins = sum(1 for c in sc if c["pnl_sol"] > 0)
-            log.info("SHADOW %s | open=%d trades=%d wins=%d avg=%+.2f%% pnl=%+.4f SOL balance=%.4f",
+            log.info("SHADOW%d %s | open=%d trades=%d wins=%d avg=%+.2f%% pnl=%+.4f SOL balance=%.4f refills=%d", i,
                      lane.gate.status, len(lane.book.positions), len(sc), s_wins,
                      (sum(c["pnl_pct"] for c in sc) / len(sc) * 100) if sc else 0.0,
-                     sum(c["pnl_sol"] for c in sc), lane.book.balance_sol)
+                     sum(c["pnl_sol"] for c in sc), lane.book.balance_sol, lane.refills)
         if self.cfg.wallet_feed:
             mb = self.stats.get("wallet_log_mb", 0.0)
             hours = max((now - self.started) / 3600, 1e-6)
-            log.info("WALLET FEED %d trade events, %.1f MB so far (~%.0f Helius credits/day at this rate)",
-                     self.stats["wallet_events"], mb, mb / hours * 24 * 20)
+            log.info("WALLET FEED %d trade events, %.1f MB so far (~%.0f Helius credits/day at this rate) | "
+                     "today %.0f of %.0f MB%s, %d launches skipped to pace the budget",
+                     self.stats["wallet_events"], mb, mb / hours * 24 * 20, self.wlog_mb_today,
+                     self.cfg.wallet_feed_max_mb_per_day, " (CAP HIT)" if self.wallet_feed_paused else "",
+                     self.stats.get("wallet_paced", 0))
         if self.decode_fail_reasons:
             log.info("Decode failures by cause: %s", dict(sorted(self.decode_fail_reasons.items(), key=lambda kv: -kv[1])[:6]))
         if self.stats["curve_msgs"] > 50 and self.stats["decode_fail"] > self.stats["curve_msgs"] * 0.5:

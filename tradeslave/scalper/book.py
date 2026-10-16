@@ -65,6 +65,7 @@ class PaperBook:
         self.failed_tx = 0
         self._emit = on_event or (lambda kind, data: None)
         self.mutate_tracker = True     # False for a shadow book: leave per-token cooldown/loss counters alone
+        self.daily_loss_limit_sol = cfg.daily_loss_limit_sol
 
     # --- risk -------------------------------------------------------------
     def exposure_sol(self) -> float:
@@ -81,7 +82,7 @@ class PaperBook:
         open_count = len(self.positions) + sum(1 for o in self.orders.values() if o.side == "buy")
         if open_count >= self.cfg.max_open_positions:
             return False, "max_open_positions"
-        if self.day_pnl_sol <= -self.cfg.daily_loss_limit_sol:
+        if self.day_pnl_sol <= -self.daily_loss_limit_sol:
             return False, "daily_loss_limit"
         if self.exposure_sol() + self.cfg.trade_size_sol > self.cfg.max_exposure_sol + 1e-12:
             return False, "max_exposure"

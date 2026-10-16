@@ -146,6 +146,7 @@ class ScalpConfig:
     autopilot_daily_credits: int = 8_000   # the wallet feed (logs) also uses credits; history comes from the free miner  # Helius free plan = 1M credits/month; leave room for the websocket
     model_reload_s: float = 60.0         # check for a newly promoted model this often
     shadow: bool = True                  # also paper-trade each cycle's best candidate in its own wallet (forward test)
+    shadow_lanes: int = 4                # forward-test this many candidates per cycle (each its own paper wallet)
     history_miner: bool = True           # background process: exact charts of logged launches via the free public RPC
 
 
