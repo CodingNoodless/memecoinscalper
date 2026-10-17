@@ -36,17 +36,19 @@ def launches():
                 elif '"trade"' in line:
                     r = json.loads(line)
                     tr[r["m"]].append(r)
-    out = []
-    for m, t0 in samp.items():
-        ts = sorted(tr.get(m, []), key=lambda r: r.get("i", 0))
-        if not ts:
-            continue
-        s0 = ts[0]["slot"]
-        grp = {r["w"] for r in ts if r["slot"] == s0}
-        x = sum(r["sol"] for r in ts if r["slot"] == s0 and r["b"] and r["w"] in grp)
-        outside = [r for r in ts if r["w"] not in grp]
-        out.append({"m": m, "t0": t0, "tc": ts[0]["t"], "x": x, "outside": outside})
-    return sorted(out, key=lambda d: d["t0"])
+    out = [launch_rows(m, t0, tr.get(m, [])) for m, t0 in samp.items()]
+    return sorted((d for d in out if d), key=lambda d: d["t0"])
+
+
+def launch_rows(m: str, t0: float, trades: list[dict]) -> dict | None:
+    """A launch for `replay`: the creation-slot (slot-0) group's buy X and everyone else's trades."""
+    ts = sorted(trades, key=lambda r: r.get("i", 0))
+    if not ts:
+        return None
+    s0 = ts[0]["slot"]
+    grp = {r["w"] for r in ts if r["slot"] == s0}
+    x = sum(r["sol"] for r in ts if r["slot"] == s0 and r["b"])
+    return {"m": m, "t0": t0, "tc": ts[0]["t"], "x": x, "outside": [r for r in ts if r["w"] not in grp]}
 
 
 def replay(lau: dict, x: float, t_exit: float) -> float:

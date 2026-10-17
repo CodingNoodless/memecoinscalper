@@ -1,6 +1,6 @@
 import pytest
 
-from tradeslave.research import creator, launch_watch
+from tradeslave.research import creator
 
 
 def _lau(outside):
@@ -22,9 +22,12 @@ def test_outside_buy_before_exit_makes_money_after_exit_does_not():
     assert late == pytest.approx(creator.replay(_lau([]), 5.0, 15) + creator.CREATOR_FEE * 10, rel=1e-6)
 
 
-def test_live_replay_matches_history_replay_and_skips_creator():
-    create = {"t": 0.0, "traderPublicKey": "dev", "solAmount": 5.0}
-    trades = [{"t": 3.0, "traderPublicKey": "dev", "txType": "sell", "solAmount": 1.0, "tokenAmount": 1e6},
-              {"t": 5.0, "traderPublicKey": "x", "txType": "buy", "solAmount": 10.0, "tokenAmount": 0}]
-    hist = creator.replay(_lau([{"t": 5.0, "b": 1, "sol": 10.0, "dv": 10e9 * (1 - creator.FEE), "tok": 0, "w": "x"}]), 5.0, 15)
-    assert launch_watch.replay(create, trades, 5.0) == pytest.approx(hist, rel=1e-9)
+def test_launch_rows_groups_the_creation_slot():
+    rows = [{"i": 0, "slot": 7, "w": "dev", "b": 1, "sol": 4.0, "t": 0.0},
+            {"i": 1, "slot": 7, "w": "bundle", "b": 1, "sol": 2.0, "t": 0.0},
+            {"i": 2, "slot": 8, "w": "bot", "b": 1, "sol": 1.0, "t": 1.0},
+            {"i": 3, "slot": 9, "w": "dev", "b": 0, "sol": 3.0, "t": 2.0}]
+    d = creator.launch_rows("M", 0.0, rows)
+    assert d["x"] == 6.0                                       # dev + bundle in the creation slot
+    assert [r["w"] for r in d["outside"]] == ["bot"]          # the group's later sells are not "outside"
+    assert creator.launch_rows("M", 0.0, []) is None

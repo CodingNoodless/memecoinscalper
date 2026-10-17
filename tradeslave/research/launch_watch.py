@@ -3,11 +3,12 @@
     uv run python -m tradeslave.research.launch_watch            # record + score until stopped
     uv run python -m tradeslave.research.launch_watch --score    # score what's recorded so far
 
-Records every new pump.fun launch whose creator buys >= WATCH_MIN_SOL in the create transaction, plus
-all its trades for the next WATCH_S seconds (PumpPortal websocket), to data/launch_watch.jsonl.
-Scoring replays the FROZEN J1 rule (vault: "2026-10-17 creator economics"): we launch with a dev buy
-of X SOL, the launch's outside trades (everyone but the creator) are replayed on a fresh curve, and
-we sell the whole bag right before the first outside trade at or after T = 15 s.
+Records every new pump.fun launch whose creator buys >= WATCH_MIN_SOL in the create transaction (free
+PumpPortal launch feed) to data/launch_watch.jsonl. Per-token trade streams cost money on PumpPortal,
+so a second thread pulls each recorded launch's first MINE_WINDOW_S seconds of trades from free RPC
+(the history miner's exact parser) into data/launch_watch_trades.jsonl, a few minutes after launch.
+Scoring replays the FROZEN J1 rule (vault: "2026-10-17 creator economics") with research.creator's
+replay: same slot-0 grouping, same costs, T = 15 s, launches with a slot-0 buy > 5 SOL.
 PumpPortal allows one connection per IP: this yields while scalp.py is running.
 """
 
@@ -16,22 +17,21 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import math
-import statistics
 import time
 from collections import defaultdict
 
 from ..paths import DATA_DIR, PROJECT_ROOT
-from .creator import CREATOR_FEE, FEE, LAUNCH_COST, TX_COST, VS0, VT0
 
 log = logging.getLogger("launch_watch")
 PUMPPORTAL_WS = "wss://pumpportal.fun/api/data"
 OUT = DATA_DIR / "launch_watch.jsonl"
+TRADES = DATA_DIR / "launch_watch_trades.jsonl"
+MINE_WINDOW_S = 120.0
+MINE_AFTER_S = 180.0
 SCALPER_LOG = PROJECT_ROOT / "logs" / "scalper.log"
-WATCH_MIN_SOL = 2.0
-WATCH_S = 90.0
+WATCH_MIN_SOL = 1.0
 T_EXIT = 15.0                 # frozen (J1, chosen on the first half of the history sample)
-FROZEN_AT = 1792267800.0      # 2026-10-17 13:10 PDT: launches after this are the forward test
+FROZEN_AT = 1792267800.0      # 2026-10-17 13:10 PDT (rule frozen; any launch recorded after this is forward): launches after this are the forward test
 
 
 def scalper_running() -> bool:
@@ -43,7 +43,6 @@ def scalper_running() -> bool:
 
 def record() -> None:
     from websockets.sync.client import connect
-    watching: dict[str, float] = {}
     while True:
         if scalper_running():
             time.sleep(60)
@@ -62,21 +61,13 @@ def record() -> None:
                         msg = None
                     now = time.time()
                     if isinstance(msg, dict) and isinstance(msg.get("mint"), str):
-                        m, kind = msg["mint"], msg.get("txType")
+                        kind = msg.get("txType")
                         if kind == "create":
                             n_seen += 1
                             if float(msg.get("solAmount") or 0) >= WATCH_MIN_SOL:
                                 n_kept += 1
-                                watching[m] = now
-                                ws.send(json.dumps({"method": "subscribeTokenTrade", "keys": [m]}))
                                 fh.write(json.dumps({"t": now, **msg}) + "\n")
-                        elif kind in ("buy", "sell") and m in watching:
-                            fh.write(json.dumps({"t": now, **msg}) + "\n")
-                    done = [m for m, t in watching.items() if now - t > WATCH_S]
-                    if done:
-                        ws.send(json.dumps({"method": "unsubscribeTokenTrade", "keys": done}))
-                        for m in done:
-                            del watching[m]
+                                fh.flush()
                     if now - last_note > 600:
                         fh.flush()
                         log.info("%d launches seen, %d recorded (dev buy >= %.1f SOL)", n_seen, n_kept, WATCH_MIN_SOL)
@@ -87,54 +78,73 @@ def record() -> None:
             time.sleep(30)
 
 
-def replay(create: dict, trades: list[dict], x: float, t_exit: float = T_EXIT) -> float:
-    vs, vt = VS0, VT0
-    net = x * (1 - FEE) * 1e9
-    bag = vt * net / (vs + net)
-    vs, vt = vs + net, vt - bag
-    proceeds, vol = None, 0.0
-    for r in trades:
-        if r.get("traderPublicKey") == create.get("traderPublicKey"):
-            continue
-        if proceeds is None and r["t"] - create["t"] >= t_exit:
-            proceeds = vs * bag / (vt + bag) / 1e9 * (1 - FEE)
-            vs, vt = vs - proceeds / (1 - FEE) * 1e9, vt + bag
-        sol, tok = float(r.get("solAmount") or 0), float(r.get("tokenAmount") or 0) * 1e6
-        vol += sol
-        if r["txType"] == "buy":
-            dv = sol * (1 - FEE) * 1e9
-            got = vt * dv / (vs + dv)
-            vs, vt = vs + dv, vt - got
-        else:
-            out = vs * tok / (vt + tok)
-            vs, vt = vs - out, vt + tok
-    if proceeds is None:
-        proceeds = vs * bag / (vt + bag) / 1e9 * (1 - FEE)
-    return proceeds - x + CREATOR_FEE * vol - LAUNCH_COST - 3 * TX_COST
+def miner(log=log.info) -> None:
+    """Pull trades of recorded launches from free RPC once they are MINE_AFTER_S old."""
+    from .chain import Rpc, host_of
+    from .history_miner import _fetch, endpoints
+    rpcs = []
+    for url, rps in reversed(endpoints(2.0)):     # configured endpoints first, the public RPC last
+        rpc = Rpc(url, min(rps, 2.0))
+        rpc.gtfa = False
+        rpcs.append(rpc)
+    log("trade miner on %s", ", ".join(host_of(r.url) for r in rpcs))
+    done = set()
+    if TRADES.exists():
+        done = {json.loads(x)["m"] for x in TRADES.open(encoding="utf-8") if '"done"' in x}
+    while True:
+        todo = []
+        if OUT.exists():
+            for line in OUT.open(encoding="utf-8"):
+                try:
+                    c = json.loads(line)
+                except ValueError:
+                    continue
+                if c.get("txType") == "create" and c["mint"] not in done and time.time() - c["t"] > MINE_AFTER_S:
+                    todo.append(c)
+        for c in todo:
+            tok = {"m": c["mint"], "bc": c.get("bondingCurveKey"), "t0": c["t"]}
+            if not tok["bc"]:
+                done.add(c["mint"])
+                continue
+            try:
+                for rpc in rpcs:                      # first endpoint that serves the whole chart
+                    status, rows, _ = _fetch(rpc, tok, MINE_WINDOW_S, 2)
+                    if status != "retry":
+                        break
+            except Exception as exc:  # noqa: BLE001 - next pass
+                log("mine %s: %s", c["mint"][:8], exc)
+                continue
+            if status == "retry":
+                continue
+            with TRADES.open("a", encoding="utf-8") as fh:
+                for k, r in enumerate(rows or []):
+                    fh.write(json.dumps({**r, "i": k}, separators=(",", ":")) + "\n")
+                fh.write(json.dumps({"k": "done", "m": c["mint"], "status": status}) + "\n")
+            done.add(c["mint"])
+        time.sleep(30)
 
 
 def score() -> None:
-    creates, trades = {}, defaultdict(list)
-    with OUT.open(encoding="utf-8") as fh:
-        for line in fh:
+    from .creator import launch_rows, replay, stats
+    creates = {}
+    for line in OUT.open(encoding="utf-8"):
+        r = json.loads(line)
+        if r.get("txType") == "create" and r["t"] >= FROZEN_AT:
+            creates[r["mint"]] = r
+    tr = defaultdict(list)
+    if TRADES.exists():
+        for line in TRADES.open(encoding="utf-8"):
             r = json.loads(line)
-            if r.get("txType") == "create":
-                creates[r["mint"]] = r
-            else:
-                trades[r["mint"]].append(r)
-    now = time.time()
-    done = [c for m, c in creates.items() if c["t"] >= FROZEN_AT and now - c["t"] > WATCH_S]
-    for lo, hi in ((2, 5), (5, 1e9)):
-        cs = [c for c in done if lo <= float(c["solAmount"]) < hi]
-        for lbl, xf in (("own dev buy", None), ("fixed 5 SOL", 5.0)):
-            xs = [replay(c, trades[c["mint"]], xf or float(c["solAmount"])) for c in cs]
-            if len(xs) < 5:
-                print(f"dev buy {lo}-{hi:g} SOL, {lbl}: n={len(xs)}")
-                continue
-            m, s = statistics.mean(xs), statistics.pstdev(xs)
-            print(f"dev buy {lo}-{hi:g} SOL, {lbl:11s}: n={len(xs):4d} mean {m:+.3f} SOL med {statistics.median(xs):+.3f} "
-                  f"win {sum(v > 0 for v in xs) / len(xs):.0%} t {m / (s / math.sqrt(len(xs))) if s else 0:+.2f} "
-                  f"total {sum(xs):+.2f} SOL")
+            if r.get("k") == "trade" and r["m"] in creates:
+                tr[r["m"]].append(r)
+    ls = [x for x in (launch_rows(m, creates[m]["t"], tr[m]) for m in tr) if x]
+    big = [d for d in ls if d["x"] > 5]
+    print(f"forward launches recorded {len(creates)}, mined with trades {len(ls)}, slot-0 buy > 5 SOL: {len(big)}")
+    print(f"J1 own dev buy : {stats([replay(d, d['x'], T_EXIT) for d in big])}")
+    print(f"J1 fixed 5 SOL : {stats([replay(d, 5.0, T_EXIT) for d in big])}")
+    xs = [replay(d, 5.0, T_EXIT) for d in big]
+    if xs:
+        print(f"total (5 SOL each): {sum(xs):+.2f} SOL over {len(xs)} launches")
 
 
 def main() -> None:
@@ -146,6 +156,8 @@ def main() -> None:
         return
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s",
                         handlers=[logging.FileHandler(PROJECT_ROOT / "logs" / "launch_watch.log"), logging.StreamHandler()])
+    import threading
+    threading.Thread(target=miner, daemon=True, name="miner").start()
     record()
 
 
