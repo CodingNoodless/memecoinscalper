@@ -30,6 +30,8 @@ MINE_WINDOW_S = 20.0       # J1 exits at 15 s; creator fees after 20 s are left 
                            # have ~850 txs in their first minute (175 s to mine at 5 req/s, measured)
 MINE_AFTER_S = 40.0
 MINE_PAGES = 10             # signature pages paged back from NOW: busy launches pile up thousands fast
+J2_BAND = (8.0, 15.0)      # J2: slot-0 dev buy band; registered 2026-10-17 14:27 PDT from history + 34 forward launches
+J2_FROM = 1792272420.0     # J2 is judged only on launches after its registration
 MINE_MIN_SOL = 4.0         # creator's own buy; J1's bucket is the slot-0 group's buy > 5 SOL
 SCALPER_LOG = PROJECT_ROOT / "logs" / "scalper.log"
 WATCH_MIN_SOL = 1.0
@@ -172,6 +174,10 @@ def score() -> None:
     xs = [replay(d, 5.0, T_EXIT) for d in big]
     if xs:
         print(f"total (5 SOL each): {sum(xs):+.2f} SOL over {len(xs)} launches")
+    j2 = [d for d in ls if J2_BAND[0] < d["x"] <= J2_BAND[1] and d["t0"] >= J2_FROM]
+    ys = [replay(d, d["x"], T_EXIT) for d in j2]
+    print(f"J2 (dev buy 8-15 SOL, launches after its registration): {stats(ys)}"
+          + (f" | ROI {sum(ys) / sum(d['x'] for d in j2):+.1%}" if j2 else ""))
 
 
 def main() -> None:
