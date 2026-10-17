@@ -20,6 +20,8 @@ from collections import deque
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+import threading
+
 import requests
 
 from ..paths import PROJECT_ROOT
@@ -34,7 +36,10 @@ WATCH_H = 48.0
 SIZE_SOL = 0.5
 START_SOL = 10.0
 MAX_OPEN = 20
+PUMPPORTAL_WS = "wss://pumpportal.fun/api/data"
+SCALPER_LOG = PROJECT_ROOT / "logs" / "scalper.log"
 TRADES = PROJECT_ROOT / "runner_trades.jsonl"
+MIGRATIONS = PROJECT_ROOT / "runner_migrations.jsonl"   # graduations seen by our own feed
 WALLET = PROJECT_ROOT / "runner_wallet.json"
 
 # Same entry facts and exits as research.runners (pre-registered 2026-10-17).
@@ -114,7 +119,50 @@ class Runner:
         self.closed = {r: [] for r in RULES}
         self.http = requests.Session()
         self.scan_from = 0.0
+        self.own_migrations: dict[str, float] = {}
+        if MIGRATIONS.exists():
+            for line in MIGRATIONS.read_text(encoding="utf-8").splitlines():
+                try:
+                    r = json.loads(line)
+                    self.own_migrations[r["m"]] = float(r["t"])
+                except (ValueError, KeyError):
+                    continue
         self._load_wallet()
+        threading.Thread(target=self._migration_feed, daemon=True, name="migrations").start()
+
+    @staticmethod
+    def scalper_running() -> bool:
+        try:
+            return time.time() - SCALPER_LOG.stat().st_mtime < 180
+        except OSError:
+            return False
+
+    def _migration_feed(self) -> None:
+        """Graduations straight from PumpPortal while scalp.py (which records them) is NOT running.
+        PumpPortal allows one connection per IP, so this stays off whenever the scalper is up."""
+        from websockets.sync.client import connect
+        while True:
+            if self.scalper_running():
+                time.sleep(60)
+                continue
+            try:
+                with connect(PUMPPORTAL_WS, open_timeout=20) as ws:
+                    ws.send(json.dumps({"method": "subscribeMigration"}))
+                    log.info("scalp.py not running: listening to PumpPortal migrations directly")
+                    while not self.scalper_running():
+                        try:
+                            msg = json.loads(ws.recv(timeout=60))
+                        except TimeoutError:
+                            continue
+                        if isinstance(msg, dict) and isinstance(msg.get("mint"), str) and msg.get("txType") != "create"                                 and ("pool" in msg or msg.get("txType") == "migrate"):
+                            now = time.time()
+                            self.own_migrations[msg["mint"]] = now
+                            with MIGRATIONS.open("a", encoding="utf-8") as fh:
+                                fh.write(json.dumps({"m": msg["mint"], "t": now}) + "\n")
+                    log.info("scalp.py is back: closing our PumpPortal connection")
+            except Exception as exc:  # noqa: BLE001 - reconnect
+                log.warning("migration feed: %s; retrying in 30 s", exc)
+                time.sleep(30)
 
     # --- universe --------------------------------------------------------
     def refresh_universe(self, now: float) -> None:
@@ -124,6 +172,9 @@ class Runner:
                 t = float(r["t"])
                 if now - t <= WATCH_H * 3600:
                     self.watched[r["m"]] = Watched(r["m"], t)
+        for m, t in list(self.own_migrations.items()):
+            if m not in self.watched:
+                self.watched[m] = Watched(m, t)
         for m in [m for m, w in self.watched.items() if now - w.t_grad > WATCH_H * 3600
                   and not any(k[1] == m for k in self.open)]:
             del self.watched[m]

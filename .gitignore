@@ -32,3 +32,4 @@ scalp_shadow_trades.jsonl
 backtests/
 .autopilot.lock
 .history_miner.lock
+runner_*.json*
