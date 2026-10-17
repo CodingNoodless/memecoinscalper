@@ -202,8 +202,15 @@ def main() -> None:
 
 
 def sampled_mints(tag: str = "all", path: Path | None = None) -> set[str]:
-    """Mints drawn at random for an unbiased sample (see run(sample=...))."""
-    path = path or OUT
+    """Mints drawn at random for an unbiased sample (see run(sample=...)); by default from the
+    autopilot backfill and the history miner (which draws its own random launches each pass)."""
+    out = set()
+    for p in ([path] if path is not None else [OUT, HISTORY_OUT]):
+        out |= _sampled_in(p, tag)
+    return out
+
+
+def _sampled_in(path: Path, tag: str) -> set[str]:
     out = set()
     if path.exists():
         with path.open(encoding="utf-8") as fh:

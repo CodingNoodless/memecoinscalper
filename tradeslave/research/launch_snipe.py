@@ -26,7 +26,7 @@ from .dataset import load_backfill
 FEE = 0.0125
 
 
-def snipe_returns(trades, ks=(4, 6, 10), holds=(10, 30, 120), size=0.2, net=0.001):
+def snipe_returns(trades, ks=(1, 2, 4, 6, 10), holds=(10, 30, 120), size=0.2, net=0.001):
     if not trades or not trades[0].get("create"):
         return None
     s0 = trades[0]["slot"] or 0
@@ -47,6 +47,7 @@ def snipe_returns(trades, ks=(4, 6, 10), holds=(10, 30, 120), size=0.2, net=0.00
         tok = y * lam / (x + lam)
         for h in holds:
             x2, y2 = state(s0 + k + int(h / 0.4))
+            x2, y2 = x2 + lam, y2 - tok          # our buy is still in the curve when we sell (own impact)
             got = x2 * tok / (y2 + tok) * (1 - FEE)
             out[(k, h)] = (got - net * 1e9) / (size * 1e9 + net * 1e9) - 1
     return out
@@ -81,7 +82,8 @@ def main() -> None:
              "dev buy 1.5-3": lambda x: 1.5 <= x["ib"] < 3, "dev buy >= 3": lambda x: x["ib"] >= 3,
              "creator's first launch in 1h": lambda x: x["prior"] == 0, "serial creator": lambda x: x["prior"] > 0}
     winners = []
-    for (k, h) in [(4, 10), (4, 30), (6, 30), (6, 120), (10, 30)]:
+    # +1/+2 slots need paid fast infrastructure (block-0 feed + staked sending); shown to price that decision.
+    for (k, h) in [(1, 10), (1, 30), (2, 30), (4, 10), (4, 30), (6, 30), (6, 120), (10, 30)]:
         print(f"buy at launch slot +{k}, sell after {h}s")
         for name, f in rules.items():
             cells, ok = [], True

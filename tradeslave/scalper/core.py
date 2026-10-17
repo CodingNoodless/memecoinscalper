@@ -232,13 +232,23 @@ class Scalper:
             return
         policy = policies.get(tr.mint)
         if policy is not None:
-            signal = exit_policy(pnl, position.peak_pnl_pct, now - position.entry_t, tr, policy)
-            if not signal.ok and policy.get("learned") and gate is not None:
+            held = now - position.entry_t
+            signal = exit_policy(pnl, position.peak_pnl_pct, held, tr, policy)
+            if not signal.ok and policy.get("learned") and gate is not None and held >= cfg.learned_min_hold_s:
                 signal = gate.should_exit(tr, now)
         else:
             signal = exit_signal(pnl, position.peak_pnl_pct, now - position.entry_t, tr, cfg)
         if signal.ok:
             book.request_sell(tr, now, signal.reason, {**signal.details, "pnl_at_signal": round(pnl, 4)})
+
+    def _model_blocked(self, book: PaperBook, mint: str, now: float) -> str:
+        """Per-token rules for model entries (training simulates the same ones, see autopilot.model.trade):
+        at most model_max_trades_per_token trades, and a cooldown after the last one closed."""
+        if book.trades_on.get(mint, 0) >= self.cfg.model_max_trades_per_token:
+            return "max_trades_per_token"
+        if now - book.last_close_t.get(mint, -1e18) < self.cfg.model_reentry_cooldown_s:
+            return "reentry_cooldown"
+        return ""
 
     def _decide_shadow(self, lane: "ShadowLane", tr: TokenTracker, now: float) -> None:
         if lane.book.busy(tr.mint):
@@ -247,7 +257,7 @@ class Scalper:
             self._manage(lane.book, lane.position_policy, lane.gate, tr, now, self.cfg)
             return
         lane.position_policy.pop(tr.mint, None)
-        if not self.feed_ok or lane.gate is None:
+        if not self.feed_ok or lane.gate is None or self._model_blocked(lane.book, tr.mint, now):
             return
         signal = lane.gate.entry(tr, now)
         if not signal.ok:
@@ -269,7 +279,11 @@ class Scalper:
         if not self.feed_ok:
             signal = Signal(False, "feed_down", {})
         elif self.cfg.entry_mode == "model":
-            signal = self.model.entry(tr, now) if self.model is not None else Signal(False, "no_model_yet", {})
+            blocked = self._model_blocked(self.book, tr.mint, now)
+            if blocked:
+                signal = Signal(False, blocked, {})
+            else:
+                signal = self.model.entry(tr, now) if self.model is not None else Signal(False, "no_model_yet", {})
         else:
             signal = entry_signal(tr, now, self.cfg)
         if not signal.ok:

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import statistics
 
-from ..scalper.curve import buy_tokens_out, sell_sol_out
+from ..scalper.curve import buy_tokens_out, sell_sol_out, with_own_buy
 from .dataset import L, Token
 
 FEE_BPS = 125
@@ -16,8 +16,9 @@ LATENCY_S = 0.8
 
 def simulate(tok: Token, t_decision: float, tp: float = 0.05, sl: float = 0.06, hold: float = 60.0,
              trail: tuple[float, float] | None = None, size: float = SIZE_SOL, latency: float = LATENCY_S,
-             fee_bps: int = FEE_BPS, network_fee: float = NETWORK_FEE_SOL) -> float | None:
-    """Net PnL fraction of buying at t_decision (+latency) and exiting per the policy."""
+             fee_bps: int = FEE_BPS, network_fee: float = NETWORK_FEE_SOL, own_impact: bool = True) -> float | None:
+    """Net PnL fraction of buying at t_decision (+latency) and exiting per the policy.
+    own_impact: sell into the curve with our own buy still in it (as live, see curve.with_own_buy)."""
     i = tok.idx_at(t_decision + latency)
     if i < 0:
         return None
@@ -25,11 +26,16 @@ def simulate(tok: Token, t_decision: float, tp: float = 0.05, sl: float = 0.06, 
     if tokens <= 0:
         return None
     cost = size + network_fee
+    sol_in = int(size * L) if own_impact else 0
+
+    def value(k):
+        return sell_sol_out(with_own_buy(tok.state(k), tokens, sol_in, fee_bps), tokens, fee_bps) / L
+
     t_fill = t_decision + latency
     peak, exit_t = -1.0, None
     j = i + 1
     while j < len(tok.t) and tok.t[j] <= t_fill + hold:
-        pnl = (sell_sol_out(tok.state(j), tokens, fee_bps) / L - network_fee) / cost - 1
+        pnl = (value(j) - network_fee) / cost - 1
         peak = max(peak, pnl)
         if pnl >= tp or pnl <= -sl or (trail and peak >= trail[0] and peak - pnl >= trail[1]):
             exit_t = tok.t[j]
@@ -38,7 +44,7 @@ def simulate(tok: Token, t_decision: float, tp: float = 0.05, sl: float = 0.06, 
     if exit_t is None:
         exit_t = t_fill + hold
     k = tok.idx_at(exit_t + latency)
-    return (sell_sol_out(tok.state(k), tokens, fee_bps) / L - network_fee) / cost - 1
+    return (value(k) - network_fee) / cost - 1
 
 
 def summary(values) -> dict:

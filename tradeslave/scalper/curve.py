@@ -110,6 +110,20 @@ def buy_tokens_out(state: CurveState, sol_in_lamports: int, fee_bps: int) -> int
     return max(0, state.virtual_token_reserves - new_tokens)
 
 
+def with_own_buy(state: CurveState, tokens: int, sol_in_lamports: int, fee_bps: int) -> CurveState:
+    """The curve as it would be with our own buy still in it.
+
+    Paper fills read curve states that never contain our trade. Selling into such a
+    state charges our buy's price impact a second time (about 2 x size / virtual SOL,
+    ~1% at 0.15 SOL on a fresh 30 SOL curve). Live, our buy sits in the curve until we
+    sell it back, so the sell unwinds it. Our deltas are added to the observed reserves."""
+    if tokens <= 0 or sol_in_lamports <= 0 or tokens >= state.virtual_token_reserves:
+        return state
+    net = sol_in_lamports * 10_000 // (10_000 + fee_bps)
+    return CurveState(state.virtual_token_reserves - tokens, state.virtual_sol_reserves + net,
+                      state.real_token_reserves, state.real_sol_reserves, state.token_total_supply, state.complete)
+
+
 def sell_sol_out(state: CurveState, tokens_in: int, fee_bps: int) -> int:
     """Lamports received for selling tokens_in, after the fee."""
     if tokens_in <= 0:

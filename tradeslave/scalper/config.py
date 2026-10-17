@@ -112,6 +112,7 @@ class ScalpConfig:
     fee_bps: int = 125               # pump.fun bonding curve fee per side (1.25%, Sep 2026)
     network_fee_sol: float = 0.0003  # base + priority fee per transaction (assumption)
     latency_s: float = 0.8           # decision -> landed transaction
+    own_impact: bool = True          # our buy stays in the curve until we sell it (paper states never contain it)
     fail_rate: float = 0.05          # share of transactions that fail (fee paid, no fill)
     sell_retry_s: float = 1.0        # a failed sell is retried after this delay
     seed: int = 7                    # deterministic simulation
@@ -147,6 +148,9 @@ class ScalpConfig:
     model_reload_s: float = 60.0         # check for a newly promoted model this often
     shadow: bool = True                  # also paper-trade each cycle's best candidate in its own wallet (forward test)
     shadow_lanes: int = 4                # forward-test this many candidates per cycle (each its own paper wallet)
+    model_reentry_cooldown_s: float = 30.0   # a model may re-buy a token only this long after its last trade closed
+    model_max_trades_per_token: int = 2      # ... and at most this many times (training simulates the same rules)
+    learned_min_hold_s: float = 10.0         # learned exits may not sell earlier (stops still apply): no buy-sell churn
     history_miner: bool = True           # background process: exact charts of logged launches via the free public RPC
 
 

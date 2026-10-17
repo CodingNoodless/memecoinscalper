@@ -47,11 +47,17 @@ MIN_HOLDOUT_TRADES = 20
 PROVEN = dict(trades=100, mean=0.01, max_token_share=0.20, t_stat=2.0)
 MAX_TOKEN_SHARE = 0.30       # no single token may carry more than this share of a model's gains
 EMBARGO_S = 600.0            # > max entry age + max hold: nothing overlaps across the split
-ENTRY_QS = (0.90, 0.95, 0.98, 0.99, 0.995)
+# Entry thresholds as train-score quantiles. 0.99/0.995 dropped (2026-10-17): the top 1-2% did WORSE than the
+# top 10% on unseen tokens and gave too few trades to judge; 0.8 added for statistical power.
+ENTRY_QS = (0.80, 0.90, 0.95, 0.98)
 ABS_THRESHOLDS = (0.0, 0.01, 0.03)    # expected NET return (fees included) a trade must clear
 # Learned exits: (exit scorer, sell when the score drops below this train-quantile, hard stop, max hold)
 LEARNED_EXITS = [(xs, q, 0.15, hold) for xs in ("same", "f30") for q in (0.5, 0.8) for hold in (120.0, 300.0)]
-DEFAULT_ECON = dict(size=0.15, latency=0.8, fee_bps=125, network_fee=0.0003)
+# Trade economics + per-token trading rules. The live bot (ModelGate / Scalper) applies the same rules:
+# re-buy a token only `cooldown` s after the last trade on it closed, at most `max_per_token` trades per token,
+# and a learned exit can't sell before `min_hold` s (stops still apply).
+DEFAULT_ECON = dict(size=0.15, latency=0.8, fee_bps=125, network_fee=0.0003, own_impact=True,
+                    cooldown=30.0, max_per_token=2, min_hold=10.0)
 
 
 @dataclass
@@ -193,16 +199,38 @@ def chart_skill(train, hold, Xtr, Xhold, log=print) -> dict:
         log(f"  chart reading, {h:3d}s ahead: rank IC {out[h]['ic']:+.3f} | model's top 10%: "
             f"{out[h]['top10_mean'] * 100:+.1f}% avg, up {out[h]['top10_up']:.0%} vs all {out[h]['all_mean'] * 100:+.1f}%, "
             f"up {out[h]['all_up']:.0%}")
+        if h == 60:
+            out["headline"] = headline(hold, m.predict(Xhold), log)
     return out
+
+
+def headline(hold, pred, log=print, q: float = 0.9) -> dict:
+    """THE progress number (review 2026-10-16): the 60 s chart reader's top 10% on unseen tokens,
+    traded like the bot (per-token rules), NET after fees, for every exit policy. IC can rise
+    while this stays negative (skill at spotting dumps doesn't pay a buyer)."""
+    import numpy as np
+    thr = float(np.quantile(pred, q))
+    out = {}
+    for policy in POLICIES:
+        ev = evaluate(trade(hold, pred, policy, thr))
+        out[policy] = {"trades": ev.trades, "mean": round(ev.mean, 4), "t": round(ev.t_stat, 2)}
+    best = max(out, key=lambda p: out[p]["mean"])
+    log(f"  HEADLINE: top 10% on unseen tokens, net after fees, best exit {best}: {out[best]['trades']} trades, "
+        f"mean {out[best]['mean'] * 100:+.2f}% (t {out[best]['t']:+.1f}); break-even = 0")
+    return {"best": best, **out[best], "by_policy": out}
 
 
 def predict(model, samples):
     return model.predict(_X(samples)) if len(samples) else []
 
 
-def trade(samples, preds, policy, threshold) -> list[tuple[str, float, float]]:
-    """Bot-like: at most one open position per token; a token is free again after the hold.
-    Returns (mint, net return, entry time) per trade."""
+def trade(samples, preds, policy, threshold, cooldown: float | None = None,
+          max_per_token: int | None = None) -> list[tuple[str, float, float]]:
+    """Bot-like: at most one open position per token; a token is free again `cooldown` s after the
+    hold (the policy's time cap: a conservative stand-in for the exit time), and is traded at most
+    `max_per_token` times. Returns (mint, net return, entry time) per trade."""
+    cooldown = DEFAULT_ECON["cooldown"] if cooldown is None else cooldown
+    max_per_token = DEFAULT_ECON["max_per_token"] if max_per_token is None else max_per_token
     hold = POLICIES[policy]["hold"] + 1.0
     by = collections.defaultdict(list)
     for s, p in zip(samples, preds):
@@ -210,23 +238,28 @@ def trade(samples, preds, policy, threshold) -> list[tuple[str, float, float]]:
     out = []
     for mint, rows in by.items():
         rows.sort()
-        free = -1e18
+        free, n = -1e18, 0
         for t, p, y in rows:
+            if n >= max_per_token:
+                break
             if t >= free and p >= threshold:
                 out.append((mint, y, t))
-                free = t + hold
+                free = t + hold + cooldown
+                n += 1
     return out
 
 
 # --- learned exits ------------------------------------------------------------
 def simulate_learned(path, t_dec: float, times, scores, exit_thr: float, sl: float, hold: float,
-                     size: float, latency: float, fee_bps: int, network_fee: float):
+                     size: float, latency: float, fee_bps: int, network_fee: float, own_impact: bool = True,
+                     min_hold: float = 0.0):
     """(net return, exit decision time) of buying at t_dec (+latency) and selling at the first
     score below exit_thr (scores taken at `times`, as the live bot re-scores), a net loss of `sl`
     on any tick, or after `hold` seconds. Fills like research.sim: exact curve math, fee both
-    ways, network fee, fill `latency` after each decision."""
+    ways, network fee, fill `latency` after each decision, our own buy kept in the curve (own_impact).
+    Scores earlier than `min_hold` s after the fill are ignored (no buy-then-sell churn)."""
     from ..research.dataset import L
-    from ..scalper.curve import CurveState, buy_tokens_out, sell_sol_out
+    from ..scalper.curve import CurveState, buy_tokens_out, sell_sol_out, with_own_buy
     t_arr, vs, vt = path
     i = bisect.bisect_right(t_arr, t_dec + latency) - 1
     if i < 0:
@@ -235,6 +268,12 @@ def simulate_learned(path, t_dec: float, times, scores, exit_thr: float, sl: flo
     if tokens <= 0:
         return None
     cost = size + network_fee
+    sol_in = int(size * L) if own_impact else 0
+
+    def value(m):
+        state = with_own_buy(CurveState(int(vt[m]), int(vs[m])), tokens, sol_in, fee_bps)
+        return sell_sol_out(state, tokens, fee_bps) / L
+
     t_fill = t_dec + latency
     end = t_fill + hold
     j, k = i + 1, bisect.bisect_right(times, t_fill)
@@ -246,24 +285,24 @@ def simulate_learned(path, t_dec: float, times, scores, exit_thr: float, sl: flo
         if nt == math.inf and ns == math.inf:
             break
         if nt <= ns:                   # a trade happened: check the hard stop on the new state
-            pnl = (sell_sol_out(CurveState(int(vt[j]), int(vs[j])), tokens, fee_bps) / L - network_fee) / cost - 1
+            pnl = (value(j) - network_fee) / cost - 1
             if pnl <= -sl:
                 exit_t = float(t_arr[j])
             j += 1
         else:                          # the bot re-scored the position
-            if scores[k] < exit_thr:
+            if scores[k] < exit_thr and times[k] >= t_fill + min_hold:
                 exit_t = float(times[k])
             k += 1
     if exit_t is None:
         exit_t = end
     m = max(bisect.bisect_right(t_arr, exit_t + latency) - 1, 0)
-    ret = (sell_sol_out(CurveState(int(vt[m]), int(vs[m])), tokens, fee_bps) / L - network_fee) / cost - 1
-    return ret, exit_t
+    return (value(m) - network_fee) / cost - 1, exit_t
 
 
 def trade_learned(samples, entry_preds, threshold, exit_preds, exit_thr, sl, hold, paths, econ):
     """Like trade(), with learned exits. Tokens without a stored price path are skipped."""
     import numpy as np
+    econ = {**DEFAULT_ECON, **(econ or {})}
     by = collections.defaultdict(list)
     for s, p, x in zip(samples, entry_preds, exit_preds):
         by[s.mint].append((s.t, p, x))
@@ -275,15 +314,18 @@ def trade_learned(samples, entry_preds, threshold, exit_preds, exit_thr, sl, hol
         rows.sort()
         times = np.array([r[0] for r in rows])
         xs = np.array([r[2] for r in rows])
-        free = -1e18
+        free, n = -1e18, 0
         for t, p, _ in rows:
+            if n >= econ["max_per_token"]:
+                break
             if t >= free and p >= threshold:
                 r = simulate_learned(path, t, times, xs, exit_thr, sl, hold, econ["size"], econ["latency"],
-                                     econ["fee_bps"], econ["network_fee"])
+                                     econ["fee_bps"], econ["network_fee"], econ["own_impact"], econ["min_hold"])
                 if r is None:
                     continue
                 out.append((mint, r[0], t))
-                free = r[1] + econ["latency"] + 1.0
+                n += 1
+                free = r[1] + econ["latency"] + 1.0 + econ["cooldown"]
     return out
 
 
@@ -338,7 +380,7 @@ def run_candidate(c, samples, X, paths, econ):
     """Trades of a candidate (or a loaded card + models) on a sample set."""
     preds = c.model.predict(_cols_of(X, c.cols))
     if not c.exit:
-        return trade(samples, preds, c.policy, c.threshold)
+        return trade(samples, preds, c.policy, c.threshold, econ["cooldown"], econ["max_per_token"])
     xm = c.model if c.exit["scorer"] == "same" else c.exit_model
     xpreds = preds if c.exit["scorer"] == "same" else xm.predict(_cols_of(X, c.exit.get("cols")))
     return trade_learned(samples, preds, c.threshold, xpreds, c.exit["threshold"], c.exit["sl"], c.exit["hold"],
@@ -426,7 +468,7 @@ def train_cycle(samples: list[Sample], log=print, paths: dict | None = None,
             for q in ENTRY_QS:
                 thr = float(np.quantile(p_tr, q))
                 for policy in POLICIES:
-                    ev = evaluate(trade(val, p_val, policy, thr))
+                    ev = evaluate(trade(val, p_val, policy, thr, econ["cooldown"], econ["max_per_token"]))
                     candidates.append(Candidate(ev, policy, thr, m, cols, "chart60", {**params, "q": q}))
                 if not paths:
                     continue
@@ -447,16 +489,16 @@ def train_cycle(samples: list[Sample], log=print, paths: dict | None = None,
                 p_tr, p_val = m.predict(_cols_of(Xtr, cols)), m.predict(_cols_of(Xval, cols))
                 for q in ENTRY_QS:
                     thr = float(np.quantile(p_tr, q))
-                    ev = evaluate(trade(val, p_val, policy, thr))
+                    ev = evaluate(trade(val, p_val, policy, thr, econ["cooldown"], econ["max_per_token"]))
                     candidates.append(Candidate(ev, policy, thr, m, cols, "policy",
                                                 {"leaf": leaf, "nodes": nodes, "fs": fs, "q": q}))
         m = fit_abs(train, policy, Xtr)
         p_val = m.predict(Xval)
         for thr in ABS_THRESHOLDS:
-            ev = evaluate(trade(val, p_val, policy, thr))
+            ev = evaluate(trade(val, p_val, policy, thr, econ["cooldown"], econ["max_per_token"]))
             candidates.append(Candidate(ev, policy, thr, m, None, "abs", {"leaf": 1500, "nodes": 15, "fs": "all",
                                                                            "min_expected": thr}))
-        base = evaluate(trade(val, [1.0] * len(val), policy, 0.0))
+        base = evaluate(trade(val, [1.0] * len(val), policy, 0.0, econ["cooldown"], econ["max_per_token"]))
         log(f"  {policy:22s} take-everything baseline on validation: mean {base.mean * 100:+.1f}%")
 
     good = [c for c in candidates if eligible(c.val)]

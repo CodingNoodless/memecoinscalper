@@ -93,7 +93,9 @@ def cycle(args) -> int:
     paths: dict = {}
     samples = load_samples(cfg, cfg.autopilot_days, log=lambda *a: _say(*a), price_paths=paths)
     _say(f"{len(samples)} samples from {len({s.mint for s in samples})} tokens")
-    econ = dict(size=cfg.trade_size_sol, latency=cfg.latency_s, fee_bps=cfg.fee_bps, network_fee=cfg.network_fee_sol)
+    econ = dict(size=cfg.trade_size_sol, latency=cfg.latency_s, fee_bps=cfg.fee_bps, network_fee=cfg.network_fee_sol,
+                own_impact=cfg.own_impact, cooldown=cfg.model_reentry_cooldown_s,
+                max_per_token=cfg.model_max_trades_per_token, min_hold=cfg.learned_min_hold_s)
     card, model, info = train_cycle(samples, log=lambda *a: _say(*a), paths=paths, econ=econ)
     save_shadow(info, log=lambda *a: _say(*a))
     promoted = False
@@ -154,8 +156,10 @@ def status(_args) -> int:
             r = json.loads(line)
             h = r.get("holdout") if isinstance(r.get("holdout"), dict) else {}
             ic = ((r.get("chart_skill") or {}).get("60") or {}).get("ic")
+            head = (r.get("chart_skill") or {}).get("headline") or {}
             print(f"  {time.strftime('%m-%d %H:%M', time.localtime(r['t']))} samples {r.get('n_samples', 0):7d} "
                   f"chart IC60 {ic if ic is not None else float('nan'):+.3f} "
+                  f"top10% net {head['mean'] * 100 if head else float('nan'):+6.2f}% "
                   f"policy {r.get('policy', '-'):22s} holdout {h.get('trades', 0):4d} trades "
                   f"mean {h.get('mean', 0) * 100:+6.2f}%  {'PROMOTED' if r['promoted'] else ''}")
     return 0

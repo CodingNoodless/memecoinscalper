@@ -33,18 +33,40 @@ import collections
 import json
 import os
 import queue
+import random
 import threading
 import time
 from pathlib import Path
 
 from ..scalper.recorder import TICK_DIR, read_ticks
-from .backfill_trades import HISTORY_OUT, TRADE_DIR, VERSION, done_mints, parse_trade
+from .backfill_trades import HISTORY_OUT, TRADE_DIR, VERSION, done_mints, parse_trade, sampled_mints
 from .chain import PUBLIC_RPC, Rpc, address_transactions, host_of, signature_of
 
 SKIPS = TRADE_DIR / "history_skips.jsonl"
 # An endpoint that fails this many tokens in a row is rested (rate-limited or out of free quota):
 # grinding through its 429 back-offs once stalled a whole pass for 8 hours.
 REST_AFTER_FAILS, REST_S = 4, 600.0
+# Unbiased launch sample (launch-sniping research needs ALL launches, not just busy ones): each pass
+# draws this many logged launches at random, whatever happened to them, and mines them first,
+# interleaved with the busy queue. Quiet launches have few transactions, so they are cheap.
+SAMPLE_PER_PASS = 100
+
+
+def draw_sample(all_cands: list[dict], already: set[str], k: int, rng: random.Random) -> list[dict]:
+    """k launches drawn uniformly from every logged launch not drawn before (mined or not)."""
+    pool = [c for c in all_cands if c["m"] not in already]
+    return rng.sample(pool, min(k, len(pool)))
+
+
+def interleave(sample: list[dict], rest: list[dict]) -> list[dict]:
+    """sample[0], rest[0], sample[1], rest[1], ... then whatever is left (each mint once)."""
+    out, seen = [], set()
+    for i in range(max(len(sample), len(rest))):
+        for c in (sample[i] if i < len(sample) else None, rest[i] if i < len(rest) else None):
+            if c is not None and c["m"] not in seen:
+                seen.add(c["m"])
+                out.append(c)
+    return out
 
 
 def candidates(tick_dir: Path, min_age_s: float = 1200.0) -> list[dict]:
@@ -254,12 +276,19 @@ def main() -> None:
         rpc.attempts, rpc.fail_fast = 4, True   # a struggling endpoint hands the token on instead of grinding
         rpcs.append(rpc)
     log(f"history miner on {len(rpcs)} endpoint(s): " + ", ".join(f"{host_of(u)} at {r:g} req/s" for u, r in urls))
+    rng = random.Random()
     while True:
         done, skip = done_mints(), skipped()
-        todo = [c for c in candidates(TICK_DIR) if c["m"] not in done and c["m"] not in skip]
+        cands = candidates(TICK_DIR)
+        drawn = draw_sample(cands, sampled_mints("all"), SAMPLE_PER_PASS, rng)
+        with HISTORY_OUT.open("a", encoding="utf-8") as fh:      # recorded at draw time: no survivor bias
+            for c in drawn:
+                fh.write(json.dumps({"k": "sample", "tag": "all", "m": c["m"], "t0": c["t0"], "src": "history_miner"}) + "\n")
+        todo = interleave([c for c in drawn if c["m"] not in done and c["m"] not in skip],
+                          [c for c in cands if c["m"] not in done and c["m"] not in skip])
         busy = sum(1 for c in todo if c["updates"] >= 5)
         log(f"pass: {len(todo)} logged launches without a chart ({busy} with >= 5 recorded updates), "
-            f"{len(done)} already mined")
+            f"{len(done)} already mined; {len(drawn)} drawn at random for the unbiased launch sample (mined first)")
         if todo:
             mine(rpcs, todo, args.window, args.max_pages, log, stop_after_s=0 if args.once else args.rescan_every_s)
         if args.once:

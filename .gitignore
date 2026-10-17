@@ -26,7 +26,7 @@ data/
 scalp_wallet.json
 scalp_trades.jsonl
 scalp_events.jsonl
-scalp_shadow_wallet.json
+scalp_shadow_wallet*.json
 scalp_shadow_trades.jsonl
 .scalper.lock
 backtests/

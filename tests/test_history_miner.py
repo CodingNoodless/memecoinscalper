@@ -90,3 +90,14 @@ def test_mine_hands_a_token_to_another_endpoint(tmp_path, monkeypatch):
     n = hm.mine(rpcs, todo, 900.0, 5, log=lambda *a: None)
     assert n == 2 and "https://full.example/k" in seen
     assert MINT in bt.done_mints()
+
+
+def test_unbiased_sample_is_drawn_from_all_launches_and_mined_first():
+    import random
+    from tradeslave.research import history_miner as hm
+    cands = [{"m": f"m{i}", "updates": 50 if i < 5 else 0} for i in range(100)]
+    drawn = hm.draw_sample(cands, already={"m1", "m2"}, k=10, rng=random.Random(1))
+    assert len(drawn) == 10 and not {"m1", "m2"} & {c["m"] for c in drawn}
+    order = hm.interleave(drawn, cands)
+    assert order[0] is drawn[0] and order[2] is drawn[1]          # sampled launches go first, interleaved
+    assert sorted(c["m"] for c in order) == sorted(c["m"] for c in cands)   # every mint exactly once

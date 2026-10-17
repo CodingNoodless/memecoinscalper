@@ -58,10 +58,43 @@ def test_trade_learned_one_position_per_token_at_a_time():
     samples = [S.Sample("A", T0 + k, T0, np.zeros(len(F.FEATURES), dtype=np.float32), {}, True) for k in range(2, 60, 2)]
     entry = [1.0] * len(samples)
     exit_scores = [0.0 if k % 10 == 0 else 1.0 for k in range(2, 60, 2)]   # sell signal every 10 s
-    trades = M.trade_learned(samples, entry, 0.5, exit_scores, 0.5, 0.5, 120.0, {"A": path}, ECON)
+    free = {**ECON, "cooldown": 0.0, "max_per_token": 99, "min_hold": 0.0}
+    trades = M.trade_learned(samples, entry, 0.5, exit_scores, 0.5, 0.5, 120.0, {"A": path}, free)
     times = [t for _, _, t in trades]
     assert len(trades) >= 3 and all(b - a >= 2 for a, b in zip(times, times[1:]))
     assert M.trade_learned(samples, entry, 0.5, exit_scores, 0.5, 0.5, 120.0, {}, ECON) == []   # no path: no trade
+
+
+def test_trade_learned_cooldown_cap_and_min_hold():
+    path = path_of([1.01] * 120)
+    samples = [S.Sample("A", T0 + k, T0, np.zeros(len(F.FEATURES), dtype=np.float32), {}, True) for k in range(2, 120, 2)]
+    entry = [1.0] * len(samples)
+    exit_scores = [0.0] * len(samples)                  # the exit model wants out at every re-score
+    econ = {**ECON, "cooldown": 30.0, "max_per_token": 2, "min_hold": 10.0}
+    trades = M.trade_learned(samples, entry, 0.5, exit_scores, 0.5, 0.5, 120.0, {"A": path}, econ)
+    assert len(trades) == 2                             # capped per token
+    assert trades[1][2] - trades[0][2] >= 10.0 + 30.0   # held >= min_hold, then waited out the cooldown
+    _, exit_t = M.simulate_learned(path, T0 + 2, np.array([T0 + 4.0, T0 + 8.0, T0 + 14.0]), np.zeros(3), 0.5, 0.5,
+                                   120.0, **_e(), min_hold=10.0)
+    assert exit_t == T0 + 14.0                          # the first two sell signals came before min_hold
+
+
+def test_trade_cooldown_and_cap():
+    samples = [S.Sample("A", T0 + k, T0, np.zeros(1), {"hold30": 0.01}, True) for k in range(0, 300, 2)]
+    trades = M.trade(samples, [1.0] * len(samples), "hold30", 0.5, cooldown=30.0, max_per_token=2)
+    assert [t - T0 for _, _, t in trades] == [0, 62]    # hold 30 s (+1) + 30 s cooldown, then the cap
+    assert len(M.trade(samples, [1.0] * len(samples), "hold30", 0.5, cooldown=0.0, max_per_token=99)) == 10
+
+
+def test_own_impact_sell_returns_the_buy_minus_fees():
+    from tradeslave.research.dataset import Token
+    from tradeslave.research.sim import simulate
+    tok = Token("A", T0, t=[T0, T0 + 100], vs=[30_000_000_000] * 2, vt=[1_073_000_000_000_000] * 2)
+    own = simulate(tok, T0, tp=9, sl=0.99, hold=30, size=0.15, network_fee=0.0003, own_impact=True)
+    paper = simulate(tok, T0, tp=9, sl=0.99, hold=30, size=0.15, network_fee=0.0003, own_impact=False)
+    fees_only = (0.15 / 1.0125 * 0.9875 - 0.0003) / 0.1503 - 1        # 1.25% each way + network fee
+    assert own == pytest.approx(fees_only, abs=2e-4)
+    assert paper < own - 0.008                          # the old fill paid our own price impact twice (~1%)
 
 
 def test_split_embargo_drops_tokens_right_after_each_boundary():
@@ -138,3 +171,14 @@ def test_load_samples_fills_price_paths_fresh_and_from_cache(tmp_path):
         found: dict = {}
         out = S.load_samples(mcfg(), 14, tick_dir=ticks, cache_dir=cache, log=lambda *a: None, price_paths=found)
         assert out and set(found) == {"P"} and len(found["P"][0]) >= 50
+
+
+def test_live_model_entries_follow_the_same_per_token_rules():
+    sc = Scalper(ScalpConfig(model_reentry_cooldown_s=30.0, model_max_trades_per_token=2))
+    book = sc.book
+    assert sc._model_blocked(book, "A", T0) == ""
+    book.trades_on["A"], book.last_close_t["A"] = 1, T0
+    assert sc._model_blocked(book, "A", T0 + 10) == "reentry_cooldown"
+    assert sc._model_blocked(book, "A", T0 + 31) == ""
+    book.trades_on["A"] = 2
+    assert sc._model_blocked(book, "A", T0 + 999) == "max_trades_per_token"

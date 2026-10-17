@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from .config import ScalpConfig
-from .curve import LAMPORTS_PER_SOL, buy_tokens_out, sell_sol_out
+from .curve import LAMPORTS_PER_SOL, buy_tokens_out, sell_sol_out, with_own_buy
 from .tracker import TokenTracker
 
 
@@ -35,6 +35,7 @@ class Position:
     entry_details: dict = field(default_factory=dict)
     peak_pnl_pct: float = 0.0
     last_pnl_pct: float = 0.0
+    sol_in_lamports: int = 0     # what our buy put into the curve (for own-impact sells)
 
 
 @dataclass
@@ -65,6 +66,8 @@ class PaperBook:
         self.failed_tx = 0
         self._emit = on_event or (lambda kind, data: None)
         self.mutate_tracker = True     # False for a shadow book: leave per-token cooldown/loss counters alone
+        self.trades_on: dict[str, int] = {}       # mint -> buys filled (model re-entry rules)
+        self.last_close_t: dict[str, float] = {}  # mint -> when the last position on it closed
         self.daily_loss_limit_sol = cfg.daily_loss_limit_sol
 
     # --- risk -------------------------------------------------------------
@@ -151,8 +154,10 @@ class PaperBook:
         position = Position(
             trade_id=uuid.uuid4().hex[:12], mint=tr.mint, symbol=tr.symbol, kind=order.reason,
             tokens=tokens, cost_sol=cost, entry_t=now, entry_price=tr.price, entry_details=order.details,
+            sol_in_lamports=int(size * LAMPORTS_PER_SOL),
         )
         self.positions[tr.mint] = position
+        self.trades_on[tr.mint] = self.trades_on.get(tr.mint, 0) + 1
         self._emit("buy_filled", {"mint": tr.mint, "symbol": tr.symbol, "t": now, "price": tr.price,
                                   "cost_sol": cost, "slippage_vs_signal": order.details.get("signal_price") and
                                   tr.price / order.details["signal_price"] - 1.0, "trade_id": position.trade_id})
@@ -161,11 +166,16 @@ class PaperBook:
         position = self.positions.pop(tr.mint, None)
         if position is None:
             return
-        gross = sell_sol_out(tr.state, position.tokens, self.cfg.fee_bps) / LAMPORTS_PER_SOL
+        gross = self._sell_value(tr.state, position)
         proceeds = gross - self.cfg.network_fee_sol
         self.balance_sol += proceeds
         self.fees_paid_sol += self.cfg.network_fee_sol + gross * self.cfg.fee_bps / (10_000 - self.cfg.fee_bps)
         pnl = proceeds - position.cost_sol
+        self.last_close_t[tr.mint] = now
+        if len(self.last_close_t) > 20_000:       # old tokens are past the entry window anyway
+            keep = sorted(self.last_close_t, key=self.last_close_t.get)[-5_000:]
+            self.last_close_t = {m: self.last_close_t[m] for m in keep}
+            self.trades_on = {m: self.trades_on[m] for m in keep if m in self.trades_on}
         self._roll_day(now)
         self.day_pnl_sol += pnl
         if self.mutate_tracker:
@@ -191,7 +201,7 @@ class PaperBook:
         position = self.positions.get(tr.mint)
         if position is None or tr.state is None:
             return None
-        value = sell_sol_out(tr.state, position.tokens, self.cfg.fee_bps) / LAMPORTS_PER_SOL - self.cfg.network_fee_sol
+        value = self._sell_value(tr.state, position) - self.cfg.network_fee_sol
         pnl = value / position.cost_sol - 1.0
         position.last_pnl_pct = pnl
         position.peak_pnl_pct = max(position.peak_pnl_pct, pnl)
@@ -202,8 +212,14 @@ class PaperBook:
         for mint, position in self.positions.items():
             tr = trackers.get(mint)
             if tr is not None and tr.state is not None:
-                total += sell_sol_out(tr.state, position.tokens, self.cfg.fee_bps) / LAMPORTS_PER_SOL
+                total += self._sell_value(tr.state, position)
         return total
+
+    def _sell_value(self, state, position: Position) -> float:
+        """SOL (after the pump.fun fee) for selling the position into `state`."""
+        if self.cfg.own_impact and position.sol_in_lamports:
+            state = with_own_buy(state, position.tokens, position.sol_in_lamports, self.cfg.fee_bps)
+        return sell_sol_out(state, position.tokens, self.cfg.fee_bps) / LAMPORTS_PER_SOL
 
     def snapshot(self) -> dict:
         return {

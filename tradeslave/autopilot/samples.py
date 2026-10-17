@@ -27,7 +27,7 @@ from ..scalper.recorder import TICK_DIR, read_ticks
 from .features import FEATURES, features, tradeable
 
 CACHE_DIR = DATA_DIR / "autopilot" / "samples"
-CACHE_VERSION = 5   # 4: wallet features (trade events); 5: market regime features
+CACHE_VERSION = 6   # 4: wallet features (trade events); 5: market regime features; 6: own-impact sells
 
 # Exit policies the model can choose between (net PnL incl. fees, fill delay).
 POLICIES = {
@@ -195,7 +195,7 @@ def build_day(path: Path, cfg: ScalpConfig, backfill: dict | None = None, paths:
         y = {}
         for name, pol in POLICIES.items():
             r = simulate(tok, t, size=cfg.trade_size_sol, latency=cfg.latency_s, fee_bps=cfg.fee_bps,
-                         network_fee=cfg.network_fee_sol, **pol)
+                         network_fee=cfg.network_fee_sol, own_impact=cfg.own_impact, **pol)
             if r is None:
                 break
             y[name] = r
@@ -209,7 +209,7 @@ def build_day(path: Path, cfg: ScalpConfig, backfill: dict | None = None, paths:
 
 def _econ(cfg: ScalpConfig) -> tuple:
     """Trade economics baked into the labels: a change means the cache is stale."""
-    return (cfg.trade_size_sol, cfg.fee_bps, cfg.network_fee_sol, cfg.latency_s)
+    return (cfg.trade_size_sol, cfg.fee_bps, cfg.network_fee_sol, cfg.latency_s, cfg.own_impact)
 
 
 def _day_of(path: Path) -> str:
