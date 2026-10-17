@@ -26,8 +26,11 @@ log = logging.getLogger("launch_watch")
 PUMPPORTAL_WS = "wss://pumpportal.fun/api/data"
 OUT = DATA_DIR / "launch_watch.jsonl"
 TRADES = DATA_DIR / "launch_watch_trades.jsonl"
-MINE_WINDOW_S = 120.0
-MINE_AFTER_S = 180.0
+MINE_WINDOW_S = 20.0       # J1 exits at 15 s; creator fees after 20 s are left out (conservative); busy launches
+                           # have ~850 txs in their first minute (175 s to mine at 5 req/s, measured)
+MINE_AFTER_S = 40.0
+MINE_PAGES = 10             # signature pages paged back from NOW: busy launches pile up thousands fast
+MINE_MIN_SOL = 4.0         # creator's own buy; J1's bucket is the slot-0 group's buy > 5 SOL
 SCALPER_LOG = PROJECT_ROOT / "logs" / "scalper.log"
 WATCH_MIN_SOL = 1.0
 T_EXIT = 15.0                 # frozen (J1, chosen on the first half of the history sample)
@@ -79,48 +82,68 @@ def record() -> None:
 
 
 def miner(log=log.info) -> None:
-    """Pull trades of recorded launches from free RPC once they are MINE_AFTER_S old."""
+    """Pull trades of recorded forward launches (creator buy >= MINE_MIN_SOL) from free RPC once they are
+    MINE_AFTER_S old: one worker per endpoint; a launch an endpoint can't serve goes to the next one."""
+    import queue
+    import threading
     from .chain import Rpc, host_of
     from .history_miner import _fetch, endpoints
     rpcs = []
-    for url, rps in reversed(endpoints(2.0)):     # configured endpoints first, the public RPC last
-        rpc = Rpc(url, min(rps, 2.0))
+    urls = endpoints(3.0)
+    for url, rps in urls[1:] or urls:         # measured: the public RPC needs ~55 s per launch; keyed ones ~1.5 s
+        rpc = Rpc(url, rps)
         rpc.gtfa = False
         rpcs.append(rpc)
     log("trade miner on %s", ", ".join(host_of(r.url) for r in rpcs))
-    done = set()
+    done, queued, lock = set(), set(), threading.Lock()
     if TRADES.exists():
         done = {json.loads(x)["m"] for x in TRADES.open(encoding="utf-8") if '"done"' in x}
+    work: queue.Queue = queue.Queue()
+    fails = [0] * len(rpcs)
+
+    def worker(k: int) -> None:
+        while True:
+            if fails[k] >= 3:                     # rate-limited / out of quota: rest it, others carry on
+                log("resting %s for 10 min after 3 failures in a row", host_of(rpcs[k].url))
+                time.sleep(600)
+                fails[k] = 0
+            c, tried = work.get()
+            tok = {"m": c["mint"], "bc": c.get("bondingCurveKey"), "t0": c["t"]}
+            try:
+                status, rows, _ = _fetch(rpcs[k], tok, MINE_WINDOW_S, MINE_PAGES)
+            except Exception as exc:  # noqa: BLE001 - hand it on
+                log("mine %s on %s: %s", c["mint"][:8], host_of(rpcs[k].url), exc)
+                status, rows = "retry", None
+            fails[k] = fails[k] + 1 if status == "retry" else 0
+            with lock:
+                if status == "retry":
+                    tried = tried | {k}
+                    if len(tried) < len(rpcs):
+                        work.put((c, tried))
+                    else:
+                        queued.discard(c["mint"])     # all endpoints failed: next scan tries again
+                    continue
+                with TRADES.open("a", encoding="utf-8") as fh:
+                    for n, r in enumerate(rows or []):
+                        fh.write(json.dumps({**r, "i": n}, separators=(",", ":")) + "\n")
+                    fh.write(json.dumps({"k": "done", "m": c["mint"], "status": status}) + "\n")
+                done.add(c["mint"])
+
+    for k in range(len(rpcs)):
+        threading.Thread(target=worker, args=(k,), daemon=True, name=f"mine{k}").start()
     while True:
-        todo = []
         if OUT.exists():
             for line in OUT.open(encoding="utf-8"):
                 try:
                     c = json.loads(line)
                 except ValueError:
                     continue
-                if c.get("txType") == "create" and c["mint"] not in done and time.time() - c["t"] > MINE_AFTER_S:
-                    todo.append(c)
-        for c in todo:
-            tok = {"m": c["mint"], "bc": c.get("bondingCurveKey"), "t0": c["t"]}
-            if not tok["bc"]:
-                done.add(c["mint"])
-                continue
-            try:
-                for rpc in rpcs:                      # first endpoint that serves the whole chart
-                    status, rows, _ = _fetch(rpc, tok, MINE_WINDOW_S, 2)
-                    if status != "retry":
-                        break
-            except Exception as exc:  # noqa: BLE001 - next pass
-                log("mine %s: %s", c["mint"][:8], exc)
-                continue
-            if status == "retry":
-                continue
-            with TRADES.open("a", encoding="utf-8") as fh:
-                for k, r in enumerate(rows or []):
-                    fh.write(json.dumps({**r, "i": k}, separators=(",", ":")) + "\n")
-                fh.write(json.dumps({"k": "done", "m": c["mint"], "status": status}) + "\n")
-            done.add(c["mint"])
+                if (c.get("txType") == "create" and c["t"] >= FROZEN_AT and c.get("bondingCurveKey")
+                        and float(c.get("solAmount") or 0) >= MINE_MIN_SOL and time.time() - c["t"] > MINE_AFTER_S):
+                    with lock:
+                        if c["mint"] not in done and c["mint"] not in queued:
+                            queued.add(c["mint"])
+                            work.put((c, frozenset()))
         time.sleep(30)
 
 
@@ -138,8 +161,12 @@ def score() -> None:
             if r.get("k") == "trade" and r["m"] in creates:
                 tr[r["m"]].append(r)
     ls = [x for x in (launch_rows(m, creates[m]["t"], tr[m]) for m in tr) if x]
+    for d in ls:                                  # same window for every launch (early ones were mined longer)
+        d["outside"] = [r for r in d["outside"] if r["t"] - d["tc"] <= MINE_WINDOW_S]
     big = [d for d in ls if d["x"] > 5]
-    print(f"forward launches recorded {len(creates)}, mined with trades {len(ls)}, slot-0 buy > 5 SOL: {len(big)}")
+    skips = sum(1 for line in TRADES.open(encoding="utf-8") if '"status": "skip"' in line) if TRADES.exists() else 0
+    print(f"forward launches recorded {len(creates)}, mined with trades {len(ls)} (skipped as too busy: {skips}), "
+          f"slot-0 buy > 5 SOL: {len(big)}")
     print(f"J1 own dev buy : {stats([replay(d, d['x'], T_EXIT) for d in big])}")
     print(f"J1 fixed 5 SOL : {stats([replay(d, 5.0, T_EXIT) for d in big])}")
     xs = [replay(d, 5.0, T_EXIT) for d in big]
