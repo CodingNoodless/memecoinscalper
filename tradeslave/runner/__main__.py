@@ -29,6 +29,7 @@ from ..scalper.recorder import TICK_DIR, read_ticks
 log = logging.getLogger("runner")
 API = "https://api.dexscreener.com/tokens/v1/solana/"
 POLL_S = 60.0
+FAST_S = 10.0          # open positions are re-priced this often (stops)
 WATCH_H = 48.0
 SIZE_SOL = 0.5
 START_SOL = 10.0
@@ -40,6 +41,7 @@ WALLET = PROJECT_ROOT / "runner_wallet.json"
 RULES = {
     "S4": dict(tp=None, sl=0.50, hold_min=1440, trail=None),
     "S5": dict(tp=None, sl=None, hold_min=60, trail=0.15),
+    "S6": dict(tp=None, sl=None, hold_min=60, trail=0.15),   # S5 at market cap >= 5,000 SOL
 }
 
 
@@ -56,7 +58,7 @@ class Snap:
 class Watched:
     mint: str
     t_grad: float
-    snaps: deque = field(default_factory=lambda: deque(maxlen=120))
+    snaps: deque = field(default_factory=lambda: deque(maxlen=400))
     s4_checked: bool = False
 
     def price_ago(self, now: float, minutes: float) -> float | None:
@@ -127,8 +129,8 @@ class Runner:
             del self.watched[m]
 
     # --- prices ----------------------------------------------------------
-    def poll(self, now: float) -> None:
-        mints = list(self.watched)
+    def poll(self, now: float, only: list[str] | None = None) -> None:
+        mints = only if only is not None else list(self.watched)
         for i in range(0, len(mints), 30):
             batch = mints[i:i + 30]
             try:
@@ -171,6 +173,8 @@ class Runner:
                 v_now, v_prev = w.vol15(now, 0), w.vol15(now, 15)
                 if p15 and v_now is not None and v_prev is not None and s.price >= 1.25 * p15 and v_now > v_prev:
                     self.open_position("S5", w, s, now)
+                    if s.price * SUPPLY >= 5000 and ("S6", m) not in self.open:
+                        self.open_position("S6", w, s, now)
 
     def open_position(self, rule: str, w: Watched, s: Snap, now: float) -> None:
         if len(self.open) >= MAX_OPEN or self.balance[rule] < SIZE_SOL + NETWORK_FEE_SOL:
@@ -245,6 +249,14 @@ class Runner:
             log.info("STATUS %s: %d closed, mean %+.2f%%, t %+.1f, open %d, balance %.3f SOL | watching %d graduated tokens",
                      rule, n, mean * 100, t, sum(1 for k in self.open if k[0] == rule), self.balance[rule], len(self.watched))
 
+    def fast_exits(self, now: float) -> None:
+        """Between full polls: re-price only the open positions (stops fire within ~10 s, not 60 s)."""
+        mints = sorted({m for _, m in self.open if m in self.watched})
+        if mints:
+            self.poll(now, mints)
+            self.exits(now)
+            self.save()
+
     def step(self, now: float) -> None:
         self.refresh_universe(now)
         self.poll(now)
@@ -270,6 +282,12 @@ def main() -> None:
         if k % 10 == 0:
             r.status()
         k += 1
+        while time.time() - started < POLL_S - FAST_S:
+            time.sleep(FAST_S)
+            try:
+                r.fast_exits(time.time())
+            except Exception:  # noqa: BLE001
+                log.exception("fast exits failed")
         time.sleep(max(1.0, POLL_S - (time.time() - started)))
 
 

@@ -74,7 +74,7 @@ def to_tok(d: dict) -> Tok | None:
 
 
 def trade(tok: Tok, i_sig: int, size: float, tp: float | None, sl: float | None, hold_min: float,
-          trail: float | None = None):
+          trail: float | None = None, worst_stops: bool = False):
     """Net return of a buy at the open of the candle after i_sig, and the exit index."""
     i = i_sig + 1
     if i >= len(tok.t) or tok.t[i] - tok.t[i_sig] > 600:     # no trade in the next 10 min: can't fill at a known price
@@ -93,6 +93,8 @@ def trade(tok: Tok, i_sig: int, size: float, tp: float | None, sl: float | None,
             stop = max(stop or 0, peak * (1 - trail))
         if stop and lo <= stop:
             exit_px = min(op, stop) if j > i else stop
+            if worst_stops:                                     # stress: the stop filled at the minute's low
+                exit_px = lo
             break
         if tp and hi >= entry * (1 + tp):
             exit_px = max(op, entry * (1 + tp)) if j > i else entry * (1 + tp)
@@ -135,7 +137,9 @@ def signals(tok: Tok, name: str):
             if age_min >= 360 and (i == 0 or (t[i - 1] - tok.t_grad) / 60 < 360) and c[i] * SUPPLY >= 1500:
                 if t[i] - tok.t_grad <= 360 * 60 + 600:      # still trading at the 6 h mark
                     out.append(i)
-        elif name == "S5":
+        elif name == "S6" and c[i] * SUPPLY < 5000:
+            continue
+        elif name in ("S5", "S6"):
             j = bisect.bisect_left(t, t[i] - 900)
             if age_min >= 30 and j < i and c[j] > 0 and c[i] >= 1.25 * c[j]:
                 vol_now = sum(v[j:i + 1])
@@ -151,11 +155,14 @@ RULES = {
     "S3": dict(tp=0.15, sl=0.15, hold_min=30),
     "S4": dict(tp=None, sl=0.50, hold_min=1440),
     "S5": dict(tp=None, sl=None, hold_min=60, trail=0.15),
+    # Registered 2026-10-17 01:05 PDT from a DESIGN-set split (before any test look): S5 only on tokens with
+    # market cap >= 5,000 SOL at the signal (design: 68 trades +29.2% vs <0 for 200-5,000 SOL).
+    "S6": dict(tp=None, sl=None, hold_min=60, trail=0.15),
 }
 
 
-def backtest(toks: list[Tok], name: str, size: float = 0.5, rules: dict | None = None):
-    rules = rules or RULES[name]
+def backtest(toks: list[Tok], name: str, size: float = 0.5, rules: dict | None = None, worst_stops: bool = False):
+    rules = {**(rules or RULES[name]), "worst_stops": worst_stops}
     out = []
     for tok in toks:
         free = -1
@@ -192,9 +199,19 @@ def main() -> None:
     design = [x for x in toks if x.t_grad < TEST_FROM]
     test = [x for x in toks if x.t_grad >= TEST_FROM]
     print(f"{len(toks)} graduated tokens with >= 5 candles; design {len(design)}, test {len(test)}\n")
+    global fee_for
+    half = len(test) // 2
     for name in RULES:
-        print(f"{name}: design {stats(backtest(design, name))}")
-        print(f"    test   {stats(backtest(test, name))}")
+        print(f"{name}: design      {stats(backtest(design, name))}")
+        print(f"    TEST        {stats(backtest(test, name))}")
+        print(f"    test 1st/2nd half: {stats(backtest(test[:half], name))[:40]} | {stats(backtest(test[half:], name))[:40]}")
+        print(f"    test, stops at the minute's low: {stats(backtest(test, name, worst_stops=True))}")
+        base = fee_for
+        fee_for = lambda p, base=base: 2 * base(p)
+        try:
+            print(f"    test, 2x fees: {stats(backtest(test, name))}")
+        finally:
+            fee_for = base
 
 
 if __name__ == "__main__":
