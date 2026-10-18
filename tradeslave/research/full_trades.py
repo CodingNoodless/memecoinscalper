@@ -30,6 +30,7 @@ from .long_paths import OUT as PATHS
 OUT = DATA_DIR / "full_trades"
 API = "https://swap-api.pump.fun/v2/coins/{}/trades"
 WINDOW_S = 1800
+MAX_PAGES = 300                 # 30,000 trades; a cursor that never ends must not stall the run
 
 
 class Pace:
@@ -61,7 +62,7 @@ def ts(s: str) -> float:
 
 def fetch(s: requests.Session, pace: Pace, mint: str, t0: float) -> list | None:
     rows, cur = [], f"9999999999990000000000-{int((t0 + WINDOW_S) * 1000)}"
-    while True:
+    for _ in range(MAX_PAGES):
         p = {"limit": 100}
         if cur:
             p["cursor"] = cur
@@ -89,8 +90,10 @@ def fetch(s: requests.Session, pace: Pace, mint: str, t0: float) -> list | None:
             rows.append([int(sid[:12]), int(sid[12:]), ts(x["timestamp"]), x["userAddress"], x["type"] == "buy",
                          float(x["amountSol"]), float(x["baseAmount"]), x["program"] != "pump"])
         cur = d["pagination"].get("nextCursor")
-        if not d["pagination"].get("hasMore") or not cur:
+        if not d["pagination"].get("hasMore") or not cur or (rows and rows[-1][2] < t0 - 60):
             break
+    else:
+        return None                                 # runaway pagination: skip this launch
     rows.reverse()
     return rows
 
