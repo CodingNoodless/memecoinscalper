@@ -1,0 +1,11 @@
+{
+  "name": "Example Name",
+  "symbol": "EXMPL",
+  "description": "One honest sentence about the token. No promises of returns.",
+  "image": "example.png",
+  "original": false,
+  "socials_are_ours": false,
+  "website": "",
+  "twitter": "",
+  "telegram": ""
+}

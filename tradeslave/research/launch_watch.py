@@ -15,6 +15,7 @@ PumpPortal allows one connection per IP: this yields while scalp.py is running.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import time
@@ -33,6 +34,9 @@ MINE_PAGES = 10             # signature pages paged back from NOW: busy launches
 J2_BAND = (8.0, 15.0)      # J2: slot-0 dev buy band; registered 2026-10-17 14:27 PDT from history + 34 forward launches
 J2_FROM = 1792272420.0     # J2 is judged only on launches after its registration
 MINE_MIN_SOL = 4.0         # creator's own buy; J1's bucket is the slot-0 group's buy > 5 SOL
+J1S_BAND = (0.9, 1.2)      # J-1SOL: the 1 SOL live micro-test size; registered 2026-10-18 (history: n=38, ~break-even)
+J1S_FROM = 1792303416.0     # judged only on launches recorded after registration
+J1S_SAMPLE = 3             # mine 1 in 3 of them (by mint hash) to spare the free RPC
 SCALPER_LOG = PROJECT_ROOT / "logs" / "scalper.log"
 WATCH_MIN_SOL = 1.0
 T_EXIT = 15.0                 # frozen (J1, chosen on the first half of the history sample)
@@ -81,6 +85,14 @@ def record() -> None:
         except Exception as exc:  # noqa: BLE001 - reconnect
             log.warning("feed: %s; retrying in 30 s", exc)
             time.sleep(30)
+
+
+def wanted(c: dict) -> bool:
+    x = float(c.get("solAmount") or 0)
+    if x >= MINE_MIN_SOL:
+        return True
+    return (c["t"] >= J1S_FROM and J1S_BAND[0] <= x <= J1S_BAND[1]
+            and int(hashlib.sha256(c["mint"].encode()).hexdigest(), 16) % J1S_SAMPLE == 0)
 
 
 def miner(log=log.info) -> None:
@@ -141,7 +153,7 @@ def miner(log=log.info) -> None:
                 except ValueError:
                     continue
                 if (c.get("txType") == "create" and c["t"] >= FROZEN_AT and c.get("bondingCurveKey")
-                        and float(c.get("solAmount") or 0) >= MINE_MIN_SOL and time.time() - c["t"] > MINE_AFTER_S):
+                        and wanted(c) and time.time() - c["t"] > MINE_AFTER_S):
                     with lock:
                         if c["mint"] not in done and c["mint"] not in queued:
                             queued.add(c["mint"])
@@ -178,6 +190,10 @@ def score() -> None:
     ys = [replay(d, d["x"], T_EXIT) for d in j2]
     print(f"J2 (dev buy 8-15 SOL, launches after its registration): {stats(ys)}"
           + (f" | ROI {sum(ys) / sum(d['x'] for d in j2):+.1%}" if j2 else ""))
+    j1s = [d for d in ls if 0.8 <= d["x"] <= 1.5 and d["t0"] >= J1S_FROM]
+    zs = [replay(d, d["x"], T_EXIT) for d in j1s]
+    print(f"J-1SOL (dev buy ~1 SOL, sell at 15 s, launches after its registration): {stats(zs)}"
+          + (f" | total {sum(zs):+.3f} SOL" if zs else ""))
 
 
 def main() -> None:

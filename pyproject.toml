@@ -8,6 +8,7 @@ dependencies = [
     "websockets>=13.0",
     "numpy>=1.26",
     "scikit-learn>=1.5",
+    "solders>=0.29.0",
 ]
 
 [dependency-groups]
