@@ -26,10 +26,10 @@ OUT = DATA_DIR / "long_paths"
 API = "https://swap-api.pump.fun/v2/coins/{}/candles"
 
 
-def fetch(s: requests.Session, mint: str, t0: float) -> list | None:
+def fetch(s: requests.Session, mint: str, t0: float, interval: str = "1m") -> list | None:
     for k in range(5):
         try:
-            r = s.get(API.format(mint), params={"interval": "1m", "limit": 1000, "currency": "SOL",
+            r = s.get(API.format(mint), params={"interval": interval, "limit": 1000, "currency": "SOL",
                                                  "createdTs": int(t0 * 1000)}, timeout=30)
         except requests.RequestException:
             time.sleep(2 * (k + 1))
@@ -46,10 +46,35 @@ def fetch(s: requests.Session, mint: str, t0: float) -> list | None:
     return None
 
 
+def fix_truncated() -> None:
+    """The 1m endpoint returns the NEWEST 1000 candles: for busier coins the series starts hours after launch.
+    Prepend 5-minute candles (which reach back to creation) for the missing early part; marks "early5m"."""
+    s = requests.Session()
+    s.headers.update({"Origin": "https://pump.fun", "Accept": "application/json"})
+    n = 0
+    for p in sorted(OUT.glob("*.json")):
+        d = json.loads(p.read_text())
+        c = d.get("curve") or []
+        if len(c) < 1000 or d.get("early5m") is not None or c[0][0] - d["t0"] <= 300:
+            continue
+        c5 = fetch(s, d["m"], d["t0"], "5m")
+        if c5 is None:
+            continue
+        d["early5m"] = len([x for x in c5 if x[0] + 300 <= c[0][0]])
+        d["curve"] = [x for x in c5 if x[0] + 300 <= c[0][0]] + c
+        p.write_text(json.dumps(d))
+        n += 1
+    print(f"fixed {n} truncated series")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=12000)
+    ap.add_argument("--fix", action="store_true")
     a = ap.parse_args()
+    if a.fix:
+        fix_truncated()
+        return
     OUT.mkdir(parents=True, exist_ok=True)
     t0s = {}
     for r in read_ticks(sorted(TICK_DIR.glob("*.jsonl.gz"))):
