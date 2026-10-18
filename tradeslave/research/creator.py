@@ -48,7 +48,7 @@ def launch_rows(m: str, t0: float, trades: list[dict]) -> dict | None:
     s0 = ts[0]["slot"]
     grp = {r["w"] for r in ts if r["slot"] == s0}
     x = sum(r["sol"] for r in ts if r["slot"] == s0 and r["b"])
-    return {"m": m, "t0": t0, "tc": ts[0]["t"], "x": x, "outside": [r for r in ts if r["w"] not in grp]}
+    return {"m": m, "t0": t0, "tc": ts[0]["t"], "x": x, "outside": [r for r in ts if r["w"] not in grp], "trades": ts}
 
 
 def replay(lau: dict, x: float, t_exit: float) -> float:
