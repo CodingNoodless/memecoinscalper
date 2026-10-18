@@ -446,7 +446,68 @@ def cmd_test() -> None:
 
 
 def main() -> None:
-    {"build": cmd_build, "design": cmd_design, "test": cmd_test}[sys.argv[1] if len(sys.argv) > 1 else "design"]()
+    {"build": cmd_build, "design": cmd_design, "test": cmd_test, "chart_freeze": cmd_chart_freeze,
+     "chart_holdout": cmd_chart_holdout}[sys.argv[1] if len(sys.argv) > 1 else "design"]()
+
+
+
+# ---------------------------------------------------------------- chart-reading classifier, fresh holdout
+
+CHART_RULES = [(1, 0.99), (2, 0.98)]          # (policy index, score quantile): scalp3m top 1%, swing30m top 2%
+CHART_FROZEN = DATA_DIR / "discretion_chart_rule.json"
+
+
+def _clf(X, y):
+    from sklearn.ensemble import HistGradientBoostingClassifier
+    return HistGradientBoostingClassifier(max_iter=300, learning_rate=0.05, min_samples_leaf=300,
+                                          random_state=0).fit(X, y)
+
+
+def cmd_chart_freeze() -> None:
+    """Fit 'will this entry make money' classifiers on EVERY cached launch; freeze score thresholds."""
+    X, Y, M, T0, TT, SRC = load_cache()
+    rnd = SRC == 0
+    out = {"mints": sorted(set(M.tolist())), "rules": []}
+    for k, q in CHART_RULES:
+        c = _clf(X, Y[:, k] > 0)
+        thr = float(np.quantile(c.predict_proba(X[rnd])[:, 1], q))
+        out["rules"].append({"policy": POLICIES[k][0], "k": k, "q": q, "thr": thr})
+    CHART_FROZEN.write_text(json.dumps(out))
+    print("frozen:", [(r["policy"], r["q"], round(r["thr"], 4)) for r in out["rules"]], f"on {len(out['mints'])} launches")
+
+
+def cmd_chart_holdout() -> None:
+    """Judge the frozen chart rules on random launches fetched AFTER the freeze (never in the cache)."""
+    from .smart_money import CreatorLog, WalletBook
+    fr = json.loads(CHART_FROZEN.read_text())
+    seen = set(fr["mints"])
+    X, Y, M, T0, TT, SRC = load_cache()
+    book, crlog = WalletBook(), CreatorLog()
+    hx, hy, hm, ht = [], [], [], []
+    for f in sorted(FT_OUT.glob("*.json.gz")):
+        x = load_token(f)
+        if x is None or x[0] in seen:
+            continue
+        tk = Tok(*x)
+        ser = series(tk)
+        for T, ls, feats in bars_and_features(tk, book, crlog):
+            hx.append(feats)
+            hy.append(simulate_all(tk, T, ls, ser))
+            hm.append(tk.m)
+            ht.append(T)
+    print(f"holdout: {len(set(hm))} new launches, {len(hx)} decision points")
+    if not hx:
+        return
+    hx, hy, hm, ht = np.array(hx, np.float32), np.array(hy), np.array(hm), np.array(ht)
+    for r in fr["rules"]:
+        k = r["k"]
+        p = _clf(X, Y[:, k] > 0).predict_proba(hx)[:, 1]
+        P = np.full((len(hx), len(POLICIES)), -9.0)
+        P[:, k] = p
+        rows = sorted(trade_once(P, hy, hm, ht, r["thr"], [k]), key=lambda z: z[1])
+        h = len(rows) // 2
+        print(f"HOLDOUT {r['policy']} top {1 - r['q']:.0%}:", summary(rows, ""))
+        print("   halves:", summary(rows[:h], "1st"), "|", summary(rows[h:], "2nd"))
 
 
 if __name__ == "__main__":
