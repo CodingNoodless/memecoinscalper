@@ -1,0 +1,304 @@
+"""Strategy W (US venue): earn Kalshi Liquidity Incentive Program (LIP) rewards with a small account.
+
+    uv run python -m tradeslave.research.kalshi_lip snapshot    # our expected reward share per program, right now
+    uv run python -m tradeslave.research.kalshi_lip paper       # forward paper test W1 (runs until stopped)
+    uv run python -m tradeslave.research.kalshi_lip score       # W1 so far
+
+Sourced (help.kalshi.com/en/articles/13823851): the book is sampled every second. Per side, the orders that
+help reach Target Size (walking from the best bid) qualify. Reference price = first level where cumulative size
+reaches Target / 5. Orders at or better than it score size x 1.0, worse ones size x DF^ticks. Share per side =
+own score / all qualifying score; snapshot score = yes share + no share; it counts only if BOTH sides reach
+Target Size. Reward = period score share x period reward x counted-snapshot fraction. Eligible: regular US
+members (SSN on file above IRS thresholds). Payout >= $1 per program.
+Our quote: N contracts joined at the best bid on each side (Yes bid at b, No bid at 100 - a), capital N x (b + 100 - a)
+cents. period_reward is in 1/100 cents (assumption: 3,000,000 = $300, consistent with the $1-$1,000/day range).
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import re
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+
+import requests
+
+from ..paths import DATA_DIR
+
+API = "https://api.elections.kalshi.com/trade-api/v2"
+OUT = DATA_DIR / "kalshi_lip"
+N = 20
+
+
+def ts(x: str) -> float:
+    return datetime.fromisoformat(re.sub(r"\.\d+", "", x.replace("Z", "+00:00"))).timestamp()
+
+
+def programs():
+    s, cur, rows = requests.Session(), None, []
+    while True:
+        p = {"limit": 1000}
+        if cur:
+            p["cursor"] = cur
+        d = s.get(f"{API}/incentive_programs", params=p, timeout=30).json()
+        rows += d.get("incentive_programs") or []
+        cur = d.get("next_cursor")
+        if not cur or not d.get("incentive_programs"):
+            return rows
+
+
+def side_score(levels, target, df, ours):
+    """levels: [(price_cents, size)] best first. Returns (our share, target met)."""
+    cum, ref = 0.0, None
+    for p, sz in levels:
+        cum += sz
+        if ref is None and cum >= target / 5:
+            ref = p
+    if cum < target:
+        return 0.0, False
+    tot, left = 0.0, target
+    for p, sz in levels:
+        use = min(sz, left)
+        tot += use * (1.0 if p >= ref else df ** (ref - p))
+        left -= use
+        if left <= 0:
+            break
+    return ours / (tot + ours), True                   # we join the best bid (multiplier 1.0, first in the walk)
+
+
+def evaluate(book, prog):
+    yes = sorted(((round(float(p) * 100), float(q)) for p, q in book.get("yes_dollars") or []), reverse=True)
+    no = sorted(((round(float(p) * 100), float(q)) for p, q in book.get("no_dollars") or []), reverse=True)
+    if not yes or not no:
+        return None
+    target, df = float(prog["target_size_fp"]), prog["discount_factor_bps"] / 1e4
+    sy, my = side_score(yes, target, df, N)
+    sn, mn = side_score(no, target, df, N)
+    days = (ts(prog["end_date"]) - ts(prog["start_date"])) / 86400
+    per_day = prog["period_reward"] / 1e4 / max(days, 1e-9)
+    usd_day = per_day * (sy + sn) / 2 if (my and mn) else 0.0
+    cap = N * (yes[0][0] + no[0][0]) / 100
+    return dict(bid=yes[0][0], ask=100 - no[0][0], met=my and mn, share=(sy + sn) / 2, pool_day=per_day,
+                usd_day=usd_day, capital=cap, per_dollar=usd_day / cap if cap else 0, days=days)
+
+
+def snapshot():
+    OUT.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    ps = [p for p in programs() if p["incentive_type"] == "liquidity" and ts(p["start_date"]) <= now < ts(p["end_date"])
+          and ts(p["end_date"]) - now > 6 * 3600]          # skip programs ending within 6 h (15-min series etc.)
+    print(f"{len(ps)} liquidity programs live now with > 6 h left", flush=True)
+    s = requests.Session()
+
+    def one(p):
+        for k in range(4):
+            try:
+                r = s.get(f"{API}/markets/{p['market_ticker']}/orderbook", timeout=20)
+                if r.status_code == 429:
+                    time.sleep(2 + k)
+                    continue
+                e = evaluate(r.json().get("orderbook_fp") or {}, p)
+                return dict(p, ev=e) if e else None
+            except Exception:
+                time.sleep(1)
+        return None
+
+    with ThreadPoolExecutor(8) as ex:
+        rows = [r for r in ex.map(one, ps) if r]
+    (OUT / f"snapshot_{int(now)}.json").write_text(json.dumps(rows))
+    met = [r for r in rows if r["ev"]["met"]]
+    print(f"{len(rows)} with a two-sided book; target met on both sides: {len(met)}; "
+          f"pools there ${sum(r['ev']['pool_day'] for r in met):.0f}/day")
+    met.sort(key=lambda r: -r["ev"]["per_dollar"])
+    for r in met[:25]:
+        e = r["ev"]
+        print(f"  {r['market_ticker']:34s} pool ${e['pool_day']:6.1f}/d target {float(r['target_size_fp']):5.0f} "
+              f"bid/ask {e['bid']}/{e['ask']} share {e['share']:.1%} -> ${e['usd_day']:.2f}/d on ${e['capital']:.0f} "
+              f"({e['per_dollar']:.1%}/d)")
+    tot = cap = 0.0
+    for r in met:
+        if cap + r["ev"]["capital"] > 100:
+            continue
+        cap += r["ev"]["capital"]
+        tot += r["ev"]["usd_day"]
+    print(f"best $100 portfolio (snapshot, {N} contracts per side, before fills): ${tot:.2f}/day on ${cap:.0f}")
+
+
+# ---------------------------------------------------------------- forward paper test (W1)
+# Pre-registered in the vault note "2026-10-19 maker rewards (W)". Every LOOP_S: for each held program, read the
+# book and the trades since the last poll. Our resting orders: N contracts joined at the BACK of the queue at the
+# best Yes bid and the best No bid. Fill when (a) volume traded at our price since we joined >= the queue ahead of
+# us, (b) a trade prints through our price, or (c) the opposite best price crosses ours. Then hold the filled
+# contracts to settlement (no more quoting on that side). Rewards accrue each poll: share x pool / (86400 / LOOP_S),
+# counted only if the target is met on both sides. Costs: maker fee 0.0175 x C x P x (1 - P) on every fill
+# (conservative: not all series charge it). Portfolio: re-chosen every RESELECT_S from a fresh snapshot, top
+# programs by reward per $ locked, total locked (quotes + open positions) <= BUDGET.
+LOOP_S, RESELECT_S, BUDGET = 60, 3600, 100.0
+STATE = OUT / "paper_state.json"
+LEDGER = OUT / "paper.jsonl"
+
+
+def _book(s, ticker):
+    r = s.get(f"{API}/markets/{ticker}/orderbook", timeout=20)
+    b = r.json().get("orderbook_fp") or {}
+    yes = sorted(((round(float(p) * 100), float(q)) for p, q in b.get("yes_dollars") or []), reverse=True)
+    no = sorted(((round(float(p) * 100), float(q)) for p, q in b.get("no_dollars") or []), reverse=True)
+    return yes, no
+
+
+def _trades(s, ticker, since):
+    r = s.get(f"{API}/markets/trades", params={"ticker": ticker, "min_ts": int(since), "limit": 1000}, timeout=20)
+    return r.json().get("trades") or []
+
+
+def _log(ev):
+    with LEDGER.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(dict(ev, t=time.time())) + "\n")
+
+
+def _select(st):
+    """Fresh snapshot -> programs to quote (keep held ones), within budget."""
+    snapshot()
+    snap = json.loads(sorted(OUT.glob("snapshot_*.json"))[-1].read_text())
+    locked = sum(p["cost"] for p in st["pos"])
+    for q in st["quotes"].values():
+        locked += sum(o["n"] * o["px"] / 100 for o in q["sides"].values() if o and not o.get("filled"))
+    cands = sorted((r for r in snap if r["ev"]["met"] and r["ev"]["usd_day"] >= 0.25), key=lambda r: -r["ev"]["per_dollar"])
+    for r in cands:
+        tk = r["market_ticker"]
+        if tk in st["quotes"] or locked + r["ev"]["capital"] > BUDGET:
+            continue
+        st["quotes"][tk] = dict(prog=r, sides={"yes": None, "no": None}, last=time.time())
+        locked += r["ev"]["capital"]
+        _log({"k": "select", "tk": tk, "pool_day": r["ev"]["pool_day"], "est_usd_day": r["ev"]["usd_day"]})
+
+
+def _step(s, st, tk, q):
+    prog = q["prog"]
+    try:
+        yes, no = _book(s, tk)
+        trades = _trades(s, tk, q["last"] - 2)
+    except Exception:
+        return
+    now = time.time()
+    seen = set(q.get("seen", []))
+    trades = [x for x in trades if x["trade_id"] not in seen]
+    q["seen"] = list(seen | {x["trade_id"] for x in trades})[-3000:]
+    books = {"yes": yes, "no": no}
+    for side in ("yes", "no"):
+        o = q["sides"][side]
+        if o and o.get("filled"):
+            continue
+        lv = books[side]
+        opp = books["no" if side == "yes" else "yes"]
+        if o:
+            # trades hitting our side: taker bought the other outcome at (100 - our price) or lower for us
+            hit = [x for x in trades if x["taker_side"] != side]
+            px_of = lambda x: round(float(x["yes_price_dollars" if side == "yes" else "no_price_dollars"]) * 100)
+            at = sum(float(x["count_fp"]) for x in hit if px_of(x) == o["px"])
+            through = any(px_of(x) < o["px"] for x in hit)
+            crossed = bool(opp) and (100 - opp[0][0]) <= o["px"]
+            o["ahead"] -= at
+            if o["ahead"] < 0 or through or crossed:
+                fee = math.ceil(0.0175 * o["n"] * o["px"] / 100 * (1 - o["px"] / 100) * 100) / 100
+                o["filled"] = True
+                st["pos"].append(dict(tk=tk, side=side, n=o["n"], px=o["px"], cost=o["n"] * o["px"] / 100 + fee, t=now))
+                _log({"k": "fill", "tk": tk, "side": side, "px": o["px"], "n": o["n"], "fee": fee,
+                      "why": "queue" if o["ahead"] < 0 else "through" if through else "crossed"})
+                continue
+        if not lv:
+            q["sides"][side] = None
+            continue
+        best = lv[0][0]
+        if not o or o["px"] != best:                       # join (or re-join) the back of the best-bid queue
+            q["sides"][side] = dict(px=best, n=N, ahead=lv[0][1])
+    # rewards for this interval: only quoting sides that are still resting at the best price
+    ev = evaluate({"yes_dollars": [[p / 100, z] for p, z in yes], "no_dollars": [[p / 100, z] for p, z in no]}, prog)
+    if ev and ev["met"]:
+        target, df = float(prog["target_size_fp"]), prog["discount_factor_bps"] / 1e4
+        share = 0.0
+        for side, lv in books.items():
+            o = q["sides"][side]
+            if o and not o.get("filled") and lv and o["px"] == lv[0][0]:
+                share += side_score(lv, target, df, N)[0] / 2
+        dt = min(now - q["last"], 3 * LOOP_S)
+        rew = ev["pool_day"] * share * dt / 86400
+        st["rewards"] += rew
+        st["by_tk"][tk] = st["by_tk"].get(tk, 0.0) + rew
+    q["last"] = now
+
+
+def _settle(s, st):
+    keep = []
+    for p in st["pos"]:
+        try:
+            m = s.get(f"{API}/markets/{p['tk']}", timeout=20).json()["market"]
+        except Exception:
+            keep.append(p)
+            continue
+        if m.get("result") in ("yes", "no"):
+            pay = p["n"] * (1.0 if m["result"] == p["side"] else 0.0)
+            st["pnl"] += pay - p["cost"]
+            _log({"k": "settle", "tk": p["tk"], "side": p["side"], "result": m["result"], "pnl": pay - p["cost"]})
+        else:
+            keep.append(p)
+    st["pos"] = keep
+    for tk in list(st["quotes"]):
+        q = st["quotes"][tk]
+        if ts(q["prog"]["end_date"]) <= time.time() or all(o and o.get("filled") for o in q["sides"].values()):
+            if not any(p["tk"] == tk for p in st["pos"]):
+                del st["quotes"][tk]
+
+
+def paper():
+    OUT.mkdir(parents=True, exist_ok=True)
+    st = json.loads(STATE.read_text()) if STATE.exists() else dict(quotes={}, pos=[], rewards=0.0, pnl=0.0, by_tk={},
+                                                                     started=time.time(), last_sel=0)
+    s = requests.Session()
+    while True:
+        if time.time() - st["last_sel"] > RESELECT_S:
+            try:
+                _select(st)
+            except Exception as e:
+                print("select failed:", e, flush=True)
+            st["last_sel"] = time.time()
+        for tk, q in list(st["quotes"].items()):
+            _step(s, st, tk, q)
+        _settle(s, st)
+        STATE.write_text(json.dumps(st))
+        hrs = (time.time() - st["started"]) / 3600
+        print(f"{time.strftime('%H:%M')} {hrs:.1f} h: rewards ${st['rewards']:.2f}, settled P&L ${st['pnl']:+.2f}, "
+              f"open positions {len(st['pos'])}, quoting {len(st['quotes'])}", flush=True)
+        time.sleep(LOOP_S)
+
+
+def score():
+    st = json.loads(STATE.read_text())
+    ev = [json.loads(line) for line in LEDGER.open(encoding="utf-8")]
+    hrs = (time.time() - st["started"]) / 3600
+    open_cost = sum(p["cost"] for p in st["pos"])
+    net = st["rewards"] + st["pnl"]
+    sess, mtm = requests.Session(), 0.0                 # open positions marked at our side's best bid (exit value)
+    for p in st["pos"]:
+        try:
+            yes, no = _book(sess, p["tk"])
+            lv = yes if p["side"] == "yes" else no
+            mtm += p["n"] * (lv[0][0] / 100 if lv else 0.0) - p["cost"]
+        except Exception:
+            pass
+    print(f"{hrs:.1f} h: rewards ${st['rewards']:.2f}, settled trading P&L ${st['pnl']:+.2f}, open positions "
+          f"{len(st['pos'])} (cost ${open_cost:.2f}), fills {sum(e['k'] == 'fill' for e in ev)}, "
+          f"settled {sum(e['k'] == 'settle' for e in ev)}; net settled ${net:+.2f} "
+          f"= {net / BUDGET / max(hrs / 24, 1e-9):+.1%}/day on ${BUDGET:.0f}; open marked {mtm:+.2f} -> "
+          f"net incl. open ${net + mtm:+.2f} ({(net + mtm) / BUDGET / max(hrs / 24, 1e-9):+.1%}/day)")
+
+
+def main() -> None:
+    {"snapshot": snapshot, "paper": paper, "score": score}[sys.argv[1] if len(sys.argv) > 1 else "snapshot"]()
+
+
+if __name__ == "__main__":
+    main()
