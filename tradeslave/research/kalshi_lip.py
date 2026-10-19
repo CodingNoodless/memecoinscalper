@@ -52,22 +52,25 @@ def programs():
 
 
 def side_score(levels, target, df, ours):
-    """levels: [(price_cents, size)] best first. Returns (our share, target met)."""
-    cum, ref = 0.0, None
+    """levels: [(price_cents, size)] best first. Returns (our share, target met).
+
+    Kalshi's filed rules (LIP, CFTC filing 2026-02-11): whole price levels are added from the best bid down until
+    the cumulative size >= Target; ALL bids at those levels qualify (no time priority inside a level). Score =
+    size x DF^(ticks below the reference price). We join the best level (multiplier 1.0). Reference price: the help
+    centre version (first level reaching Target / 5); at the best level our multiplier is 1.0 either way.
+    """
+    cum, ref, inc = 0.0, None, []
     for p, sz in levels:
         cum += sz
+        inc.append((p, sz))
         if ref is None and cum >= target / 5:
             ref = p
+        if cum >= target:
+            break
     if cum < target:
         return 0.0, False
-    tot, left = 0.0, target
-    for p, sz in levels:
-        use = min(sz, left)
-        tot += use * (1.0 if p >= ref else df ** (ref - p))
-        left -= use
-        if left <= 0:
-            break
-    return ours / (tot + ours), True                   # we join the best bid (multiplier 1.0, first in the walk)
+    tot = sum(sz * (1.0 if p >= ref else df ** (ref - p)) for p, sz in inc)
+    return ours / (tot + ours), True
 
 
 def evaluate(book, prog):
@@ -162,20 +165,33 @@ def _log(ev):
 
 
 def _select(st):
-    """Fresh snapshot -> programs to quote (keep held ones), within budget."""
+    """Fresh snapshot -> re-choose the quoted programs within budget (open positions stay until settlement)."""
     snapshot()
     snap = json.loads(sorted(OUT.glob("snapshot_*.json"))[-1].read_text())
     locked = sum(p["cost"] for p in st["pos"])
-    for q in st["quotes"].values():
-        locked += sum(o["n"] * o["px"] / 100 for o in q["sides"].values() if o and not o.get("filled"))
     cands = sorted((r for r in snap if r["ev"]["met"] and r["ev"]["usd_day"] >= 0.25), key=lambda r: -r["ev"]["per_dollar"])
+    want = {}
     for r in cands:
-        tk = r["market_ticker"]
-        if tk in st["quotes"] or locked + r["ev"]["capital"] > BUDGET:
+        if locked + r["ev"]["capital"] > BUDGET:
             continue
-        st["quotes"][tk] = dict(prog=r, sides={"yes": None, "no": None}, last=time.time())
+        want[r["market_ticker"]] = r
         locked += r["ev"]["capital"]
-        _log({"k": "select", "tk": tk, "pool_day": r["ev"]["pool_day"], "est_usd_day": r["ev"]["usd_day"]})
+    for tk in list(st["quotes"]):
+        if tk in want:
+            st["quotes"][tk]["prog"] = want[tk]
+            continue
+        q = st["quotes"][tk]
+        if any(p["tk"] == tk for p in st["pos"]):           # stop quoting, keep the entry until the position settles
+            for side, o in q["sides"].items():
+                if not (o and o.get("filled")):
+                    q["sides"][side] = {"filled": True, "dropped": True}
+        else:
+            del st["quotes"][tk]
+        _log({"k": "drop", "tk": tk})
+    for tk, r in want.items():
+        if tk not in st["quotes"]:
+            st["quotes"][tk] = dict(prog=r, sides={"yes": None, "no": None}, last=time.time())
+            _log({"k": "select", "tk": tk, "pool_day": r["ev"]["pool_day"], "est_usd_day": r["ev"]["usd_day"]})
 
 
 def _step(s, st, tk, q):
@@ -272,6 +288,8 @@ def paper():
     st = json.loads(STATE.read_text()) if STATE.exists() else dict(quotes={}, pos=[], rewards=0.0, pnl=0.0, by_tk={},
                                                                      started=time.time(), last_sel=0)
     st.setdefault("cons_from", time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()))
+    if "fix_from" not in st:                       # share formula corrected to the filed rules (whole levels count)
+        st["fix_from"], st["rewards_at_fix"] = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()), st["rewards"]
     s = requests.Session()
     while True:
         if time.time() - st["last_sel"] > RESELECT_S:
@@ -304,9 +322,11 @@ def score():
             mtm += p["n"] * (lv[0][0] / 100 if lv else 0.0) - p["cost"]
         except Exception:
             pass
-    rc = st.get("rewards_cons", 0.0)
-    print(f"conservative rewards (time priority in level, counted since {st.get('cons_from', '?')}): ${rc:.2f}; "
-          f"net incl. open with them ${rc + st['pnl'] + mtm:+.2f}")
+    if "fix_from" in st:
+        rf = st["rewards"] - st["rewards_at_fix"]
+        hf = (time.time() - time.mktime(time.strptime(st["fix_from"], "%Y-%m-%d %H:%M UTC")) + time.timezone) / 3600
+        print(f"rewards under the filed rules since {st['fix_from']} ({hf:.1f} h): ${rf:.2f} "
+              f"(= ${rf / max(hf, 1e-9) * 24:.2f}/day); fills/positions count from the start")
     print(f"{hrs:.1f} h: rewards ${st['rewards']:.2f}, settled trading P&L ${st['pnl']:+.2f}, open positions "
           f"{len(st['pos'])} (cost ${open_cost:.2f}), fills {sum(e['k'] == 'fill' for e in ev)}, "
           f"settled {sum(e['k'] == 'settle' for e in ev)}; net settled ${net:+.2f} "
