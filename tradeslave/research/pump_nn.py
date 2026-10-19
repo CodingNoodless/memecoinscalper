@@ -73,6 +73,8 @@ def build():
         if c[:, 2].max() * 1e9 < MIN_MC:
             continue
         a = grid(t0, c)
+        if len(a) < 3:
+            continue
         t, o, h, lo, cl, v = a.T
         n = len(a)
         grad = np.maximum.accumulate(h >= D.P_GRAD * 0.999)
