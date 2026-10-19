@@ -50,7 +50,7 @@ def get(s, url, params):
         try:
             r = s.get(url, params=params, timeout=30)
             if r.status_code == 429:
-                time.sleep(0.25)
+                time.sleep(min(0.25 * (i + 1), 5))
                 continue
             return r.json()
         except Exception:

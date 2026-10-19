@@ -129,6 +129,7 @@ def snapshot():
         cap += r["ev"]["capital"]
         tot += r["ev"]["usd_day"]
     print(f"best $100 portfolio (snapshot, {N} contracts per side, before fills): ${tot:.2f}/day on ${cap:.0f}")
+    return rows, len(ps)
 
 
 # ---------------------------------------------------------------- forward paper test (W1)
@@ -166,8 +167,10 @@ def _log(ev):
 
 def _select(st):
     """Fresh snapshot -> re-choose the quoted programs within budget (open positions stay until settlement)."""
-    snapshot()
-    snap = json.loads(sorted(OUT.glob("snapshot_*.json"))[-1].read_text())
+    snap, asked = snapshot()                                  # this process's own snapshot, not the newest file
+    if len(snap) < 0.5 * asked:                               # rate-limited / failed scan: keep the current set
+        _log({"k": "skip_select", "rows": len(snap), "asked": asked})
+        return
     locked = sum(p["cost"] for p in st["pos"])
     cands = sorted((r for r in snap if r["ev"]["met"] and r["ev"]["usd_day"] >= 0.25), key=lambda r: -r["ev"]["per_dollar"])
     want = {}
