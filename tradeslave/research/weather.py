@@ -59,7 +59,9 @@ def get(s, url, params):
 
 
 def target_date(event: str) -> str:
-    d = event.split("-")[1]                       # 25JAN15
+    d = event.split("-")[1] if "-" in event else ""   # 25JAN15
+    if len(d) != 7 or d[2:5] not in MONTHS:
+        return ""                                 # odd legacy ticker: dropped (sorts before START)
     return f"20{d[:2]}-{MONTHS[d[2:5]]:02d}-{d[5:]}"
 
 
@@ -137,6 +139,8 @@ def fetch_forecast(series, start, end):
 def fetch():
     OUT.mkdir(parents=True, exist_ok=True)
     for series in CITIES:
+        if (OUT / f"{series}.json").exists():
+            continue
         ms = fetch_markets(series)
         dates = sorted({target_date(m["event_ticker"]) for m in ms})
         print(f"{series}: {len(ms)} settled markets, {len(dates)} days {dates[0]}..{dates[-1]}", flush=True)
