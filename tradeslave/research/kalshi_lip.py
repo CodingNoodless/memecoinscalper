@@ -142,9 +142,12 @@ def snapshot():
 # (conservative: not all series charge it). Portfolio: re-chosen every RESELECT_S from a fresh snapshot, top
 # programs by reward per $ locked, total locked (quotes + open positions) <= BUDGET.
 LOOP_S, RESELECT_S, BUDGET = 60, 3600, 100.0
-FRONT = "front" in sys.argv[2:]       # W2: improve the best bid by 1c when the spread allows (alone at the front)
-STATE = OUT / ("paper_front_state.json" if FRONT else "paper_state.json")
-LEDGER = OUT / ("paper_front.jsonl" if FRONT else "paper.jsonl")
+MM = "mm" in sys.argv[2:]             # W4: W2 that keeps quoting after fills (inventory cap), Yes + No lots net to $1
+FRONT = "front" in sys.argv[2:] or MM  # W2: improve the best bid by 1c when the spread allows (alone at the front)
+CAP = 2 * N                           # W4: max net contracts on one side per market
+MODE = "mm" if MM else "front" if FRONT else ""
+STATE = OUT / (f"paper_{MODE}_state.json" if MODE else "paper_state.json")
+LEDGER = OUT / (f"paper_{MODE}.jsonl" if MODE else "paper.jsonl")
 
 
 def _book(s, ticker):
@@ -197,6 +200,27 @@ def _select(st):
             _log({"k": "select", "tk": tk, "pool_day": r["ev"]["pool_day"], "est_usd_day": r["ev"]["usd_day"]})
 
 
+def _net(st, tk):
+    """W4: a Yes lot and a No lot in the same market pay exactly $1 per pair, so Kalshi nets them into cash."""
+    while True:
+        y = next((p for p in st["pos"] if p["tk"] == tk and p["side"] == "yes"), None)
+        n = next((p for p in st["pos"] if p["tk"] == tk and p["side"] == "no"), None)
+        if not (y and n):
+            return
+        k = min(y["n"], n["n"])
+        cy, cn = y["cost"] * k / y["n"], n["cost"] * k / n["n"]
+        st["pnl"] += k - cy - cn
+        _log({"k": "net", "tk": tk, "n": k, "pnl": k - cy - cn})
+        for p, c in ((y, cy), (n, cn)):
+            p["n"] -= k
+            p["cost"] -= c
+        st["pos"] = [p for p in st["pos"] if p["n"] > 0]
+
+
+def _inv(st, tk):
+    return sum(p["n"] * (1 if p["side"] == "yes" else -1) for p in st["pos"] if p["tk"] == tk)
+
+
 def _step(s, st, tk, q):
     prog = q["prog"]
     try:
@@ -229,7 +253,13 @@ def _step(s, st, tk, q):
                 st["pos"].append(dict(tk=tk, side=side, n=o["n"], px=o["px"], cost=o["n"] * o["px"] / 100 + fee, t=now))
                 _log({"k": "fill", "tk": tk, "side": side, "px": o["px"], "n": o["n"], "fee": fee,
                       "why": "queue" if o["ahead"] < 0 else "through" if through else "crossed"})
-                continue
+                if not MM:
+                    continue
+                _net(st, tk)
+                q["sides"][side] = o = None                    # W4: re-quote this side (inventory permitting)
+        if MM and _inv(st, tk) * (1 if side == "yes" else -1) >= CAP:
+            q["sides"][side] = None                            # W4: inventory cap reached on this side
+            continue
         if not lv:
             q["sides"][side] = None
             continue
