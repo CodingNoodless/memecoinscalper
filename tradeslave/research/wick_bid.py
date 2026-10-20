@@ -3,6 +3,7 @@
 
     uv run python -m tradeslave.research.wick_bid design    # grid on design coins, freeze the best cell
     uv run python -m tradeslave.research.wick_bid test      # judge the frozen cell once on test coins
+    (append "b" for Y8b: the same on coins >= 6 / 24 h past graduation)
 
 Unlike Q (research.shock: market-buy at the next open AFTER a dump), the order rests before the wick: at each
 minute close (market cap >= MC SOL, age since graduation >= A min) a bid sits D below that close for the next
@@ -28,6 +29,9 @@ from .shock import fee, load, round_trip
 FROZEN = DATA_DIR / "wick_bid_rule.json"
 GRID = list(product((0.1, 0.2, 0.3), (0.1, 0.2, 0.4), (0.3, None), (30, 120), (1500, 5000), (0, 60)))
 KEYS = ("D", "TP", "ST", "H", "MC", "A")
+if "b" in sys.argv[2:]:                                    # Y8b: older survivors only
+    GRID = list(product((0.1, 0.15), (0.05, 0.1), (0.15, 0.3), (30, 120), (1500, 5000), (360, 1440)))
+    FROZEN = DATA_DIR / "wick_bid_b_rule.json"
 
 
 def trades(c, tg, D, TP, ST, H, MC, A, double=False):
