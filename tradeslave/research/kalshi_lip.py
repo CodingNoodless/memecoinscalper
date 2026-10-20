@@ -143,9 +143,10 @@ def snapshot():
 # programs by reward per $ locked, total locked (quotes + open positions) <= BUDGET.
 LOOP_S, RESELECT_S, BUDGET = 60, 3600, 100.0
 MM = "mm" in sys.argv[2:]             # W4: W2 that keeps quoting after fills (inventory cap), Yes + No lots net to $1
-FRONT = "front" in sys.argv[2:] or MM  # W2: improve the best bid by 1c when the spread allows (alone at the front)
+JOIN = "join" in sys.argv[2:]         # W5: W4 but join the best at the back of the queue (W1 queue tracking)
+FRONT = "front" in sys.argv[2:] or (MM and not JOIN)  # W2: improve the best bid by 1c when the spread allows
 CAP = 2 * N                           # W4: max net contracts on one side per market
-MODE = "mm" if MM else "front" if FRONT else ""
+MODE = ("mmjoin" if JOIN else "mm") if MM else "front" if FRONT else ""
 STATE = OUT / (f"paper_{MODE}_state.json" if MODE else "paper_state.json")
 LEDGER = OUT / (f"paper_{MODE}.jsonl" if MODE else "paper.jsonl")
 
