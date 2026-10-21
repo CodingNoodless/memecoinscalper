@@ -518,8 +518,46 @@ def report():
               f"score {r['score']} {r['exit']:5s} {r['ret']:+.1%}")
 
 
+def latency():
+    """Fill sensitivity: re-price each closed trade as if entry and exit had landed d seconds later, from the coin's
+    actual trade-by-trade prices (pump.fun trade API). Fees and own impact stay as recorded."""
+    import bisect
+    from .c1_curve import fetch_trades
+    s = requests.Session()
+    s.headers.update({"Origin": "https://pump.fun", "Accept": "application/json"})
+    pace = Pace(0.3)
+    creates = {}
+    for x in CREATES.open(encoding="utf-8"):
+        c = json.loads(x)
+        creates[c["m"]] = c["t"]
+    rows = [json.loads(x) for x in TRADES_LOG.open(encoding="utf-8")]
+    out = defaultdict(list)
+    for r in rows:
+        tr, _ = fetch_trades(s, pace, r["m"], creates.get(r["m"], r["t"] - 120), r["t_exit"] + 90)
+        tr = [x for x in tr or [] if not x[7]]
+        if not tr:
+            continue
+        ts = [x[2] for x in tr]
+
+        def px(t):
+            i = bisect.bisect_right(ts, t) - 1
+            return tr[max(i, 0)][8]
+        base = px(r["t"]), px(r["t_exit"])
+        line = []
+        for d in (0, 1, 2, 3, 5):
+            g = (1 + r["ret"]) * (px(r["t_exit"] + d) / base[1]) / (px(r["t"] + d) / base[0]) - 1
+            out[d].append(g)
+            line.append(f"{d}s {g:+.0%}")
+        print(f"  {str(r['name'])[:20]:20s} {r['exit']:5s} recorded {r['ret']:+.0%} | " + " ".join(line), flush=True)
+    for d, v in sorted(out.items()):
+        m = statistics.mean(v)
+        sd = statistics.stdev(v) if len(v) > 1 else 0
+        print(f"both fills +{d}s: n {len(v)} mean {m:+.2%} median {statistics.median(v):+.2%} "
+              f"t {m / sd * math.sqrt(len(v)) if sd else 0:+.2f}")
+
+
 def main() -> None:
-    {"run": run, "report": report}[sys.argv[1]]()
+    {"run": run, "report": report, "latency": latency}[sys.argv[1]]()
 
 
 if __name__ == "__main__":
