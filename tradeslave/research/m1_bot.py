@@ -46,8 +46,9 @@ from .c1_curve import CREATES, CURVE_FEE, SOL_USDC, T0, V0, sell_curve
 from .chain import env_rpc
 from .full_trades import Pace, ts as iso_ts
 
-VARIANT = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] in ("m1", "m2") else "m1"
-M2 = VARIANT == "m2"                             # M2 (2026-10-21 09:40): M1 + sniper-bag filter, -10% stop, 1 s polls
+VARIANT = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] in ("m1", "m2", "m3") else "m1"
+M3 = VARIANT == "m3"                             # M3 (2026-10-21 16:00): M2 + Rohit's post-mortem changes (see below)
+M2 = VARIANT in ("m2", "m3")                     # M2 (2026-10-21 09:40): M1 + sniper-bag filter, -10% stop, 1 s polls
 OUT = DATA_DIR / VARIANT
 CANDS, TRADES_LOG, OPEN = OUT / "cands.jsonl", OUT / "trades.jsonl", OUT / "status.json"
 SWAP = "https://swap-api.pump.fun/v2/coins/{}/trades"
@@ -62,7 +63,13 @@ HI_ARM, HI_GIVE, HI_DEAD, HI_HOLD = 1.50, 0.60, 0.20, 7200
 if M2:
     STOP = 0.90                                  # Rohit: losses ~15-20% even when rugged (a -10% stop fills ~-17..-20%)
 SNIP_SLOTS, SNIP_MAX = 2, 8.0                    # M2: wallets buying within 2 slots of the create, % of supply still held
-RULES = "m2-v1" if M2 else "exits-v2"                                # bump on every rule change; the dashboard splits results by it
+# M3 (assumptions, not fitted): dead coin = < 15 holders and < 8 new buyers in 2 min; rug = dev holds > 10% or
+# top-10 wallets funded in the last 6 h hold > 25%; a copy needs volume >= $3k; at 2x, if the coin has traction
+# (>= 25 buyers and buys >= 1.5x sells in the last 60 s, or the linked post's engagement doubled since entry, +20),
+# sell half and ride the rest until 35% off the peak, below 1.4x entry, or 1 h.
+DEAD_HOLDERS, DEAD_GROWTH, DEV_MAX, FRESH_H, FRESH_MAX, VOL_COPY = 15, 8, 10.0, 6 * 3600, 25.0, 3000.0
+RUN_BUYERS, RUN_FLOW, RUN_SOCIAL, RUN_GIVE, RUN_FLOOR, RUN_HOLD = 25, 1.5, 2.0, 0.65, 1.4, 3600
+RULES = "m3-v1" if M3 else "m2-v1" if M2 else "exits-v2"                                # bump on every rule change; the dashboard splits results by it
 ACT_EVERY = 6.0
 WATCH_S, POLL_S, RECHECK_S = 20 * 60, (1.0 if M2 else 2.0), 30
 SIZE_SOL, TX_SOL, MAX_OPEN = 0.1, 0.0005, 5
@@ -106,6 +113,18 @@ The trader prefers the first coin of a narrative. A later coin is only worth buy
 narrative or credibly claims to be the better version with the right reasoning (e.g. the original got the name,
 ticker or facts wrong, or this one is the official / correct one). A plain copy is not.
 """
+CAUSE_M3 = """Community causes (criterion 3) are the narratives that hold up best, but only when the story is REAL and
+BACKED: a real, identifiable person, animal, organisation or event (in the news, or the organisation / person itself
+posting), or a real fundraiser. Score those 8-9. A vague promise ("we will donate", "for the community") with no real
+story behind it scores 4-6.
+A brand-new post by a famous account or big brand (Elon, OpenAI, toly, pump.fun...) gets many copy coins within
+minutes and their devs often dump: being posted by a famous account alone scores 7 at most; 8+ needs a real story or
+an exceptional idea on top.
+"""
+if M3:
+    PROMPT = PROMPT.replace("Scale: 9-10 = an influential person posted it, or an exceptional narrative",
+                            CAUSE_M3 + "Scale: 9-10 = a real, backed story people will rally behind, or an exceptional "
+                            "narrative")
 IMPROVES = ', "improves": <true if this coin fixes or credibly improves on the earlier one, else false>'
 
 
@@ -216,9 +235,46 @@ def tweet_info(s, link):
         return "X link could not be read", keys
 
 
+SOC = requests.Session()
+SOC.headers.update({"Origin": "https://pump.fun", "Accept": "application/json"})
+
+
+def engagement(link):
+    """Likes + reposts + replies + quotes of the linked X post now (fxtwitter), or None."""
+    m = re.search(r"(?:x|twitter)\.com/([^/?#]+)/status/(\d+)", link or "")
+    if not m:
+        return None
+    try:
+        t = SOC.get(f"https://api.fxtwitter.com/{m.group(1)}/status/{m.group(2)}", timeout=6).json()["tweet"]
+        return sum(int(t.get(k) or 0) for k in ("likes", "retweets", "replies", "quotes"))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def traction(o):
+    """M3 at 2x: is the coin still pulling in buyers, or is its post spreading? Records what it saw."""
+    now = time.time()
+    try:
+        tr = SOC.get(SWAP.format(o["m"]), params={"limit": 100}, timeout=8).json()["trades"]
+        last = [x for x in tr if iso_ts(x["timestamp"]) >= now - 60]
+        buy = sum(float(x["amountSol"]) for x in last if x["type"] == "buy")
+        sell = sum(float(x["amountSol"]) for x in last if x["type"] != "buy")
+        o["tp_buyers"] = len({x["userAddress"] for x in last if x["type"] == "buy"})
+        o["tp_flow"] = round(buy / sell, 2) if sell else 99.0
+    except Exception:  # noqa: BLE001
+        o["tp_buyers"], o["tp_flow"] = 0, 0.0
+    o["eng_tp"] = engagement(o.get("link"))
+    chain = o["tp_buyers"] >= RUN_BUYERS and o["tp_flow"] >= RUN_FLOW
+    e0, e1 = o.get("eng0"), o["eng_tp"]
+    social = e0 is not None and e1 is not None and e1 >= RUN_SOCIAL * max(e0, 1) and e1 - e0 >= 20
+    o["traction"] = "chain+social" if chain and social else "chain" if chain else "social" if social else None
+    return o["traction"] is not None
+
+
 class Rpc:
     def __init__(self):
         self.url, self.s = env_rpc(), requests.Session()
+        self.fcache = {}
 
     def call(self, method, params):
         for k in range(3):
@@ -243,6 +299,11 @@ class Rpc:
 
     def funder(self, wallet):
         """(funder, unix time) of the wallet's first incoming SOL transfer, if it is a fresh wallet."""
+        if wallet not in self.fcache:
+            self.fcache[wallet] = self._funder(wallet)
+        return self.fcache[wallet]
+
+    def _funder(self, wallet):
         sigs = self.call("getSignaturesForAddress", [wallet, {"limit": 1000}])
         if not sigs or len(sigs) >= 1000:
             return None
@@ -319,6 +380,21 @@ def checks(rpc, tr, dev, sol_usd):
                 why.append("rug: snipers still hold > 8%")
         else:
             det["sniper_pct"] = None              # history starts after the create (very busy coin): not measurable
+    if M3:
+        now, full = time.time(), tr[0][2] == dev
+        holders = sum(1 for w, v in hold.items() if v > 0 and w != dev)
+        det["holders"] = holders if full else None              # history truncated = a busy coin, not a dead one
+        det["new_buyers_2m"] = len({x[2] for x in tr if x[3] and x[1] >= now - 120})
+        if full and holders < DEAD_HOLDERS and det["new_buyers_2m"] < DEAD_GROWTH:
+            why.append("dead: < 15 holders, no growth")
+        det["dev_pct"] = round(100 * max(0.0, hold.get(dev, 0.0)) / 1e9, 2) if full else None
+        if (det["dev_pct"] or 0) > DEV_MAX:
+            why.append("rug: dev holds > 10%")
+        top10 = sorted(((v, w) for w, v in hold.items() if v > 0 and w != dev), reverse=True)[:10]
+        fr = [(v, rpc.funder(w)) for v, w in top10]
+        det["fresh_pct"] = round(100 * sum(v for v, f in fr if f and f[1] and f[1] >= now - FRESH_H) / 1e9, 2)
+        if det["fresh_pct"] > FRESH_MAX:
+            why.append("rug: fresh wallets hold > 25%")
     buys = [x[4] for x in tr[1:] if x[3] and x[2] != dev] if tr and tr[0][2] == dev else [x[4] for x in tr if x[3]]
     if buys and max(buys) > 0.40 * sum(buys):
         why.append("chart: one buy dominates")
@@ -357,7 +433,7 @@ def run():
                                                         improves=IMPROVES if prev else ""))
         ok = prev is None or better
         with lock:
-            scored[c["m"]] = (sc, ok, keys[0] if keys else c["m"])
+            scored[c["m"]] = (sc, ok, keys[0] if keys else c["m"], prev is not None, link)
         jlog(CANDS, {"t": time.time(), "m": c["m"], "name": c.get("name"), "sym": c.get("sym"), "desc": desc,
                      "link": link, "score": sc, "crit": crit, "why": why, "age": round(time.time() - c["t"]),
                      "model": llm.used, "nkeys": keys, "first": prev is None,
@@ -417,7 +493,7 @@ def run():
             if p is None or m in done or len(opened) >= MAX_OPEN:
                 continue
             mc = p * 1e9 * sol["usd"]
-            sc, narr_ok, nkey = scored.get(m, (None, False, None))
+            sc, narr_ok, nkey, copy, link = scored.get(m, (None, False, None, False, None))
             top = MC_HIGH if (sc or 0) >= SCORE_HIGH else MC_BUY[1]
             if sc is None or sc < SCORE_MIN or not narr_ok or not (MC_MIN <= mc and MC_BUY[0] <= mc <= top):
                 continue
@@ -428,9 +504,11 @@ def run():
             if not tr:
                 continue
             ok, why, det = checks(rpc, tr, c.get("dev"), sol["usd"])
+            if M3 and copy and det.get("vol_usd", 0) < VOL_COPY and "volume" not in why:
+                ok, why = False, why + ["volume: copy coin < $3k"]
             jlog(CANDS, {"t": time.time(), "m": m, "stage": "checks", "mc": round(mc), "ok": ok, "why": why, **det})
             if not ok:
-                if "volume" not in why:
+                if not any(w.startswith(("volume", "dead")) for w in why):   # these can still change: re-check
                     done.add(m)
                 continue
             fresh = rpc.curves([bc]).get(bc)                     # fill at the state after our decision
@@ -441,6 +519,8 @@ def run():
             opened[m] = dict(m=m, name=c.get("name"), score=sc, t=time.time(), p0=price(fresh), q=q, peak=price(fresh),
                              stop=STOP, high=sc >= SCORE_HIGH, bc=bc, rules=RULES, mc=round(mc), sol_usd=sol["usd"],
                              nkey=nkey)
+            if M3:                                               # exits by traction, not by score
+                opened[m].update(high=False, link=link, copy=copy, eng0=engagement(link))
             print(time.strftime("%H:%M"), f"BUY  {c.get('name')!r} score {sc} mc ${mc:,.0f}", flush=True)
         try:                                                     # for the dashboard (tradeslave.lab_view)
             OPEN.write_text(json.dumps({"t": time.time(), "sol_usd": sol["usd"], "llm": llm.name,
@@ -465,6 +545,12 @@ def manage(opened, m, p, cs, done, rpc=None):
     now = time.time()
     if p is None:                                               # graduated: sell at the last price seen
         why, p = o.get("pending") or "GRAD", o.get("last", o["p0"])
+    elif o.get("pending") == "HALF":                            # M3: sell half at 2x, ride the rest
+        o["cash"] = sell_curve(o["q"] / 2, p) - TX_SOL
+        o["q"] /= 2
+        o.update(pending=None, run=True, t_run=now, last=p, peak=max(o["peak"], p))
+        print(time.strftime("%H:%M"), f"HALF {o['name']!r} at {p / o['p0']:.2f}x, riding ({o['traction']})", flush=True)
+        return
     elif o.get("pending"):
         why = o["pending"]
     else:
@@ -477,7 +563,9 @@ def manage(opened, m, p, cs, done, rpc=None):
             o["act_max"], o["t_act"] = max(o.get("act_max", 0), o["act"]), now
         act, amax = o.get("act"), o.get("act_max") or 0
         r, held = p / o["p0"], now - o["t"]
-        if o.get("high"):
+        if o.get("run"):
+            o["pending"] = "RUN" if p <= o["peak"] * RUN_GIVE or r <= RUN_FLOOR or now - o["t_run"] > RUN_HOLD else None
+        elif o.get("high"):
             o["pending"] = ("STOP" if r <= o["stop"] else
                             "TREND" if o["peak"] >= o["p0"] * HI_ARM and p <= o["peak"] * HI_GIVE else
                             "DEAD" if act is not None and held > 60 and act < HI_DEAD * amax and r < 1 else
@@ -488,8 +576,10 @@ def manage(opened, m, p, cs, done, rpc=None):
                             "STALL" if (act is not None and now - o.get("t_peak", o["t"]) > STALL_S
                                         and act < STALL_ACT * amax) else
                             "TIME" if held > MAX_HOLD else None)
+            if o["pending"] == "TP" and M3 and traction(o):
+                o["pending"] = "HALF"
         return
-    out = sell_curve(o["q"], p)
+    out = sell_curve(o["q"], p) + o.get("cash", 0.0)
     ret = (out - 2 * TX_SOL) / SIZE_SOL - 1
     row = {**o, "exit": why, "t_exit": time.time(), "p_exit": p, "ret": ret}
     jlog(TRADES_LOG, row)

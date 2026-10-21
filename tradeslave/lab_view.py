@@ -195,7 +195,7 @@ def experiments() -> dict:
 
 
 def build_lab_snapshot() -> dict:
-    return dict(t=time.time(), jobs=jobs(), m1=m1(), m2=m1("m2"), c1=c1(), kalshi=kalshi(), experiments=experiments())
+    return dict(t=time.time(), jobs=jobs(), m1=m1(), m2=m1("m2"), m3=m1("m3"), c1=c1(), kalshi=kalshi(), experiments=experiments())
 
 
 LAB_HTML = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -226,6 +226,8 @@ a{color:var(--acc)}.bar{display:flex;gap:4px;align-items:flex-end;height:60px}.b
 <div><h2>Every scored token <select id="minsc" class="small"><option value="0">all scores</option><option value="5">5+</option><option value="7">7+ (buy zone)</option></select></h2><div id="top" class="scroll" style="max-height:520px"></div></div></div></section>
 <section class="card"><h2>M2: M1 + sniper-bag rug filter, −10% stop, 1 s price checks (paper, started 09:20)</h2><div class="kpis" id="m2k"></div>
 <div class="grid" style="margin-top:12px"><div><h2>Recent M2 trades</h2><div id="m2t" class="scroll"></div></div><div><h2>M2 funnel, last 24 h</h2><div id="m2f"></div></div></div></section>
+<section class="card"><h2>M3: M2 + dead-coin, dev / fresh-wallet rug, copy-volume filters, real-cause scoring, ride runners with traction (paper, started 15:27, final test tonight)</h2><div class="kpis" id="m3k"></div>
+<div class="grid" style="margin-top:12px"><div><h2>Recent M3 trades</h2><div id="m3t" class="scroll"></div></div><div><h2>M3 funnel, last 24 h</h2><div id="m3f"></div></div></div></section>
 <section class="grid"><div class="card"><h2>Running jobs</h2><div id="jobs" class="scroll"></div></div>
 <div class="card"><h2>Kalshi paper bots</h2><div id="kal"></div><h2 style="margin-top:16px">C1 recorder</h2><div id="c1"></div></div></section>
 <section class="card"><h2>Experiments <span class="mute small" id="exn"></span></h2><div id="exp" class="scroll" style="max-height:520px"></div></section>
@@ -267,6 +269,11 @@ $("m2k").innerHTML=[["Trades",s2.n],["Mean / trade",s2.n?pct(s2.mean):"–"],["W
 ["vs M1 since 09:20",m.fresh.n?pct(m.fresh.mean)+` (${m.fresh.n})`:"–"]].map(([a,b])=>`<div class="kpi"><b>${b}</b><span>${a}</span></div>`).join("");
 $("m2t").innerHTML=table(["Time","Coin","Score","Exit","Return","Held"],m2.recent.map(r=>[tm(r.t),esc(r.name),r.score,esc(r.exit),pct(r.ret),r.held+"m"]));
 const f2=m2.funnel;$("m2f").innerHTML=table(["Stage","Count"],[["Narrative ≥ 7",f2.passed],["Reached $4–7k + checks",f2.checked],["Passed checks (bought)",f2.checks_ok],...Object.entries(f2.blocked).map(([k,v])=>[`<span class="mute">blocked: ${esc(k)}</span>`,v])]);
+const m3=d.m3,s3=m3.stats;
+$("m3k").innerHTML=[["Trades",s3.n],["Mean / trade",s3.n?pct(s3.mean):"–"],["Win rate",s3.n?(100*s3.win).toFixed(0)+"%":"–"],["t-stat",s3.n>1?s3.t.toFixed(2):"–"],
+["P&L",`${m3.sol>=0?"+":""}${m3.sol} SOL`],["2x hits",(m3.exits.TP||0)+(m3.exits.RUN||0)],["Rode past 2x",m3.exits.RUN||0],["Open",m3.open.length]].map(([a,b])=>`<div class="kpi"><b>${b}</b><span>${a}</span></div>`).join("");
+$("m3t").innerHTML=table(["Time","Coin","Score","Exit","Return","Held"],m3.recent.map(r=>[tm(r.t),esc(r.name),r.score,esc(r.exit),pct(r.ret),r.held+"m"]));
+const f3=m3.funnel;$("m3f").innerHTML=table(["Stage","Count"],[["Narrative ≥ 7",f3.passed],["Reached $4–7k + checks",f3.checked],["Passed checks (bought)",f3.checks_ok],...Object.entries(f3.blocked).map(([k,v])=>[`<span class="mute">blocked: ${esc(k)}</span>`,v])]);
 const e=d.experiments;$("exn").textContent=`${e.total} experiment rows · ${e.running} running`;
 $("exp").innerHTML=table(["Date","Experiment","What","Result","Verdict"],e.rows.map(r=>[r.date,`<b>${esc(r.note)}</b>`,`<span class="small">${esc(r.strategy)}</span>`,`<span class="small">${esc(r.result)}</span>`,`<span class="pill ${r.state}">${r.state}</span><div class="small mute">${esc(r.verdict)}</div>`]))}
 tick();setInterval(tick,15000);$("minsc").onchange=tick;
