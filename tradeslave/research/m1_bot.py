@@ -79,6 +79,12 @@ something people are about to buy into? Low-effort copies, jokes nobody will car
 Judge ONLY the content and who posted it. Ignore engagement completely: likes, reposts, views, replies and the
 coin's own traction do not matter (the coin is minutes old, so zero traction is normal and is never a reason to
 score low). An unknown poster only means criterion 1 fails; it says nothing about criteria 2-4.
+Timing: if the narrative is built on something time-sensitive (an announcement, event, launch, hackathon, news),
+the post it relies on must be recent (hours to a day or two); a time-sensitive post from weeks or months ago has no
+hype left, so score it low. Timeless meme content (a funny clip, an animal, a classic quote) can be old.
+Verification: anyone can paste any link. Only credit criterion 1 when the post below was actually read and shows the
+influential person posting it; if the link could not be read, judge only what can be seen (the name, the
+description) and never credit criterion 1 from the handle in the URL alone.
 Scale: 9-10 = an influential person posted it, or an exceptional narrative people will clearly pile into;
 7-8 = clearly fits one criterion with content people would buy into; 4-6 = fits a criterion but the idea is weak or
 forced; 0-3 = fits none, low effort, offensive, or a scam.
@@ -158,6 +164,14 @@ class Llm:
         return None
 
 
+def age_text(ts):
+    if not ts:
+        return "age unknown"
+    d = max(0.0, time.time() - float(ts))
+    return (f"posted {d / 60:.0f} min ago" if d < 3600 else f"posted {d / 3600:.1f} h ago" if d < 172800 else
+            f"posted {d / 86400:.0f} days ago")
+
+
 def nkeys(link):
     """Narrative keys of an X link: the post id. A profile or community link names a person or group, not a
     narrative, so it gives no key (every coin linking one is judged on its own)."""
@@ -176,7 +190,8 @@ def tweet_info(s, link):
         if m.group(2):
             t = s.get(f"https://api.fxtwitter.com/{m.group(1)}/status/{m.group(2)}", timeout=8).json()["tweet"]
             a = t["author"]
-            out = (f"Post by @{a['screen_name']} ({a.get('name', '')}, {a.get('followers', 0):,} followers): "
+            out = (f"Post by @{a['screen_name']} ({a.get('name', '')}, {a.get('followers', 0):,} followers, "
+                   f"{age_text(t.get('created_timestamp'))}): "
                    f"\"{t.get('text', '')[:500]}\"")
             if t.get("replying_to"):
                 out += f"\nIt replies to @{t['replying_to']}."
@@ -186,7 +201,8 @@ def tweet_info(s, link):
             if q:
                 qa = q.get("author", {})
                 out += (f"\nIt quotes a post by @{qa.get('screen_name')} ({qa.get('name', '')}, "
-                        f"{qa.get('followers', 0):,} followers): \"{q.get('text', '')[:300]}\"")
+                        f"{qa.get('followers', 0):,} followers, {age_text(q.get('created_timestamp'))}): "
+                        f"\"{q.get('text', '')[:300]}\"")
             return out, keys
         u = s.get(f"https://api.fxtwitter.com/{m.group(1)}", timeout=8).json()["user"]
         return (f"Profile @{u['screen_name']} ({u.get('followers', 0):,} followers): "
