@@ -110,6 +110,8 @@ def m1() -> dict:
     groups = {}
     for r in trades:
         groups.setdefault(r.get("nkey") or key.get(r["m"], r["m"]), []).append(r["ret"])
+    last_check = {c["m"]: ("passed" if c["ok"] else ", ".join(c.get("why", []))) for c in checks}
+    bought = {r["m"] for r in trades} | {o.get("m") for o in status.get("open", [])}
     eq, curve = 0.0, []
     for r in trades:
         eq += r["ret"] * 0.1
@@ -130,9 +132,10 @@ def m1() -> dict:
                     blocked=Counter(w for c in checks for w in c.get("why", [])),
                     scores=Counter(str(c["score"]) for c in scored),
                     models=Counter(str(c.get("model")) for c in scored)),
-        top=[dict(t=c["t"], name=c.get("name"), score=c["score"], why=c.get("why"), link=c.get("link"))
-             for c in sorted((c for c in scored if c["score"] is not None), key=lambda c: c["t"])
-             if c["score"] >= 5][-12:][::-1])
+        top=[dict(t=c["t"], name=c.get("name"), score=c["score"], why=c.get("why"), link=c.get("link"),
+                  crit=c.get("crit"), after=c.get("after"), improves=c.get("improves"), model=c.get("model"),
+                  check=last_check.get(c["m"]), bought=c["m"] in bought)
+             for c in sorted(scored, key=lambda c: c["t"])][-300:][::-1])
 
 
 def c1() -> dict:
@@ -211,7 +214,7 @@ a{color:var(--acc)}.bar{display:flex;gap:4px;align-items:flex-end;height:60px}.b
 <div class="grid" style="margin-top:22px"><div><h2>Open positions</h2><div id="open" class="scroll"></div></div>
 <div><h2>Funnel, last 24 h</h2><div id="fun"></div></div></div>
 <div class="grid" style="margin-top:8px"><div><h2>Recent paper trades</h2><div id="rules" style="margin-bottom:10px"></div><div id="trades" class="scroll"></div></div>
-<div><h2>Best-scored narratives</h2><div id="top" class="scroll"></div></div></div></section>
+<div><h2>Every scored token <select id="minsc" class="small"><option value="0">all scores</option><option value="5">5+</option><option value="7">7+ (buy zone)</option></select></h2><div id="top" class="scroll" style="max-height:520px"></div></div></div></section>
 <section class="grid"><div class="card"><h2>Running jobs</h2><div id="jobs" class="scroll"></div></div>
 <div class="card"><h2>Kalshi paper bots</h2><div id="kal"></div><h2 style="margin-top:16px">C1 recorder</h2><div id="c1"></div></div></section>
 <section class="card"><h2>Experiments <span class="mute small" id="exn"></span></h2><div id="exp" class="scroll" style="max-height:520px"></div></section>
@@ -237,11 +240,16 @@ const f=m.funnel;$("fun").innerHTML=table(["Stage","Count"],[["X-linked launches
 [`<span class="mute">LLM calls today</span>`,esc(Object.entries(m.status.calls||{}).map(([k,v])=>k.split(" ")[1]+" "+v).join(", ")||"–")]]);
 $("rules").innerHTML=table(["Rule version","Trades","Mean","Win","t"],Object.entries(m.by_rules).map(([k,v])=>[esc(k),v.n,v.n?pct(v.mean):"–",v.n?(100*v.win).toFixed(0)+"%":"–",v.n>1?v.t.toFixed(2):"–"]));
 $("trades").innerHTML=table(["Time","Coin","Narrative","Score","Exit","Return","Held"],m.recent.map(r=>[tm(r.t),esc(r.name),`<span class="mute small">…${esc(r.narr)}</span>`,r.score,esc(r.exit),pct(r.ret),r.held+"m"]));
-$("top").innerHTML=table(["Time","Coin","Score","Why"],m.top.map(r=>[tm(r.t),r.link?`<a href="${esc(r.link)}" target="_blank" rel="noopener">${esc(r.name)}</a>`:esc(r.name),r.score,`<span class="small">${esc(r.why)}</span>`]));
+const ms=+$("minsc").value,crit={1:"influential",2:"potential",3:"cause",4:"correction"};
+$("top").innerHTML=table(["Time","Coin","Score","Why","Outcome"],m.top.filter(r=>(r.score??-1)>=ms).map(r=>[tm(r.t),
+(r.link?`<a href="${esc(r.link)}" target="_blank" rel="noopener">${esc(r.name)}</a>`:esc(r.name))+(r.after?`<div class="mute small">copy of ${esc(r.after)}${r.improves?" · improves":""}</div>`:""),
+`<b class="${r.score>=7?"pos":r.score==null?"neg":""}">${r.score??"err"}</b><div class="mute small">${esc(crit[r.crit]||"")}</div>`,
+`<span class="small">${esc(r.why)}</span>`,
+`<span class="small">${r.bought?'<b class="pos">bought</b>':r.check?esc(r.check):r.score>=7?(r.after&&!r.improves?"skipped: copy":"waiting for $4–7k"):"—"}</span>`]));
 $("jobs").innerHTML=table(["Job","Status","Last update"],d.jobs.map(j=>[`<b>${esc(j.name)}</b><div class="mute small">${esc(j.desc)}</div>`,`<span class="pill ${j.status}">${j.status}</span><div class="mute small">${j.age_min==null?"":j.age_min<90?j.age_min+" min":(j.age_min/60).toFixed(1)+" h"}</div>`,`<code>${esc(j.last)}</code>`]));
 $("kal").innerHTML=table(["Bot","Hours","Rewards","Settled P&L","Net","Open"],d.kalshi.map(k=>[k.name,k.hours,"$"+k.rewards.toFixed(2),`<span class="${k.settled>=0?"pos":"neg"}">$${k.settled.toFixed(2)}</span>`,`<span class="${k.rewards+k.settled>=0?"pos":"neg"}">$${(k.rewards+k.settled).toFixed(2)}</span>`,k.open]));
 $("c1").innerHTML=table(["Launches logged","Reached R 40","Trade files","Window"],[[d.c1.creates.toLocaleString(),d.c1.hot,d.c1.files,esc(d.c1.window)]]);
 const e=d.experiments;$("exn").textContent=`${e.total} experiment rows · ${e.running} running`;
 $("exp").innerHTML=table(["Date","Experiment","What","Result","Verdict"],e.rows.map(r=>[r.date,`<b>${esc(r.note)}</b>`,`<span class="small">${esc(r.strategy)}</span>`,`<span class="small">${esc(r.result)}</span>`,`<span class="pill ${r.state}">${r.state}</span><div class="small mute">${esc(r.verdict)}</div>`]))}
-tick();setInterval(tick,15000);
+tick();setInterval(tick,15000);$("minsc").onchange=tick;
 </script></body></html>"""

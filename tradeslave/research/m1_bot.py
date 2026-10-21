@@ -159,11 +159,10 @@ class Llm:
 
 
 def nkeys(link):
-    """Narrative keys of an X link: the post id, else the profile / community path."""
-    m = re.search(r"(?:x|twitter)\.com/(.+?)(?:\?|#|$)", link)
-    path = (m.group(1) if m else link).lower().rstrip("/")
-    sid = re.search(r"status/(\d+)", path)
-    return [sid.group(1) if sid else path]
+    """Narrative keys of an X link: the post id. A profile or community link names a person or group, not a
+    narrative, so it gives no key (every coin linking one is judged on its own)."""
+    sid = re.search(r"status/(\d+)", link)
+    return [sid.group(1)] if sid else []
 
 
 def tweet_info(s, link):
@@ -308,7 +307,8 @@ def run():
     first = {}                                   # narrative key -> the first coin seen on it (Rohit: prefer the first)
     for r in (json.loads(x) for x in CANDS.open(encoding="utf-8")) if CANDS.exists() else ():
         for k in r.get("nkeys") or []:
-            first.setdefault(k, r)
+            if k.isdigit():                      # post ids only (older rows also keyed profiles)
+                first.setdefault(k, r)
     done, lock = set(), threading.Lock()
     pool = ThreadPoolExecutor(1)                 # one LLM call at a time (local GPU)
 
@@ -327,7 +327,7 @@ def run():
                                                         improves=IMPROVES if prev else ""))
         ok = prev is None or better
         with lock:
-            scored[c["m"]] = (sc, ok, keys[0])
+            scored[c["m"]] = (sc, ok, keys[0] if keys else c["m"])
         jlog(CANDS, {"t": time.time(), "m": c["m"], "name": c.get("name"), "sym": c.get("sym"), "desc": desc,
                      "link": link, "score": sc, "crit": crit, "why": why, "age": round(time.time() - c["t"]),
                      "model": llm.used, "nkeys": keys, "first": prev is None,
@@ -488,7 +488,7 @@ def report():
     key = {}
     for c in (json.loads(x) for x in CANDS.open(encoding="utf-8")):
         if "link" in c:
-            key.setdefault(c["m"], (c.get("nkeys") or nkeys(c["link"]))[0])
+            key.setdefault(c["m"], (c.get("nkeys") or nkeys(c["link"]) or [c["m"]])[0])
     g = defaultdict(list)
     for r in rows:
         g[r.get("nkey") or key.get(r["m"], r["m"])].append(r["ret"])
