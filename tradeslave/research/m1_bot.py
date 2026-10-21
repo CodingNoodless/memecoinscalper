@@ -313,6 +313,7 @@ def checks(rpc, tr, dev, sol_usd):
 
 
 def run():
+    sys.stdout.reconfigure(errors="replace")    # coin names with emoji / non-Latin text must never crash the loop
     OUT.mkdir(parents=True, exist_ok=True)
     s = requests.Session()
     s.headers.update({"Origin": "https://pump.fun", "Accept": "application/json"})
