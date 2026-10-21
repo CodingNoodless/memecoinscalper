@@ -111,7 +111,10 @@ def record():
     pace = Pace()
 
     def check(c, k):
-        cs = candles(s, c["m"], c["t"], "1m" if AGES[k] <= 7200 else "5m")
+        try:
+            cs = candles(s, c["m"], c["t"], "1m" if AGES[k] <= 7200 else "5m")
+        except (TypeError, KeyError, ValueError):               # malformed candle rows (null prices): retry next pass
+            return
         if cs is None:
             return
         hi = max((x[2] for x in cs), default=0.0)

@@ -77,7 +77,10 @@ def record() -> None:
                             n_seen += 1
                             fc.write(json.dumps({"t": now, "m": msg["mint"], "dev": msg.get("traderPublicKey"),
                                                  "sol": msg.get("solAmount"), "tok": msg.get("initialBuy"),
-                                                 "mh": msg.get("is_mayhem_mode")}) + "\n")
+                                                 "mh": msg.get("is_mayhem_mode"), "bc": msg.get("bondingCurveKey"),
+                                                 "name": msg.get("name"), "sym": msg.get("symbol"),
+                                                 "uri": msg.get("uri")}) + "\n")
+                            fc.flush()                    # M1 (research.m1_bot) tails this file live
                             if float(msg.get("solAmount") or 0) >= WATCH_MIN_SOL:
                                 n_kept += 1
                                 fh.write(json.dumps({"t": now, **msg}) + "\n")
