@@ -72,7 +72,7 @@ SNIP_SLOTS, SNIP_MAX = 2, 8.0                    # M2: wallets buying within 2 s
 DEAD_HOLDERS, DEAD_GROWTH, DEV_MAX, FRESH_H, FRESH_MAX, VOL_COPY = 15, 8, 10.0, 6 * 3600, 25.0, 3000.0
 RUN_BUYERS, RUN_FLOW, RUN_SOCIAL, RUN_GIVE, RUN_FLOOR, RUN_HOLD = 25, 1.5, 2.0, 0.50, 1.4, 7200
 RIDE_MIN, SUP_EVERY, SUP_FADE = 1.3, 10.0, 0.40
-RULES = "m3-v2" if M3 else "m2-v1" if M2 else "exits-v2"                                # bump on every rule change; the dashboard splits results by it
+RULES = "m3-v3" if M3 else "m2-v1" if M2 else "exits-v2"                                # bump on every rule change; the dashboard splits results by it
 ACT_EVERY = 6.0
 WATCH_S, POLL_S, RECHECK_S = 20 * 60, (1.0 if M2 else 2.0), 30
 SIZE_SOL, TX_SOL, MAX_OPEN = 0.1, 0.0005, 5
@@ -551,7 +551,12 @@ def manage(opened, m, p, cs, done, rpc=None):
     o = opened[m]
     now = time.time()
     if p is None:                                               # graduated: sell at the last price seen
-        why, p = o.get("pending") or "GRAD", o.get("last", o["p0"])
+        why, p = o.get("pending") if o.get("pending") not in (None, "HALF") else "GRAD", o.get("last", o["p0"])
+    elif o.get("pending") == "HALF":                            # M3 v3: bank half at the ride start, ride the rest
+        o["cash"] = sell_curve(o["q"] / 2, p) - TX_SOL
+        o["q"] /= 2
+        o.update(pending=None, half_at=p / o["p0"])
+        return
     elif o.get("pending"):
         why = o["pending"]
     else:
@@ -564,7 +569,7 @@ def manage(opened, m, p, cs, done, rpc=None):
             o["act_max"], o["t_act"] = max(o.get("act_max", 0), o["act"]), now
         act, amax = o.get("act"), o.get("act_max") or 0
         r, held = p / o["p0"], now - o["t"]
-        if o.get("run"):                                        # M3 ride: hold the whole bag until support fades
+        if o.get("run"):                                        # M3 ride: hold the other half until support fades
             if now - o.get("t_sup", 0) >= SUP_EVERY:
                 o["sup"], o["sup_flow"] = support(m)
                 o["sup_max"], o["t_sup"] = max(o.get("sup_max", 0), o["sup"]), now
@@ -584,8 +589,8 @@ def manage(opened, m, p, cs, done, rpc=None):
                             "TIME" if held > MAX_HOLD else None)
             if M3 and o["pending"] in ("TP", "TREND", "STALL", "TIME") and r >= RIDE_MIN and traction(o):
                 o.update(run=True, t_run=now, ride_from=o["pending"], floor=min(RUN_FLOOR, 0.8 * r),
-                         sup=o["tp_buyers"], sup_flow=o["tp_flow"], sup_max=o["tp_buyers"], t_sup=now, pending=None)
-                print(time.strftime("%H:%M"), f"RIDE {o['name']!r} at {r:.2f}x instead of {o['ride_from']} "
+                         sup=o["tp_buyers"], sup_flow=o["tp_flow"], sup_max=o["tp_buyers"], t_sup=now, pending="HALF")
+                print(time.strftime("%H:%M"), f"RIDE {o['name']!r} at {r:.2f}x (half sold) instead of {o['ride_from']} "
                       f"({o['traction']}: {o['tp_buyers']} buyers/min, flow {o['tp_flow']})", flush=True)
         return
     out = sell_curve(o["q"], p) + o.get("cash", 0.0)
