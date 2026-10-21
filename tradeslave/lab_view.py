@@ -117,7 +117,9 @@ def m1() -> dict:
     for o in status.get("open", []):
         o["ret_now"] = (o["last"] / o["p0"] - 1) if o.get("last") and o.get("p0") else None
     return dict(
-        stats=stats([r["ret"] for r in trades]), narratives=stats([statistics.mean(v) for v in groups.values()]), sol=round(sum(r["ret"] for r in trades) * 0.1, 4), curve=curve,
+        stats=stats([r["ret"] for r in trades]),
+        by_rules={k: stats([r["ret"] for r in trades if r.get("rules", "exits-v1") == k])
+                  for k in dict.fromkeys(r.get("rules", "exits-v1") for r in trades)}, narratives=stats([statistics.mean(v) for v in groups.values()]), sol=round(sum(r["ret"] for r in trades) * 0.1, 4), curve=curve,
         exits=Counter(r["exit"] for r in trades), open=status.get("open", []),
         status={k: status.get(k) for k in ("t", "llm", "calls", "fails", "watching", "sol_usd")},
         recent=[dict(t=r["t"], name=r.get("name"), score=r.get("score"), exit=r["exit"], ret=r["ret"],
@@ -208,7 +210,7 @@ a{color:var(--acc)}.bar{display:flex;gap:4px;align-items:flex-end;height:60px}.b
 <div><div class="mute small">Narrative scores, last 24 h</div><div class="bar" id="sc"></div></div></div>
 <div class="grid" style="margin-top:22px"><div><h2>Open positions</h2><div id="open" class="scroll"></div></div>
 <div><h2>Funnel, last 24 h</h2><div id="fun"></div></div></div>
-<div class="grid" style="margin-top:8px"><div><h2>Recent paper trades</h2><div id="trades" class="scroll"></div></div>
+<div class="grid" style="margin-top:8px"><div><h2>Recent paper trades</h2><div id="rules" style="margin-bottom:10px"></div><div id="trades" class="scroll"></div></div>
 <div><h2>Best-scored narratives</h2><div id="top" class="scroll"></div></div></div></section>
 <section class="grid"><div class="card"><h2>Running jobs</h2><div id="jobs" class="scroll"></div></div>
 <div class="card"><h2>Kalshi paper bots</h2><div id="kal"></div><h2 style="margin-top:16px">C1 recorder</h2><div id="c1"></div></div></section>
@@ -233,6 +235,7 @@ $("open").innerHTML=table(["Coin","Score","Entry","Now","Since"],m.open.map(o=>[
 const f=m.funnel;$("fun").innerHTML=table(["Stage","Count"],[["X-linked launches scored",f.scored],["Narrative ≥ 7",f.passed],["Reached $5–7k + checks",f.checked],["Passed checks (bought)",f.checks_ok],
 ...Object.entries(f.blocked).map(([k,v])=>[`<span class="mute">blocked: ${esc(k)}</span>`,v]),[`<span class="mute">models</span>`,esc(Object.entries(f.models).map(([k,v])=>k+" "+v).join(", "))],
 [`<span class="mute">LLM calls today</span>`,esc(Object.entries(m.status.calls||{}).map(([k,v])=>k.split(" ")[1]+" "+v).join(", ")||"–")]]);
+$("rules").innerHTML=table(["Rule version","Trades","Mean","Win","t"],Object.entries(m.by_rules).map(([k,v])=>[esc(k),v.n,v.n?pct(v.mean):"–",v.n?(100*v.win).toFixed(0)+"%":"–",v.n>1?v.t.toFixed(2):"–"]));
 $("trades").innerHTML=table(["Time","Coin","Narrative","Score","Exit","Return","Held"],m.recent.map(r=>[tm(r.t),esc(r.name),`<span class="mute small">…${esc(r.narr)}</span>`,r.score,esc(r.exit),pct(r.ret),r.held+"m"]));
 $("top").innerHTML=table(["Time","Coin","Score","Why"],m.top.map(r=>[tm(r.t),r.link?`<a href="${esc(r.link)}" target="_blank" rel="noopener">${esc(r.name)}</a>`:esc(r.name),r.score,`<span class="small">${esc(r.why)}</span>`]));
 $("jobs").innerHTML=table(["Job","Status","Last update"],d.jobs.map(j=>[`<b>${esc(j.name)}</b><div class="mute small">${esc(j.desc)}</div>`,`<span class="pill ${j.status}">${j.status}</span><div class="mute small">${j.age_min==null?"":j.age_min<90?j.age_min+" min":(j.age_min/60).toFixed(1)+" h"}</div>`,`<code>${esc(j.last)}</code>`]));

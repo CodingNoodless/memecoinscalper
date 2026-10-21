@@ -57,6 +57,7 @@ GEMINI = (("gemini-3.8-flash", 9_000), ("gemini-3.5-flash-lite", 140_000))   # (
                                                  # 10k / 150k (Rohit's AI Studio limits, 2026-10-21); resets at midnight PT
 TP, STOP, TREND_ARM, TREND_GIVE, STALL_S, STALL_ACT, MAX_HOLD = 2.0, 0.70, 1.30, 0.80, 120, 0.50, 600
 HI_ARM, HI_GIVE, HI_DEAD, HI_HOLD = 1.50, 0.60, 0.20, 7200
+RULES = "exits-v2"                                # bump on every rule change; the dashboard splits results by it
 ACT_EVERY = 6.0
 WATCH_S, POLL_S, RECHECK_S = 20 * 60, 2.0, 30
 SIZE_SOL, TX_SOL, MAX_OPEN = 0.1, 0.0005, 5
@@ -408,7 +409,7 @@ def run():
             v = fresh.virtual_sol
             q = V0 * T0 / v - V0 * T0 / (v + SIZE_SOL * (1 - CURVE_FEE))
             opened[m] = dict(m=m, name=c.get("name"), score=sc, t=time.time(), p0=price(fresh), q=q, peak=price(fresh),
-                             stop=STOP, high=sc >= SCORE_HIGH, bc=bc, mc=round(mc), sol_usd=sol["usd"],
+                             stop=STOP, high=sc >= SCORE_HIGH, bc=bc, rules=RULES, mc=round(mc), sol_usd=sol["usd"],
                              nkey=nkey)
             print(time.strftime("%H:%M"), f"BUY  {c.get('name')!r} score {sc} mc ${mc:,.0f}", flush=True)
         try:                                                     # for the dashboard (tradeslave.lab_view)
