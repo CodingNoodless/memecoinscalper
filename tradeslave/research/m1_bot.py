@@ -49,7 +49,8 @@ SWAP = "https://swap-api.pump.fun/v2/coins/{}/trades"
 GT = "https://api.geckoterminal.com/api/v2/networks/solana/pools/" + SOL_USDC
 MC_MIN, VOL_MIN, MC_BUY = 4500.0, 1500.0, (5000.0, 7000.0)
 SCORE_MIN, SCORE_HIGH = 7, 9
-GEMINI = "gemini-flash-latest"
+GEMINI = (("gemini-3.8-flash", 9_000), ("gemini-3.5-flash-lite", 140_000))   # (model, daily budget): free-tier RPD
+                                                 # 10k / 150k (Rohit's AI Studio limits, 2026-10-21); resets at midnight PT
 TP, STOP, STOP_HIGH, TREND_ARM, TREND_GIVE, MAX_HOLD = 2.0, 0.95, 0.70, 1.30, 0.80, 3600
 WATCH_S, POLL_S, RECHECK_S = 20 * 60, 2.0, 30
 SIZE_SOL, TX_SOL, MAX_OPEN = 0.1, 0.0005, 5
@@ -84,8 +85,8 @@ def jlog(path, row):
 class Llm:
     def __init__(self):
         self.key = os.environ.get("GEMINI_API_KEY") or self._env("GEMINI_API_KEY")
-        self.name = GEMINI if self.key else f"ollama:{OLLAMA_MODEL}"
-        self.used, self.fails = None, defaultdict(int)
+        self.name = "+".join(m for m, _ in GEMINI) if self.key else f"ollama:{OLLAMA_MODEL}"
+        self.used, self.fails, self.calls = None, defaultdict(int), defaultdict(int)   # calls: (PT date, model) -> n
 
     @staticmethod
     def _env(k):
@@ -114,18 +115,25 @@ class Llm:
             return None, None, f"llm error: {type(exc).__name__}"
 
     def _gemini(self, text):
-        try:
-            r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI}:generateContent",
-                              headers={"x-goog-api-key": self.key}, timeout=20, json={
-                                  "contents": [{"parts": [{"text": text}]}],
-                                  "generationConfig": {"temperature": 0, "responseMimeType": "application/json",
-                                                       "thinkingConfig": {"thinkingLevel": "low"}}})
-            if r.ok:
-                self.used = GEMINI
-                return r.json()["candidates"][0]["content"]["parts"][0]["text"]
-            self.fails[r.status_code] += 1
-        except (requests.RequestException, KeyError, IndexError, ValueError) as exc:
-            self.fails[type(exc).__name__] += 1
+        day = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 7 * 3600))
+        for model, budget in GEMINI:
+            if self.calls[(day, model)] >= budget:
+                continue
+            self.calls[(day, model)] += 1
+            try:
+                r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                                  headers={"x-goog-api-key": self.key}, timeout=20, json={
+                                      "contents": [{"parts": [{"text": text}]}],
+                                      "generationConfig": {"temperature": 0, "responseMimeType": "application/json",
+                                                           "thinkingConfig": {"thinkingLevel": "low"}}})
+                if r.ok:
+                    self.used = model
+                    return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+                self.fails[(model, r.status_code)] += 1
+                if r.status_code == 429:                        # quota hit early: spend the rest of the day on the next
+                    self.calls[(day, model)] = budget
+            except (requests.RequestException, KeyError, IndexError, ValueError) as exc:
+                self.fails[(model, type(exc).__name__)] += 1
         return None
 
 
@@ -357,7 +365,8 @@ def run():
         if time.time() - last_note > 600:
             last_note = time.time()
             print(time.strftime("%H:%M"), f"watching {len(watch)} with X links, scored {len(scored)}, "
-                  f"open {len(opened)}, closed {summary()[0]}", flush=True)
+                  f"open {len(opened)}, closed {summary()[0]}, llm calls {dict(llm.calls)} fails {dict(llm.fails)}",
+                  flush=True)
         time.sleep(max(0.0, POLL_S - (time.time() - t_loop)))
 
 
