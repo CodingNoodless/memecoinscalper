@@ -46,7 +46,9 @@ from .c1_curve import CREATES, CURVE_FEE, SOL_USDC, T0, V0, sell_curve
 from .chain import env_rpc
 from .full_trades import Pace, ts as iso_ts
 
-OUT = DATA_DIR / "m1"
+VARIANT = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] in ("m1", "m2") else "m1"
+M2 = VARIANT == "m2"                             # M2 (2026-10-21 09:40): M1 + sniper-bag filter, -10% stop, 1 s polls
+OUT = DATA_DIR / VARIANT
 CANDS, TRADES_LOG, OPEN = OUT / "cands.jsonl", OUT / "trades.jsonl", OUT / "status.json"
 SWAP = "https://swap-api.pump.fun/v2/coins/{}/trades"
 GT = "https://api.geckoterminal.com/api/v2/networks/solana/pools/" + SOL_USDC
@@ -57,9 +59,12 @@ GEMINI = (("gemini-3.8-flash", 9_000), ("gemini-3.5-flash-lite", 140_000))   # (
                                                  # 10k / 150k (Rohit's AI Studio limits, 2026-10-21); resets at midnight PT
 TP, STOP, TREND_ARM, TREND_GIVE, STALL_S, STALL_ACT, MAX_HOLD = 2.0, 0.70, 1.30, 0.80, 120, 0.50, 600
 HI_ARM, HI_GIVE, HI_DEAD, HI_HOLD = 1.50, 0.60, 0.20, 7200
-RULES = "exits-v2"                                # bump on every rule change; the dashboard splits results by it
+if M2:
+    STOP = 0.90                                  # Rohit: losses ~15-20% even when rugged (a -10% stop fills ~-17..-20%)
+SNIP_SLOTS, SNIP_MAX = 2, 8.0                    # M2: wallets buying within 2 slots of the create, % of supply still held
+RULES = "m2-v1" if M2 else "exits-v2"                                # bump on every rule change; the dashboard splits results by it
 ACT_EVERY = 6.0
-WATCH_S, POLL_S, RECHECK_S = 20 * 60, 2.0, 30
+WATCH_S, POLL_S, RECHECK_S = 20 * 60, (1.0 if M2 else 2.0), 30
 SIZE_SOL, TX_SOL, MAX_OPEN = 0.1, 0.0005, 5
 LINK = re.compile(r"https?://(?:www\.)?(?:x|twitter)\.com/\S+", re.I)
 
@@ -306,6 +311,14 @@ def checks(rpc, tr, dev, sol_usd):
         why.append("bundle: shared funder")
     if any(b - a <= 60 for a, b in zip(times, times[1:])):
         why.append("bundle: funded together")
+    if M2:
+        if tr[0][2] == dev:                       # full history from the create: measure the sniper bag
+            snip = {x[2] for x in tr if x[3] and x[0] <= slot0 + SNIP_SLOTS and x[2] != dev}
+            det["sniper_pct"] = round(sum(max(0.0, hold[w]) for w in snip) / 1e7, 2)
+            if det["sniper_pct"] > SNIP_MAX:
+                why.append("rug: snipers still hold > 8%")
+        else:
+            det["sniper_pct"] = None              # history starts after the create (very busy coin): not measurable
     buys = [x[4] for x in tr[1:] if x[3] and x[2] != dev] if tr and tr[0][2] == dev else [x[4] for x in tr if x[3]]
     if buys and max(buys) > 0.40 * sum(buys):
         why.append("chart: one buy dominates")
@@ -318,7 +331,7 @@ def run():
     s = requests.Session()
     s.headers.update({"Origin": "https://pump.fun", "Accept": "application/json"})
     rpc, llm, pace = Rpc(), Llm(), Pace(0.3)
-    print(time.strftime("%H:%M"), f"M1 paper bot, narrative model {llm.name}", flush=True)
+    print(time.strftime("%H:%M"), f"{VARIANT.upper()} paper bot ({RULES}), narrative model {llm.name}", flush=True)
     sol = {"usd": 0.0, "t": 0.0}
     watch, scored, opened = {}, {}, {}           # mint -> create row; mint -> (score, narrative ok, key); mint -> pos
     first = {}                                   # narrative key -> the first coin seen on it (Rohit: prefer the first)

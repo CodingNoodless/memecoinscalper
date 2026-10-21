@@ -91,11 +91,11 @@ def stats(v: list[float]) -> dict:
                 t=m / sd * math.sqrt(len(v)) if sd else 0.0, best=max(v), worst=min(v))
 
 
-FRESH_FROM = time.mktime(time.strptime("2026-10-21 08:45", "%Y-%m-%d %H:%M"))   # fresh daytime count (Rohit)
+FRESH_FROM = time.mktime(time.strptime("2026-10-21 09:20", "%Y-%m-%d %H:%M"))   # = M2 start, so M1 vs M2 compare   # fresh daytime count (Rohit)
 
 
-def m1() -> dict:
-    d = DATA_DIR / "m1"
+def m1(variant: str = "m1") -> dict:
+    d = DATA_DIR / variant
     trades = jsonl(d / "trades.jsonl")
     cands = jsonl(d / "cands.jsonl")
     try:
@@ -195,7 +195,7 @@ def experiments() -> dict:
 
 
 def build_lab_snapshot() -> dict:
-    return dict(t=time.time(), jobs=jobs(), m1=m1(), c1=c1(), kalshi=kalshi(), experiments=experiments())
+    return dict(t=time.time(), jobs=jobs(), m1=m1(), m2=m1("m2"), c1=c1(), kalshi=kalshi(), experiments=experiments())
 
 
 LAB_HTML = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -224,6 +224,8 @@ a{color:var(--acc)}.bar{display:flex;gap:4px;align-items:flex-end;height:60px}.b
 <div><h2>Funnel, last 24 h</h2><div id="fun"></div></div></div>
 <div class="grid" style="margin-top:8px"><div><h2>Recent paper trades</h2><div id="rules" style="margin-bottom:10px"></div><div id="trades" class="scroll"></div></div>
 <div><h2>Every scored token <select id="minsc" class="small"><option value="0">all scores</option><option value="5">5+</option><option value="7">7+ (buy zone)</option></select></h2><div id="top" class="scroll" style="max-height:520px"></div></div></div></section>
+<section class="card"><h2>M2: M1 + sniper-bag rug filter, −10% stop, 1 s price checks (paper, started 09:20)</h2><div class="kpis" id="m2k"></div>
+<div class="grid" style="margin-top:12px"><div><h2>Recent M2 trades</h2><div id="m2t" class="scroll"></div></div><div><h2>M2 funnel, last 24 h</h2><div id="m2f"></div></div></div></section>
 <section class="grid"><div class="card"><h2>Running jobs</h2><div id="jobs" class="scroll"></div></div>
 <div class="card"><h2>Kalshi paper bots</h2><div id="kal"></div><h2 style="margin-top:16px">C1 recorder</h2><div id="c1"></div></div></section>
 <section class="card"><h2>Experiments <span class="mute small" id="exn"></span></h2><div id="exp" class="scroll" style="max-height:520px"></div></section>
@@ -259,6 +261,12 @@ $("top").innerHTML=table(["Time","Coin","Score","Why","Outcome"],m.top.filter(r=
 $("jobs").innerHTML=table(["Job","Status","Last update"],d.jobs.map(j=>[`<b>${esc(j.name)}</b><div class="mute small">${esc(j.desc)}</div>`,`<span class="pill ${j.status}">${j.status}</span><div class="mute small">${j.age_min==null?"":j.age_min<90?j.age_min+" min":(j.age_min/60).toFixed(1)+" h"}</div>`,`<code>${esc(j.last)}</code>`]));
 $("kal").innerHTML=table(["Bot","Hours","Rewards","Settled P&L","Net","Open"],d.kalshi.map(k=>[k.name,k.hours,"$"+k.rewards.toFixed(2),`<span class="${k.settled>=0?"pos":"neg"}">$${k.settled.toFixed(2)}</span>`,`<span class="${k.rewards+k.settled>=0?"pos":"neg"}">$${(k.rewards+k.settled).toFixed(2)}</span>`,k.open]));
 $("c1").innerHTML=table(["Launches logged","Reached R 40","Trade files","Window"],[[d.c1.creates.toLocaleString(),d.c1.hot,d.c1.files,esc(d.c1.window)]]);
+const m2=d.m2,s2=m2.stats;
+$("m2k").innerHTML=[["Trades",s2.n],["Mean / trade",s2.n?pct(s2.mean):"–"],["Win rate",s2.n?(100*s2.win).toFixed(0)+"%":"–"],["t-stat",s2.n>1?s2.t.toFixed(2):"–"],
+["Narratives",m2.narratives.n],["Mean / narrative",m2.narratives.n?pct(m2.narratives.mean):"–"],["P&L",`${m2.sol>=0?"+":""}${m2.sol} SOL`],["2x hits",m2.exits.TP||0],["Open",m2.open.length],
+["vs M1 since 09:20",m.fresh.n?pct(m.fresh.mean)+` (${m.fresh.n})`:"–"]].map(([a,b])=>`<div class="kpi"><b>${b}</b><span>${a}</span></div>`).join("");
+$("m2t").innerHTML=table(["Time","Coin","Score","Exit","Return","Held"],m2.recent.map(r=>[tm(r.t),esc(r.name),r.score,esc(r.exit),pct(r.ret),r.held+"m"]));
+const f2=m2.funnel;$("m2f").innerHTML=table(["Stage","Count"],[["Narrative ≥ 7",f2.passed],["Reached $4–7k + checks",f2.checked],["Passed checks (bought)",f2.checks_ok],...Object.entries(f2.blocked).map(([k,v])=>[`<span class="mute">blocked: ${esc(k)}</span>`,v])]);
 const e=d.experiments;$("exn").textContent=`${e.total} experiment rows · ${e.running} running`;
 $("exp").innerHTML=table(["Date","Experiment","What","Result","Verdict"],e.rows.map(r=>[r.date,`<b>${esc(r.note)}</b>`,`<span class="small">${esc(r.strategy)}</span>`,`<span class="small">${esc(r.result)}</span>`,`<span class="pill ${r.state}">${r.state}</span><div class="small mute">${esc(r.verdict)}</div>`]))}
 tick();setInterval(tick,15000);$("minsc").onchange=tick;
