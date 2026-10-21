@@ -27,6 +27,7 @@ log = logging.getLogger("launch_watch")
 PUMPPORTAL_WS = "wss://pumpportal.fun/api/data"
 OUT = DATA_DIR / "launch_watch.jsonl"
 TRADES = DATA_DIR / "launch_watch_trades.jsonl"
+CREATES = DATA_DIR / "c1" / "creates.jsonl"   # every create, unfiltered: C1's mint list (research.c1_curve)
 MINE_WINDOW_S = 20.0       # J1 exits at 15 s; creator fees after 20 s are left out (conservative); busy launches
                            # have ~850 txs in their first minute (175 s to mine at 5 req/s, measured)
 MINE_AFTER_S = 40.0
@@ -57,8 +58,9 @@ def record() -> None:
             time.sleep(60)
             continue
         try:
+            CREATES.parent.mkdir(parents=True, exist_ok=True)
             with connect(PUMPPORTAL_WS, open_timeout=20, max_size=2 ** 22) as ws, \
-                    OUT.open("a", encoding="utf-8") as fh:
+                    OUT.open("a", encoding="utf-8") as fh, CREATES.open("a", encoding="utf-8") as fc:
                 ws.send(json.dumps({"method": "subscribeNewToken"}))
                 log.info("listening to PumpPortal launches (dev buy >= %.1f SOL)", WATCH_MIN_SOL)
                 n_seen = n_kept = 0
@@ -73,12 +75,16 @@ def record() -> None:
                         kind = msg.get("txType")
                         if kind == "create":
                             n_seen += 1
+                            fc.write(json.dumps({"t": now, "m": msg["mint"], "dev": msg.get("traderPublicKey"),
+                                                 "sol": msg.get("solAmount"), "tok": msg.get("initialBuy"),
+                                                 "mh": msg.get("is_mayhem_mode")}) + "\n")
                             if float(msg.get("solAmount") or 0) >= WATCH_MIN_SOL:
                                 n_kept += 1
                                 fh.write(json.dumps({"t": now, **msg}) + "\n")
                                 fh.flush()
                     if now - last_note > 600:
                         fh.flush()
+                        fc.flush()
                         log.info("%d launches seen, %d recorded (dev buy >= %.1f SOL)", n_seen, n_kept, WATCH_MIN_SOL)
                         last_note = now
                 log.info("scalp.py is back: closing our PumpPortal connection")
