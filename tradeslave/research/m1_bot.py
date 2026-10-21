@@ -66,10 +66,13 @@ SNIP_SLOTS, SNIP_MAX = 2, 8.0                    # M2: wallets buying within 2 s
 # M3 (assumptions, not fitted): dead coin = < 15 holders and < 8 new buyers in 2 min; rug = dev holds > 10% or
 # top-10 wallets funded in the last 6 h hold > 25%; a copy needs volume >= $3k; at 2x, if the coin has traction
 # (>= 25 buyers and buys >= 1.5x sells in the last 60 s, or the linked post's engagement doubled since entry, +20),
-# sell half and ride the rest until 35% off the peak, below 1.4x entry, or 1 h.
+# m3-v2 (Rohit 15:50): instead of any exit signal while >= 1.3x (2x, trend break, stall, time), a coin with traction
+# is ridden with the WHOLE position until support fades (buyers/min < 40% of their peak since the ride began and
+# sells >= buys), or a floor (0.8x the ride-start price, at most 1.4x entry), a crash (50% off the peak), or 2 h.
 DEAD_HOLDERS, DEAD_GROWTH, DEV_MAX, FRESH_H, FRESH_MAX, VOL_COPY = 15, 8, 10.0, 6 * 3600, 25.0, 3000.0
-RUN_BUYERS, RUN_FLOW, RUN_SOCIAL, RUN_GIVE, RUN_FLOOR, RUN_HOLD = 25, 1.5, 2.0, 0.65, 1.4, 3600
-RULES = "m3-v1" if M3 else "m2-v1" if M2 else "exits-v2"                                # bump on every rule change; the dashboard splits results by it
+RUN_BUYERS, RUN_FLOW, RUN_SOCIAL, RUN_GIVE, RUN_FLOOR, RUN_HOLD = 25, 1.5, 2.0, 0.50, 1.4, 7200
+RIDE_MIN, SUP_EVERY, SUP_FADE = 1.3, 10.0, 0.40
+RULES = "m3-v2" if M3 else "m2-v1" if M2 else "exits-v2"                                # bump on every rule change; the dashboard splits results by it
 ACT_EVERY = 6.0
 WATCH_S, POLL_S, RECHECK_S = 20 * 60, (1.0 if M2 else 2.0), 30
 SIZE_SOL, TX_SOL, MAX_OPEN = 0.1, 0.0005, 5
@@ -251,18 +254,22 @@ def engagement(link):
         return None
 
 
-def traction(o):
-    """M3 at 2x: is the coin still pulling in buyers, or is its post spreading? Records what it saw."""
+def support(m):
+    """(unique buyers, buy SOL / sell SOL) over the coin's last 60 s of trades; (0, 0.0) if unreadable."""
     now = time.time()
     try:
-        tr = SOC.get(SWAP.format(o["m"]), params={"limit": 100}, timeout=8).json()["trades"]
-        last = [x for x in tr if iso_ts(x["timestamp"]) >= now - 60]
-        buy = sum(float(x["amountSol"]) for x in last if x["type"] == "buy")
-        sell = sum(float(x["amountSol"]) for x in last if x["type"] != "buy")
-        o["tp_buyers"] = len({x["userAddress"] for x in last if x["type"] == "buy"})
-        o["tp_flow"] = round(buy / sell, 2) if sell else 99.0
+        tr = SOC.get(SWAP.format(m), params={"limit": 100}, timeout=8).json()["trades"]
     except Exception:  # noqa: BLE001
-        o["tp_buyers"], o["tp_flow"] = 0, 0.0
+        return 0, 0.0
+    last = [x for x in tr if iso_ts(x["timestamp"]) >= now - 60]
+    buy = sum(float(x["amountSol"]) for x in last if x["type"] == "buy")
+    sell = sum(float(x["amountSol"]) for x in last if x["type"] != "buy")
+    return len({x["userAddress"] for x in last if x["type"] == "buy"}), (round(buy / sell, 2) if sell else 99.0)
+
+
+def traction(o):
+    """M3 at an exit signal in profit: is the coin still pulling in buyers, or is its post spreading?"""
+    o["tp_buyers"], o["tp_flow"] = support(o["m"])
     o["eng_tp"] = engagement(o.get("link"))
     chain = o["tp_buyers"] >= RUN_BUYERS and o["tp_flow"] >= RUN_FLOW
     e0, e1 = o.get("eng0"), o["eng_tp"]
@@ -545,12 +552,6 @@ def manage(opened, m, p, cs, done, rpc=None):
     now = time.time()
     if p is None:                                               # graduated: sell at the last price seen
         why, p = o.get("pending") or "GRAD", o.get("last", o["p0"])
-    elif o.get("pending") == "HALF":                            # M3: sell half at 2x, ride the rest
-        o["cash"] = sell_curve(o["q"] / 2, p) - TX_SOL
-        o["q"] /= 2
-        o.update(pending=None, run=True, t_run=now, last=p, peak=max(o["peak"], p))
-        print(time.strftime("%H:%M"), f"HALF {o['name']!r} at {p / o['p0']:.2f}x, riding ({o['traction']})", flush=True)
-        return
     elif o.get("pending"):
         why = o["pending"]
     else:
@@ -563,8 +564,13 @@ def manage(opened, m, p, cs, done, rpc=None):
             o["act_max"], o["t_act"] = max(o.get("act_max", 0), o["act"]), now
         act, amax = o.get("act"), o.get("act_max") or 0
         r, held = p / o["p0"], now - o["t"]
-        if o.get("run"):
-            o["pending"] = "RUN" if p <= o["peak"] * RUN_GIVE or r <= RUN_FLOOR or now - o["t_run"] > RUN_HOLD else None
+        if o.get("run"):                                        # M3 ride: hold the whole bag until support fades
+            if now - o.get("t_sup", 0) >= SUP_EVERY:
+                o["sup"], o["sup_flow"] = support(m)
+                o["sup_max"], o["t_sup"] = max(o.get("sup_max", 0), o["sup"]), now
+            fade = o["sup"] < SUP_FADE * o["sup_max"] and o["sup_flow"] < 1.0
+            o["pending"] = ("FADE" if fade else "FLOOR" if r <= o["floor"] else
+                            "CRASH" if p <= o["peak"] * RUN_GIVE else "TIME" if now - o["t_run"] > RUN_HOLD else None)
         elif o.get("high"):
             o["pending"] = ("STOP" if r <= o["stop"] else
                             "TREND" if o["peak"] >= o["p0"] * HI_ARM and p <= o["peak"] * HI_GIVE else
@@ -576,8 +582,11 @@ def manage(opened, m, p, cs, done, rpc=None):
                             "STALL" if (act is not None and now - o.get("t_peak", o["t"]) > STALL_S
                                         and act < STALL_ACT * amax) else
                             "TIME" if held > MAX_HOLD else None)
-            if o["pending"] == "TP" and M3 and traction(o):
-                o["pending"] = "HALF"
+            if M3 and o["pending"] in ("TP", "TREND", "STALL", "TIME") and r >= RIDE_MIN and traction(o):
+                o.update(run=True, t_run=now, ride_from=o["pending"], floor=min(RUN_FLOOR, 0.8 * r),
+                         sup=o["tp_buyers"], sup_flow=o["tp_flow"], sup_max=o["tp_buyers"], t_sup=now, pending=None)
+                print(time.strftime("%H:%M"), f"RIDE {o['name']!r} at {r:.2f}x instead of {o['ride_from']} "
+                      f"({o['traction']}: {o['tp_buyers']} buyers/min, flow {o['tp_flow']})", flush=True)
         return
     out = sell_curve(o["q"], p) + o.get("cash", 0.0)
     ret = (out - 2 * TX_SOL) / SIZE_SOL - 1
