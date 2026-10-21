@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 
 from .config import PAPER_NETWORK_FEE_USD, PAPER_STARTING_BALANCE
 from .state import STATE_DIR, STATE_LOCK, load_json
+from .lab_view import LAB_HTML, build_lab_snapshot
 from .scalper.dashboard_view import build_scalper_snapshot, scalper_html
 
 
@@ -301,6 +302,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
         path = urlsplit(self.path).path
         if path == "/":
+            body = LAB_HTML.encode("utf-8")
+            content_type = "text/html; charset=utf-8"
+        elif path == "/api/lab":
+            try:
+                body = json.dumps(build_lab_snapshot(), allow_nan=False, default=str).encode("utf-8")
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                logger.exception("Lab snapshot failed")
+                body = json.dumps({"error": f"Could not read lab state: {exc}"}).encode("utf-8")
+            content_type = "application/json; charset=utf-8"
+        elif path == "/scalper":
             body = SCALPER_PAGE.encode("utf-8")
             content_type = "text/html; charset=utf-8"
         elif path == "/momentum":

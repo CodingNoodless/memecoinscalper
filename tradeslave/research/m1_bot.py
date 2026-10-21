@@ -43,7 +43,7 @@ from .chain import env_rpc
 from .full_trades import Pace, ts as iso_ts
 
 OUT = DATA_DIR / "m1"
-CANDS, TRADES_LOG = OUT / "cands.jsonl", OUT / "trades.jsonl"
+CANDS, TRADES_LOG, OPEN = OUT / "cands.jsonl", OUT / "trades.jsonl", OUT / "status.json"
 SWAP = "https://swap-api.pump.fun/v2/coins/{}/trades"
 GT = "https://api.geckoterminal.com/api/v2/networks/solana/pools/" + SOL_USDC
 MC_MIN, VOL_MIN, MC_BUY = 4500.0, 1500.0, (5000.0, 7000.0)
@@ -360,6 +360,15 @@ def run():
             opened[m] = dict(m=m, name=c.get("name"), score=sc, t=time.time(), p0=price(fresh), q=q, peak=price(fresh),
                              stop=STOP_HIGH if sc >= SCORE_HIGH else STOP, mc=round(mc), sol_usd=sol["usd"])
             print(time.strftime("%H:%M"), f"BUY  {c.get('name')!r} score {sc} mc ${mc:,.0f}", flush=True)
+        try:                                                     # for the dashboard (tradeslave.lab_view)
+            OPEN.write_text(json.dumps({"t": time.time(), "sol_usd": sol["usd"], "llm": llm.name,
+                                        "calls": {f"{d} {m}": n for (d, m), n in llm.calls.items()},
+                                        "fails": {str(k): n for k, n in llm.fails.items()},
+                                        "watching": len(watch), "scored": len(scored),
+                                        "open": [{k: o.get(k) for k in ("m", "name", "score", "t", "p0", "last", "peak",
+                                                                        "stop", "mc")} for o in opened.values()]}))
+        except OSError:
+            pass
         if time.time() - last_note > 600:
             last_note = time.time()
             print(time.strftime("%H:%M"), f"watching {len(watch)} with X links, scored {len(scored)}, "
