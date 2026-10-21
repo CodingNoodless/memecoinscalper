@@ -91,6 +91,9 @@ def stats(v: list[float]) -> dict:
                 t=m / sd * math.sqrt(len(v)) if sd else 0.0, best=max(v), worst=min(v))
 
 
+FRESH_FROM = time.mktime(time.strptime("2026-10-21 08:45", "%Y-%m-%d %H:%M"))   # fresh daytime count (Rohit)
+
+
 def m1() -> dict:
     d = DATA_DIR / "m1"
     trades = jsonl(d / "trades.jsonl")
@@ -100,6 +103,8 @@ def m1() -> dict:
     except (OSError, ValueError):
         status = {}
     day0 = time.time() - 86400
+    lt = time.localtime()
+    day_start = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
     scored = [c for c in cands if "score" in c and c["t"] >= day0]
     checks = [c for c in cands if c.get("stage") == "checks" and c["t"] >= day0]
     key = {}
@@ -120,6 +125,11 @@ def m1() -> dict:
         o["ret_now"] = (o["last"] / o["p0"] - 1) if o.get("last") and o.get("p0") else None
     return dict(
         stats=stats([r["ret"] for r in trades]),
+        by_window={lab: stats([r["ret"] for r in trades if lo <= time.localtime(r["t"]).tm_hour < hi
+                               and r["t"] >= day_start])
+                   for lab, lo, hi in (("today 00-04", 0, 4), ("today 04-07 (Rohit: suspect)", 4, 7),
+                                       ("today 07-24 (daytime)", 7, 24))},
+        fresh=stats([r["ret"] for r in trades if r["t"] >= FRESH_FROM]),
         by_rules={k: stats([r["ret"] for r in trades if r.get("rules", "exits-v1") == k])
                   for k in dict.fromkeys(r.get("rules", "exits-v1") for r in trades)}, narratives=stats([statistics.mean(v) for v in groups.values()]), sol=round(sum(r["ret"] for r in trades) * 0.1, 4), curve=curve,
         exits=Counter(r["exit"] for r in trades), open=status.get("open", []),
@@ -238,7 +248,8 @@ $("open").innerHTML=table(["Coin","Score","Entry","Now","Since"],m.open.map(o=>[
 const f=m.funnel;$("fun").innerHTML=table(["Stage","Count"],[["X-linked launches scored",f.scored],["Narrative ≥ 7",f.passed],["Reached $5–7k + checks",f.checked],["Passed checks (bought)",f.checks_ok],
 ...Object.entries(f.blocked).map(([k,v])=>[`<span class="mute">blocked: ${esc(k)}</span>`,v]),[`<span class="mute">models</span>`,esc(Object.entries(f.models).map(([k,v])=>k+" "+v).join(", "))],
 [`<span class="mute">LLM calls today</span>`,esc(Object.entries(m.status.calls||{}).map(([k,v])=>k.split(" ")[1]+" "+v).join(", ")||"–")]]);
-$("rules").innerHTML=table(["Rule version","Trades","Mean","Win","t"],Object.entries(m.by_rules).map(([k,v])=>[esc(k),v.n,v.n?pct(v.mean):"–",v.n?(100*v.win).toFixed(0)+"%":"–",v.n>1?v.t.toFixed(2):"–"]));
+const srow=(k,v)=>[esc(k),v.n,v.n?pct(v.mean):"–",v.n?(100*v.win).toFixed(0)+"%":"–",v.n>1?v.t.toFixed(2):"–"];
+$("rules").innerHTML=table(["Slice","Trades","Mean","Win","t"],[srow("<b>fresh: since 08:45</b>",m.fresh),...Object.entries(m.by_window).map(([k,v])=>srow(k,v)),...Object.entries(m.by_rules).map(([k,v])=>srow("rules "+k,v))]);
 $("trades").innerHTML=table(["Time","Coin","Narrative","Score","Exit","Return","Held"],m.recent.map(r=>[tm(r.t),esc(r.name),`<span class="mute small">…${esc(r.narr)}</span>`,r.score,esc(r.exit),pct(r.ret),r.held+"m"]));
 const ms=+$("minsc").value,crit={1:"influential",2:"potential",3:"cause",4:"correction"};
 $("top").innerHTML=table(["Time","Coin","Score","Why","Outcome"],m.top.filter(r=>(r.score??-1)>=ms).map(r=>[tm(r.t),
