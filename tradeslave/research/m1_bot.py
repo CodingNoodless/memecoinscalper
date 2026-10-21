@@ -49,18 +49,23 @@ SWAP = "https://swap-api.pump.fun/v2/coins/{}/trades"
 GT = "https://api.geckoterminal.com/api/v2/networks/solana/pools/" + SOL_USDC
 MC_MIN, VOL_MIN, MC_BUY = 4500.0, 1500.0, (5000.0, 7000.0)
 SCORE_MIN, SCORE_HIGH = 7, 9
+INFLUENTIAL = 20_000                             # followers; assumption until Rohit gives his bar
 TP, STOP, STOP_HIGH, TREND_ARM, TREND_GIVE, MAX_HOLD = 2.0, 0.95, 0.70, 1.30, 0.80, 3600
 WATCH_S, POLL_S, RECHECK_S = 20 * 60, 2.0, 30
 SIZE_SOL, TX_SOL, MAX_OPEN = 0.1, 0.0005, 5
 LINK = re.compile(r"https?://(?:www\.)?(?:x|twitter)\.com/\S+", re.I)
 
 PROMPT = """You screen brand-new pump.fun memecoins for a trader. He buys only when the narrative is something people
-are about to buy into. He likes, in his words:
+are about to buy into. Any ONE of these is enough for him to be interested (a coin does not need several):
 1) posted by an influential person,
 2) a project with lots of potential for success,
 3) a token aiming to achieve something with community support, like donating to charity,
 4) a token correcting an existing narrative for being incorrect.
-Most new coins are low-effort copies, jokes nobody will care about, or scams: score those low.
+"Influential" means a well-known account with at least {infl:,} followers; accounts below that are NOT influential
+(criterion 1 fails for them, though the coin can still qualify on 2, 3 or 4).
+Judge the coin on the single criterion it fits best, and do not mark it down for missing the others (for example, a
+strong charity or correction narrative posted by a small account can still score high). Then ask: is this
+something people are about to buy into? Low-effort copies, jokes nobody will care about, or scams score low.
 
 Coin: {name} (${sym})
 Description: {desc}
@@ -241,7 +246,7 @@ def run():
     def narrate(c, link):
         meta = c.get("_meta") or {}
         text = PROMPT.format(name=c.get("name"), sym=c.get("sym"), desc=str(meta.get("description", ""))[:400],
-                             link=link, tweet=tweet_info(s, link))
+                             link=link, tweet=tweet_info(s, link), infl=INFLUENTIAL)
         sc, crit, why = llm.score(text)
         with lock:
             scored[c["m"]] = (sc, crit)
