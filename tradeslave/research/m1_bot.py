@@ -571,6 +571,7 @@ def latency():
 
 
 def main() -> None:
+    sys.stdout.reconfigure(errors="replace")
     {"run": run, "report": report, "latency": latency}[sys.argv[1]]()
 
 
