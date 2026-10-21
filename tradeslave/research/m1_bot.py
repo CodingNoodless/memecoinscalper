@@ -68,6 +68,12 @@ own post often quotes or replies to someone else's post: if that person is influ
 Judge the coin on the single criterion it fits best, and do not mark it down for missing the others (for example, a
 strong charity or correction narrative posted by a small account can still score high). Then ask: is this
 something people are about to buy into? Low-effort copies, jokes nobody will care about, or scams score low.
+Judge ONLY the content and who posted it. Ignore engagement completely: likes, reposts, views, replies and the
+coin's own traction do not matter (the coin is minutes old, so zero traction is normal and is never a reason to
+score low). An unknown poster only means criterion 1 fails; it says nothing about criteria 2-4.
+Scale: 9-10 = an influential person posted it, or an exceptional narrative people will clearly pile into;
+7-8 = clearly fits one criterion with content people would buy into; 4-6 = fits a criterion but the idea is weak or
+forced; 0-3 = fits none, low effort, offensive, or a scam.
 
 Coin: {name} (${sym})
 Description: {desc}
@@ -146,7 +152,7 @@ def tweet_info(s, link):
             t = s.get(f"https://api.fxtwitter.com/{m.group(1)}/status/{m.group(2)}", timeout=8).json()["tweet"]
             a = t["author"]
             out = (f"Post by @{a['screen_name']} ({a.get('name', '')}, {a.get('followers', 0):,} followers): "
-                   f"\"{t.get('text', '')[:500]}\" ({t.get('likes', 0)} likes, {t.get('retweets', 0)} reposts)")
+                   f"\"{t.get('text', '')[:500]}\"")
             if t.get("replying_to"):
                 out += f"\nIt replies to @{t['replying_to']}."
             q = t.get("quote")
