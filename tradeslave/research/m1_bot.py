@@ -79,7 +79,15 @@ Coin: {name} (${sym})
 Description: {desc}
 X link: {link}
 {tweet}
-Reply with JSON only: {{"score": <0-10 integer>, "criterion": <1-4 or 0>, "why": "<one short sentence>"}}"""
+{earlier}Reply with JSON only: {{"score": <0-10 integer>, "criterion": <1-4 or 0>, "why": "<one short sentence>"{improves}}}"""
+
+EARLIER = """
+An EARLIER coin already launched on this same post / narrative: {name} (${sym}). Its description: {desc}
+The trader prefers the first coin of a narrative. A later coin is only worth buying if it fixes the earlier coin's
+narrative or credibly claims to be the better version with the right reasoning (e.g. the original got the name,
+ticker or facts wrong, or this one is the official / correct one). A plain copy is not.
+"""
+IMPROVES = ', "improves": <true if this coin fixes or credibly improves on the earlier one, else false>'
 
 
 def jlog(path, row):
@@ -115,9 +123,9 @@ class Llm:
                     "options": {"temperature": 0}})
                 out = r.json()["response"]
             d = json.loads(out[out.find("{"):out.rfind("}") + 1])
-            return int(d.get("score", 0)), d.get("criterion"), str(d.get("why", ""))[:200]
+            return int(d.get("score", 0)), d.get("criterion"), str(d.get("why", ""))[:200], bool(d.get("improves"))
         except Exception as exc:  # noqa: BLE001 - unscored = no buy
-            return None, None, f"llm error: {type(exc).__name__}"
+            return None, None, f"llm error: {type(exc).__name__}", False
 
     def _gemini(self, text):
         day = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 7 * 3600))
@@ -142,11 +150,21 @@ class Llm:
         return None
 
 
+def nkeys(link):
+    """Narrative keys of an X link: the post id, else the profile / community path."""
+    m = re.search(r"(?:x|twitter)\.com/(.+?)(?:\?|#|$)", link)
+    path = (m.group(1) if m else link).lower().rstrip("/")
+    sid = re.search(r"status/(\d+)", path)
+    return [sid.group(1) if sid else path]
+
+
 def tweet_info(s, link):
-    """Author, followers and text of the linked X post / profile (fxtwitter, free). Communities: link only."""
+    """Author, followers and text of the linked X post / profile (fxtwitter, free), and the narrative keys (the
+    post plus the post it quotes). Communities: link only."""
+    keys = nkeys(link)
     m = re.search(r"(?:x|twitter)\.com/([^/?#]+)(?:/status/(\d+))?", link)
     if not m or m.group(1) in ("i", "home", "search"):
-        return "X community / other link (contents not fetched)"
+        return "X community / other link (contents not fetched)", keys
     try:
         if m.group(2):
             t = s.get(f"https://api.fxtwitter.com/{m.group(1)}/status/{m.group(2)}", timeout=8).json()["tweet"]
@@ -156,15 +174,18 @@ def tweet_info(s, link):
             if t.get("replying_to"):
                 out += f"\nIt replies to @{t['replying_to']}."
             q = t.get("quote")
+            if q and q.get("id"):
+                keys.append(str(q["id"]))
             if q:
                 qa = q.get("author", {})
                 out += (f"\nIt quotes a post by @{qa.get('screen_name')} ({qa.get('name', '')}, "
                         f"{qa.get('followers', 0):,} followers): \"{q.get('text', '')[:300]}\"")
-            return out
+            return out, keys
         u = s.get(f"https://api.fxtwitter.com/{m.group(1)}", timeout=8).json()["user"]
-        return f"Profile @{u['screen_name']} ({u.get('followers', 0):,} followers): {u.get('description', '')[:300]}"
+        return (f"Profile @{u['screen_name']} ({u.get('followers', 0):,} followers): "
+                f"{u.get('description', '')[:300]}"), keys
     except Exception:  # noqa: BLE001
-        return "X link could not be read"
+        return "X link could not be read", keys
 
 
 class Rpc:
@@ -275,19 +296,34 @@ def run():
     rpc, llm, pace = Rpc(), Llm(), Pace(0.3)
     print(time.strftime("%H:%M"), f"M1 paper bot, narrative model {llm.name}", flush=True)
     sol = {"usd": 0.0, "t": 0.0}
-    watch, scored, opened = {}, {}, {}           # mint -> create row; mint -> (score, crit); mint -> position
+    watch, scored, opened = {}, {}, {}           # mint -> create row; mint -> (score, narrative ok, key); mint -> pos
+    first = {}                                   # narrative key -> the first coin seen on it (Rohit: prefer the first)
+    for r in (json.loads(x) for x in CANDS.open(encoding="utf-8")) if CANDS.exists() else ():
+        for k in r.get("nkeys") or []:
+            first.setdefault(k, r)
     done, lock = set(), threading.Lock()
     pool = ThreadPoolExecutor(1)                 # one LLM call at a time (local GPU)
 
     def narrate(c, link):
         meta = c.get("_meta") or {}
-        text = PROMPT.format(name=c.get("name"), sym=c.get("sym"), desc=str(meta.get("description", ""))[:400],
-                             link=link, tweet=tweet_info(s, link))
-        sc, crit, why = llm.score(text)
+        desc = str(meta.get("description", ""))[:400]
+        info, keys = tweet_info(s, link)
         with lock:
-            scored[c["m"]] = (sc, crit)
-        jlog(CANDS, {"t": time.time(), "m": c["m"], "name": c.get("name"), "link": link, "score": sc,
-                     "crit": crit, "why": why, "age": round(time.time() - c["t"]), "model": llm.used})
+            prev = next((first[k] for k in keys if k in first), None)
+            if prev is None:
+                for k in keys:
+                    first[k] = {"m": c["m"], "name": c.get("name"), "sym": c.get("sym"), "desc": desc}
+        earlier = EARLIER.format(name=prev.get("name"), sym=prev.get("sym"), desc=prev.get("desc") or "(none)")             if prev else ""
+        sc, crit, why, better = llm.score(PROMPT.format(name=c.get("name"), sym=c.get("sym"), desc=desc, link=link,
+                                                        tweet=info, earlier=earlier,
+                                                        improves=IMPROVES if prev else ""))
+        ok = prev is None or better
+        with lock:
+            scored[c["m"]] = (sc, ok, keys[0])
+        jlog(CANDS, {"t": time.time(), "m": c["m"], "name": c.get("name"), "sym": c.get("sym"), "desc": desc,
+                     "link": link, "score": sc, "crit": crit, "why": why, "age": round(time.time() - c["t"]),
+                     "model": llm.used, "nkeys": keys, "first": prev is None,
+                     "improves": better if prev else None, "after": prev.get("name") if prev else None})
 
     def intake(c):
         if not c["m"].endswith("pump") or c.get("mh"):
@@ -343,8 +379,8 @@ def run():
             if p is None or m in done or len(opened) >= MAX_OPEN:
                 continue
             mc = p * 1e9 * sol["usd"]
-            sc = scored.get(m, (None, None))[0]
-            if sc is None or sc < SCORE_MIN or not (MC_MIN <= mc and MC_BUY[0] <= mc <= MC_BUY[1]):
+            sc, narr_ok, nkey = scored.get(m, (None, False, None))
+            if sc is None or sc < SCORE_MIN or not narr_ok or not (MC_MIN <= mc and MC_BUY[0] <= mc <= MC_BUY[1]):
                 continue
             if t_loop - last_check[m] < RECHECK_S:
                 continue
@@ -364,7 +400,8 @@ def run():
             v = fresh.virtual_sol
             q = V0 * T0 / v - V0 * T0 / (v + SIZE_SOL * (1 - CURVE_FEE))
             opened[m] = dict(m=m, name=c.get("name"), score=sc, t=time.time(), p0=price(fresh), q=q, peak=price(fresh),
-                             stop=STOP_HIGH if sc >= SCORE_HIGH else STOP, mc=round(mc), sol_usd=sol["usd"])
+                             stop=STOP_HIGH if sc >= SCORE_HIGH else STOP, mc=round(mc), sol_usd=sol["usd"],
+                             nkey=nkey)
             print(time.strftime("%H:%M"), f"BUY  {c.get('name')!r} score {sc} mc ${mc:,.0f}", flush=True)
         try:                                                     # for the dashboard (tradeslave.lab_view)
             OPEN.write_text(json.dumps({"t": time.time(), "sol_usd": sol["usd"], "llm": llm.name,
@@ -423,6 +460,18 @@ def report():
     print(f"trades {n} mean {m:+.2%} median {statistics.median(v):+.2%} win {sum(x > 0 for x in v) / n:.0%} "
           f"t {m / sd * math.sqrt(n) if sd else 0:+.2f} 2x {sum(r['exit'] == 'TP' for r in rows)} "
           f"sum {sum(v) * SIZE_SOL:+.3f} SOL")
+    key = {}
+    for c in (json.loads(x) for x in CANDS.open(encoding="utf-8")):
+        if "link" in c:
+            key.setdefault(c["m"], (c.get("nkeys") or nkeys(c["link"]))[0])
+    g = defaultdict(list)
+    for r in rows:
+        g[r.get("nkey") or key.get(r["m"], r["m"])].append(r["ret"])
+    nv = [statistics.mean(x) for x in g.values()]
+    if len(nv) > 1:
+        nm, nsd = statistics.mean(nv), statistics.stdev(nv)
+        print(f"per narrative (trades on the same post averaged): n {len(nv)} mean {nm:+.2%} "
+              f"t {nm / nsd * math.sqrt(len(nv)) if nsd else 0:+.2f}")
     for r in rows[-15:]:
         print(f"  {time.strftime('%m-%d %H:%M', time.localtime(r['t']))} {str(r['name'])[:24]:24s} "
               f"score {r['score']} {r['exit']:5s} {r['ret']:+.1%}")

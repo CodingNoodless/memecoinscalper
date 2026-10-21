@@ -102,6 +102,14 @@ def m1() -> dict:
     day0 = time.time() - 86400
     scored = [c for c in cands if "score" in c and c["t"] >= day0]
     checks = [c for c in cands if c.get("stage") == "checks" and c["t"] >= day0]
+    key = {}
+    for c in cands:
+        if "link" in c:
+            sid = re.search(r"status/(\d+)", c["link"])
+            key.setdefault(c["m"], (c.get("nkeys") or [sid.group(1) if sid else c["link"].lower()])[0])
+    groups = {}
+    for r in trades:
+        groups.setdefault(r.get("nkey") or key.get(r["m"], r["m"]), []).append(r["ret"])
     eq, curve = 0.0, []
     for r in trades:
         eq += r["ret"] * 0.1
@@ -109,10 +117,11 @@ def m1() -> dict:
     for o in status.get("open", []):
         o["ret_now"] = (o["last"] / o["p0"] - 1) if o.get("last") and o.get("p0") else None
     return dict(
-        stats=stats([r["ret"] for r in trades]), sol=round(sum(r["ret"] for r in trades) * 0.1, 4), curve=curve,
+        stats=stats([r["ret"] for r in trades]), narratives=stats([statistics.mean(v) for v in groups.values()]), sol=round(sum(r["ret"] for r in trades) * 0.1, 4), curve=curve,
         exits=Counter(r["exit"] for r in trades), open=status.get("open", []),
         status={k: status.get(k) for k in ("t", "llm", "calls", "fails", "watching", "sol_usd")},
         recent=[dict(t=r["t"], name=r.get("name"), score=r.get("score"), exit=r["exit"], ret=r["ret"],
+                     narr=(r.get("nkey") or key.get(r["m"], ""))[-6:],
                      mc=r.get("mc"), held=round((r["t_exit"] - r["t"]) / 60, 1)) for r in trades[-25:]][::-1],
         funnel=dict(scored=len(scored), passed=sum((c["score"] or 0) >= 7 for c in scored),
                     checked=len(checks), checks_ok=sum(c["ok"] for c in checks),
@@ -213,7 +222,7 @@ function table(h,rows){return rows.length?`<table><tr>${h.map(x=>`<th>${x}</th>`
 async function tick(){let d;try{d=await (await fetch("/api/lab",{cache:"no-store"})).json()}catch(e){$("upd").textContent="dashboard server unreachable";return}
 $("upd").textContent="updated "+new Date().toLocaleTimeString();const m=d.m1,s=m.stats;
 $("m1k").innerHTML=[["Trades",s.n],["Mean / trade",s.n?pct(s.mean):"–"],["Win rate",s.n?(100*s.win).toFixed(0)+"%":"–"],["t-stat",s.n>1?s.t.toFixed(2):"–"],
-["P&L",`${m.sol>=0?"+":""}${m.sol} SOL`],["2x hits",m.exits.TP||0],["Open",m.open.length],["Watching",m.status.watching??"–"],
+["Narratives",m.narratives.n],["Mean / narrative",m.narratives.n?pct(m.narratives.mean):"–"],["P&L",`${m.sol>=0?"+":""}${m.sol} SOL`],["2x hits",m.exits.TP||0],["Open",m.open.length],["Watching",m.status.watching??"–"],
 ["Model",esc(m.status.llm||"–")]].map(([a,b])=>`<div class="kpi"><b>${b}</b><span>${a}</span></div>`).join("")+
 `<div class="kpi"><b class="small">${s.n>=100?"verdict due":"verdict at 100 trades or Nov 1"}</b><span>bar: mean ≥ +3%, t ≥ 3</span></div>`;
 const c=m.curve;if(c.length>1){const ys=c.map(p=>p[1]),lo=Math.min(0,...ys),hi=Math.max(0,...ys),r=hi-lo||1;
@@ -224,7 +233,7 @@ $("open").innerHTML=table(["Coin","Score","Entry","Now","Since"],m.open.map(o=>[
 const f=m.funnel;$("fun").innerHTML=table(["Stage","Count"],[["X-linked launches scored",f.scored],["Narrative ≥ 7",f.passed],["Reached $5–7k + checks",f.checked],["Passed checks (bought)",f.checks_ok],
 ...Object.entries(f.blocked).map(([k,v])=>[`<span class="mute">blocked: ${esc(k)}</span>`,v]),[`<span class="mute">models</span>`,esc(Object.entries(f.models).map(([k,v])=>k+" "+v).join(", "))],
 [`<span class="mute">LLM calls today</span>`,esc(Object.entries(m.status.calls||{}).map(([k,v])=>k.split(" ")[1]+" "+v).join(", ")||"–")]]);
-$("trades").innerHTML=table(["Time","Coin","Score","Exit","Return","Held"],m.recent.map(r=>[tm(r.t),esc(r.name),r.score,esc(r.exit),pct(r.ret),r.held+"m"]));
+$("trades").innerHTML=table(["Time","Coin","Narrative","Score","Exit","Return","Held"],m.recent.map(r=>[tm(r.t),esc(r.name),`<span class="mute small">…${esc(r.narr)}</span>`,r.score,esc(r.exit),pct(r.ret),r.held+"m"]));
 $("top").innerHTML=table(["Time","Coin","Score","Why"],m.top.map(r=>[tm(r.t),r.link?`<a href="${esc(r.link)}" target="_blank" rel="noopener">${esc(r.name)}</a>`:esc(r.name),r.score,`<span class="small">${esc(r.why)}</span>`]));
 $("jobs").innerHTML=table(["Job","Status","Last update"],d.jobs.map(j=>[`<b>${esc(j.name)}</b><div class="mute small">${esc(j.desc)}</div>`,`<span class="pill ${j.status}">${j.status}</span><div class="mute small">${j.age_min==null?"":j.age_min<90?j.age_min+" min":(j.age_min/60).toFixed(1)+" h"}</div>`,`<code>${esc(j.last)}</code>`]));
 $("kal").innerHTML=table(["Bot","Hours","Rewards","Settled P&L","Net","Open"],d.kalshi.map(k=>[k.name,k.hours,"$"+k.rewards.toFixed(2),`<span class="${k.settled>=0?"pos":"neg"}">$${k.settled.toFixed(2)}</span>`,`<span class="${k.rewards+k.settled>=0?"pos":"neg"}">$${(k.rewards+k.settled).toFixed(2)}</span>`,k.open]));
