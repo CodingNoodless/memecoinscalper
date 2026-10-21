@@ -10,7 +10,8 @@ Process (Rohit, 2026-10-20), step by step:
 2. Narrative read by an LLM against his four criteria (influential poster, project with real potential,
    community cause like charity, correcting an existing narrative). Claude Haiku if ANTHROPIC_API_KEY is set,
    else local Ollama. Buy only if score >= SCORE_MIN; score >= SCORE_HIGH is "really sure".
-3. Market filters: market cap >= $4.5k, volume >= $1.5k, entry while market cap is $5k-7k.
+3. Market filters: volume >= $1.5k; entry while market cap is $4k-7k ($5-7k best, $4-5k ok), up to $10k when the
+   narrative scores >= SCORE_HIGH.
 4. Top-5 holder check: no bundle (shared or simultaneous funding, near-identical balances).
 5. Chart check: organic (no single buy above 40% of buy volume besides the dev's create buy).
 6. Exits: 2x take profit; stop at -5% (-30% when really sure); uptrend break (after +30%, 20% off the peak);
@@ -46,7 +47,8 @@ OUT = DATA_DIR / "m1"
 CANDS, TRADES_LOG, OPEN = OUT / "cands.jsonl", OUT / "trades.jsonl", OUT / "status.json"
 SWAP = "https://swap-api.pump.fun/v2/coins/{}/trades"
 GT = "https://api.geckoterminal.com/api/v2/networks/solana/pools/" + SOL_USDC
-MC_MIN, VOL_MIN, MC_BUY = 4500.0, 1500.0, (5000.0, 7000.0)
+MC_MIN, VOL_MIN, MC_BUY, MC_HIGH = 4000.0, 1500.0, (4000.0, 7000.0), 10000.0   # Rohit: 5-7k best, 4-5k ok,
+                                                                         # up to 10k if the narrative is really good
 SCORE_MIN, SCORE_HIGH = 7, 9
 GEMINI = (("gemini-3.8-flash", 9_000), ("gemini-3.5-flash-lite", 140_000))   # (model, daily budget): free-tier RPD
                                                  # 10k / 150k (Rohit's AI Studio limits, 2026-10-21); resets at midnight PT
@@ -380,7 +382,8 @@ def run():
                 continue
             mc = p * 1e9 * sol["usd"]
             sc, narr_ok, nkey = scored.get(m, (None, False, None))
-            if sc is None or sc < SCORE_MIN or not narr_ok or not (MC_MIN <= mc and MC_BUY[0] <= mc <= MC_BUY[1]):
+            top = MC_HIGH if (sc or 0) >= SCORE_HIGH else MC_BUY[1]
+            if sc is None or sc < SCORE_MIN or not narr_ok or not (MC_MIN <= mc and MC_BUY[0] <= mc <= top):
                 continue
             if t_loop - last_check[m] < RECHECK_S:
                 continue
