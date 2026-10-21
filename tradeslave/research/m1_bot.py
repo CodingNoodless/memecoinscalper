@@ -49,7 +49,7 @@ SWAP = "https://swap-api.pump.fun/v2/coins/{}/trades"
 GT = "https://api.geckoterminal.com/api/v2/networks/solana/pools/" + SOL_USDC
 MC_MIN, VOL_MIN, MC_BUY = 4500.0, 1500.0, (5000.0, 7000.0)
 SCORE_MIN, SCORE_HIGH = 7, 9
-INFLUENTIAL = 20_000                             # followers; assumption until Rohit gives his bar
+GEMINI = "gemini-flash-latest"
 TP, STOP, STOP_HIGH, TREND_ARM, TREND_GIVE, MAX_HOLD = 2.0, 0.95, 0.70, 1.30, 0.80, 3600
 WATCH_S, POLL_S, RECHECK_S = 20 * 60, 2.0, 30
 SIZE_SOL, TX_SOL, MAX_OPEN = 0.1, 0.0005, 5
@@ -61,8 +61,10 @@ are about to buy into. Any ONE of these is enough for him to be interested (a co
 2) a project with lots of potential for success,
 3) a token aiming to achieve something with community support, like donating to charity,
 4) a token correcting an existing narrative for being incorrect.
-"Influential" means a well-known account with at least {infl:,} followers; accounts below that are NOT influential
-(criterion 1 fails for them, though the coin can still qualify on 2, 3 or 4).
+"Influential" is about WHO the person is: known memecoin KOLs and traders (e.g. Orangie, Cupsy), big crypto
+accounts, or celebrities (e.g. Elon Musk). Follower counts are a hint only; an account you don't recognise with a few
+thousand followers is NOT influential (criterion 1 fails, though the coin can still qualify on 2, 3 or 4). The coin's
+own post often quotes or replies to someone else's post: if that person is influential, criterion 1 can count.
 Judge the coin on the single criterion it fits best, and do not mark it down for missing the others (for example, a
 strong charity or correction narrative posted by a small account can still score high). Then ask: is this
 something people are about to buy into? Low-effort copies, jokes nobody will care about, or scams score low.
@@ -81,8 +83,9 @@ def jlog(path, row):
 
 class Llm:
     def __init__(self):
-        self.key = os.environ.get("ANTHROPIC_API_KEY") or self._env("ANTHROPIC_API_KEY")
-        self.name = "claude-haiku-5-5" if self.key else f"ollama:{OLLAMA_MODEL}"
+        self.key = os.environ.get("GEMINI_API_KEY") or self._env("GEMINI_API_KEY")
+        self.name = GEMINI if self.key else f"ollama:{OLLAMA_MODEL}"
+        self.used, self.fails = None, defaultdict(int)
 
     @staticmethod
     def _env(k):
@@ -96,13 +99,11 @@ class Llm:
 
     def score(self, text):
         try:
+            out = None
             if self.key:
-                r = requests.post("https://api.anthropic.com/v1/messages", timeout=60, headers={
-                    "x-api-key": self.key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                    json={"model": "claude-haiku-5-5", "max_tokens": 150,
-                          "messages": [{"role": "user", "content": text}]})
-                out = r.json()["content"][0]["text"]
-            else:
+                out = self._gemini(text)
+            if out is None:                                     # no key, or Gemini refused / rate-limited / slow
+                self.used = OLLAMA_MODEL
                 r = requests.post("http://localhost:11434/api/generate", timeout=120, json={
                     "model": OLLAMA_MODEL, "prompt": text, "stream": False, "format": "json",
                     "options": {"temperature": 0}})
@@ -111,6 +112,21 @@ class Llm:
             return int(d.get("score", 0)), d.get("criterion"), str(d.get("why", ""))[:200]
         except Exception as exc:  # noqa: BLE001 - unscored = no buy
             return None, None, f"llm error: {type(exc).__name__}"
+
+    def _gemini(self, text):
+        try:
+            r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI}:generateContent",
+                              headers={"x-goog-api-key": self.key}, timeout=20, json={
+                                  "contents": [{"parts": [{"text": text}]}],
+                                  "generationConfig": {"temperature": 0, "responseMimeType": "application/json",
+                                                       "thinkingConfig": {"thinkingLevel": "low"}}})
+            if r.ok:
+                self.used = GEMINI
+                return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            self.fails[r.status_code] += 1
+        except (requests.RequestException, KeyError, IndexError, ValueError) as exc:
+            self.fails[type(exc).__name__] += 1
+        return None
 
 
 def tweet_info(s, link):
@@ -122,8 +138,16 @@ def tweet_info(s, link):
         if m.group(2):
             t = s.get(f"https://api.fxtwitter.com/{m.group(1)}/status/{m.group(2)}", timeout=8).json()["tweet"]
             a = t["author"]
-            return (f"Post by @{a['screen_name']} ({a.get('followers', 0):,} followers): "
-                    f"\"{t.get('text', '')[:500]}\" ({t.get('likes', 0)} likes, {t.get('retweets', 0)} reposts)")
+            out = (f"Post by @{a['screen_name']} ({a.get('name', '')}, {a.get('followers', 0):,} followers): "
+                   f"\"{t.get('text', '')[:500]}\" ({t.get('likes', 0)} likes, {t.get('retweets', 0)} reposts)")
+            if t.get("replying_to"):
+                out += f"\nIt replies to @{t['replying_to']}."
+            q = t.get("quote")
+            if q:
+                qa = q.get("author", {})
+                out += (f"\nIt quotes a post by @{qa.get('screen_name')} ({qa.get('name', '')}, "
+                        f"{qa.get('followers', 0):,} followers): \"{q.get('text', '')[:300]}\"")
+            return out
         u = s.get(f"https://api.fxtwitter.com/{m.group(1)}", timeout=8).json()["user"]
         return f"Profile @{u['screen_name']} ({u.get('followers', 0):,} followers): {u.get('description', '')[:300]}"
     except Exception:  # noqa: BLE001
@@ -246,12 +270,12 @@ def run():
     def narrate(c, link):
         meta = c.get("_meta") or {}
         text = PROMPT.format(name=c.get("name"), sym=c.get("sym"), desc=str(meta.get("description", ""))[:400],
-                             link=link, tweet=tweet_info(s, link), infl=INFLUENTIAL)
+                             link=link, tweet=tweet_info(s, link))
         sc, crit, why = llm.score(text)
         with lock:
             scored[c["m"]] = (sc, crit)
         jlog(CANDS, {"t": time.time(), "m": c["m"], "name": c.get("name"), "link": link, "score": sc,
-                     "crit": crit, "why": why, "age": round(time.time() - c["t"])})
+                     "crit": crit, "why": why, "age": round(time.time() - c["t"]), "model": llm.used})
 
     def intake(c):
         if not c["m"].endswith("pump") or c.get("mh"):
