@@ -125,10 +125,9 @@ def m1() -> dict:
         o["ret_now"] = (o["last"] / o["p0"] - 1) if o.get("last") and o.get("p0") else None
     return dict(
         stats=stats([r["ret"] for r in trades]),
-        by_window={lab: stats([r["ret"] for r in trades if lo <= time.localtime(r["t"]).tm_hour < hi
-                               and r["t"] >= day_start])
-                   for lab, lo, hi in (("today 00-04", 0, 4), ("today 04-07 (Rohit: suspect)", 4, 7),
-                                       ("today 07-24 (daytime)", 7, 24))},
+        by_window={lab: stats([r["ret"] for r in trades if lo <= time.localtime(r["t"]).tm_hour < hi])
+                   for lab, lo, hi in (("<b>17-24 Rohit's hours (pre-registered test)</b>", 17, 24),
+                                       ("00-04", 0, 4), ("04-07 (Rohit: suspect)", 4, 7), ("07-17 daytime", 7, 17))},
         fresh=stats([r["ret"] for r in trades if r["t"] >= FRESH_FROM]),
         by_rules={k: stats([r["ret"] for r in trades if r.get("rules", "exits-v1") == k])
                   for k in dict.fromkeys(r.get("rules", "exits-v1") for r in trades)}, narratives=stats([statistics.mean(v) for v in groups.values()]), sol=round(sum(r["ret"] for r in trades) * 0.1, 4), curve=curve,
