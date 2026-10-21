@@ -14,8 +14,11 @@ Process (Rohit, 2026-10-20), step by step:
    narrative scores >= SCORE_HIGH.
 4. Top-5 holder check: no bundle (shared or simultaneous funding, near-identical balances).
 5. Chart check: organic (no single buy above 40% of buy volume besides the dev's create buy).
-6. Exits: 2x take profit; stop at -5% (-30% when really sure); uptrend break (after +30%, 20% off the peak);
-   60 min max.
+6. Exits (Rohit, 2026-10-21 02:00), by conviction. Activity = transactions on the bonding curve in the last 60 s.
+   Normal (score 7-8): 2x; uptrend break (after +30%, 20% off the peak); stall (no new high for 2 min and activity
+   < 50% of its peak since entry); 10 min max; disaster stop -30%. Dips are held while activity holds up.
+   High (score >= 9): no 2x cap; hold until the uptrend is over (once >= +50%, 40% off the peak); situation change
+   (activity < 20% of its peak while below entry); disaster stop -30%; 2 h max.
 Fills: curve state at the next poll after each decision (~2 s), 1.25%/side curve fee, own price impact,
 TX_SOL per transaction.
 """
@@ -52,7 +55,9 @@ MC_MIN, VOL_MIN, MC_BUY, MC_HIGH = 4000.0, 1500.0, (4000.0, 7000.0), 10000.0   #
 SCORE_MIN, SCORE_HIGH = 7, 9
 GEMINI = (("gemini-3.8-flash", 9_000), ("gemini-3.5-flash-lite", 140_000))   # (model, daily budget): free-tier RPD
                                                  # 10k / 150k (Rohit's AI Studio limits, 2026-10-21); resets at midnight PT
-TP, STOP, STOP_HIGH, TREND_ARM, TREND_GIVE, MAX_HOLD = 2.0, 0.95, 0.70, 1.30, 0.80, 3600
+TP, STOP, TREND_ARM, TREND_GIVE, STALL_S, STALL_ACT, MAX_HOLD = 2.0, 0.70, 1.30, 0.80, 120, 0.50, 600
+HI_ARM, HI_GIVE, HI_DEAD, HI_HOLD = 1.50, 0.60, 0.20, 7200
+ACT_EVERY = 6.0
 WATCH_S, POLL_S, RECHECK_S = 20 * 60, 2.0, 30
 SIZE_SOL, TX_SOL, MAX_OPEN = 0.1, 0.0005, 5
 LINK = re.compile(r"https?://(?:www\.)?(?:x|twitter)\.com/\S+", re.I)
@@ -376,7 +381,7 @@ def run():
                 continue
             p = cs.price_sol if not cs.complete else None
             if m in opened:
-                manage(opened, m, p, cs, done)
+                manage(opened, m, p, cs, done, rpc)
                 continue
             if p is None or m in done or len(opened) >= MAX_OPEN:
                 continue
@@ -403,7 +408,7 @@ def run():
             v = fresh.virtual_sol
             q = V0 * T0 / v - V0 * T0 / (v + SIZE_SOL * (1 - CURVE_FEE))
             opened[m] = dict(m=m, name=c.get("name"), score=sc, t=time.time(), p0=price(fresh), q=q, peak=price(fresh),
-                             stop=STOP_HIGH if sc >= SCORE_HIGH else STOP, mc=round(mc), sol_usd=sol["usd"],
+                             stop=STOP, high=sc >= SCORE_HIGH, bc=bc, mc=round(mc), sol_usd=sol["usd"],
                              nkey=nkey)
             print(time.strftime("%H:%M"), f"BUY  {c.get('name')!r} score {sc} mc ${mc:,.0f}", flush=True)
         try:                                                     # for the dashboard (tradeslave.lab_view)
@@ -423,19 +428,35 @@ def run():
         time.sleep(max(0.0, POLL_S - (time.time() - t_loop)))
 
 
-def manage(opened, m, p, cs, done):
+def manage(opened, m, p, cs, done, rpc=None):
     """Exit decided on one poll, filled at the curve state of the next poll (~2 s later)."""
     o = opened[m]
+    now = time.time()
     if p is None:                                               # graduated: sell at the last price seen
         why, p = o.get("pending") or "GRAD", o.get("last", o["p0"])
     elif o.get("pending"):
         why = o["pending"]
     else:
+        if p > o["peak"]:
+            o["t_peak"] = now
         o["peak"], o["last"] = max(o["peak"], p), p
-        r = p / o["p0"]
-        o["pending"] = ("TP" if r >= TP else "STOP" if r <= o["stop"] else
-                        "TREND" if o["peak"] >= o["p0"] * TREND_ARM and p <= o["peak"] * TREND_GIVE else
-                        "TIME" if time.time() - o["t"] > MAX_HOLD else None)
+        if rpc and now - o.get("t_act", 0) >= ACT_EVERY:      # activity: curve txs in the last 60 s
+            sigs = rpc.call("getSignaturesForAddress", [o["bc"], {"limit": 300}]) or []
+            o["act"] = sum(1 for x in sigs if (x.get("blockTime") or 0) >= now - 60)
+            o["act_max"], o["t_act"] = max(o.get("act_max", 0), o["act"]), now
+        act, amax = o.get("act"), o.get("act_max") or 0
+        r, held = p / o["p0"], now - o["t"]
+        if o.get("high"):
+            o["pending"] = ("STOP" if r <= o["stop"] else
+                            "TREND" if o["peak"] >= o["p0"] * HI_ARM and p <= o["peak"] * HI_GIVE else
+                            "DEAD" if act is not None and held > 60 and act < HI_DEAD * amax and r < 1 else
+                            "TIME" if held > HI_HOLD else None)
+        else:
+            o["pending"] = ("TP" if r >= TP else "STOP" if r <= o["stop"] else
+                            "TREND" if o["peak"] >= o["p0"] * TREND_ARM and p <= o["peak"] * TREND_GIVE else
+                            "STALL" if (act is not None and now - o.get("t_peak", o["t"]) > STALL_S
+                                        and act < STALL_ACT * amax) else
+                            "TIME" if held > MAX_HOLD else None)
         return
     out = sell_curve(o["q"], p)
     ret = (out - 2 * TX_SOL) / SIZE_SOL - 1
