@@ -11,8 +11,7 @@ Process (Rohit, 2026-10-20), step by step:
    community cause like charity, correcting an existing narrative). Claude Haiku if ANTHROPIC_API_KEY is set,
    else local Ollama. Buy only if score >= SCORE_MIN; score >= SCORE_HIGH is "really sure".
 3. Market filters: market cap >= $4.5k, volume >= $1.5k, entry while market cap is $5k-7k.
-4. Top-5 holder check: no bundle (several wallets buying in the create slot, shared or simultaneous funding,
-   near-identical balances).
+4. Top-5 holder check: no bundle (shared or simultaneous funding, near-identical balances).
 5. Chart check: organic (no single buy above 40% of buy volume besides the dev's create buy).
 6. Exits: 2x take profit; stop at -5% (-30% when really sure); uptrend break (after +30%, 20% off the peak);
    60 min max.
@@ -240,8 +239,7 @@ def checks(rpc, tr, dev, sol_usd):
     slot0 = tr[0][0]
     early = {x[2] for x in tr if x[0] == slot0 and x[3] and x[2] != dev}
     det["create_slot_buyers"] = len(early)
-    if len(early) >= 3:
-        why.append("bundle: create-slot buyers")
+    # create-slot buyers are logged only: sniper bots fill that slot on most launches; the bundle test is funding
     hold = defaultdict(float)
     for x in tr:
         hold[x[2]] += x[5] if x[3] else -x[5]
