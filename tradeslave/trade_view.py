@@ -192,7 +192,7 @@ tr.row{cursor:pointer}tr.row:hover{background:#1d212b}tr.sel{background:#22283a}
 <select id="bot"><option value="">all bots</option><option>m1</option><option>m2</option><option>m3</option></select>
 <select id="res"><option value="">all results</option><option value="w">wins</option><option value="l">losses</option><option value="o">open</option></select>
 <input id="q" placeholder="search name" size="14"><span id="sum" class="mute"></span>
-<a href="/">lab</a></header>
+<a href="/label">blind labels</a> <a href="/">lab</a></header>
 <main><div id="list"><table><thead><tr><th>time</th><th>bot</th><th>coin</th><th>sc</th><th>exit</th><th>ret</th></tr></thead><tbody id="rows"></tbody></table></div>
 <div id="right"><div id="tools"><button id="vc" class="on">1m candles</button><button id="vt">trades (tick)</button>
 <button id="lg">log scale</button><span class="legend mute"><span style="color:var(--buy)">&#9650; buy</span><span style="color:var(--sell)">&#9660; sell</span><span style="color:var(--half)">&#9670; half</span><span style="color:var(--peak)">&#9679; peak</span> &middot; prices as market cap (USD)</span></div>

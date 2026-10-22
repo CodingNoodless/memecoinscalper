@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlsplit
 from .config import PAPER_NETWORK_FEE_USD, PAPER_STARTING_BALANCE
 from .state import STATE_DIR, STATE_LOCK, load_json
 from .lab_view import LAB_HTML, build_lab_snapshot
+from .label_view import LABEL_HTML, label_next, label_save
 from .trade_view import TRADES_HTML, chart, trade_list
 from .scalper.dashboard_view import build_scalper_snapshot, scalper_html
 
@@ -315,6 +316,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
         elif path == "/trades":
             body = TRADES_HTML.encode("utf-8")
             content_type = "text/html; charset=utf-8"
+        elif path == "/label":
+            body = LABEL_HTML.encode("utf-8")
+            content_type = "text/html; charset=utf-8"
+        elif path == "/api/label/next":
+            try:
+                body = json.dumps(label_next(), allow_nan=False, default=str).encode("utf-8")
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                logger.exception("Label view failed")
+                body = json.dumps({"error": f"Could not load a coin: {exc}"}).encode("utf-8")
+            content_type = "application/json; charset=utf-8"
         elif path in ("/api/trades", "/api/chart"):
             try:
                 if path == "/api/trades":
@@ -362,6 +373,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self) -> None:  # noqa: N802 - stdlib handler API; only the local blind-label form writes
+        if urlsplit(self.path).path != "/api/label":
+            self.send_error(404)
+            return
+        try:
+            n = min(int(self.headers.get("Content-Length") or 0), 10000)
+            data = label_save(json.loads(self.rfile.read(n) or b"{}"))
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            logger.exception("Label save failed")
+            data = {"error": f"Could not save the label: {exc}"}
+        body = json.dumps(data, allow_nan=False, default=str).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
