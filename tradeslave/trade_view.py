@@ -38,6 +38,46 @@ def jsonl(p: Path) -> list[dict]:
     return out
 
 
+_REASON: dict = {}
+
+
+def reason(v: str, r: dict) -> str:
+    """Why a closed trade won or lost (the TF taxonomy, vault "2026-10-22 trade forensics and fix sweep (TF)").
+    'Shaken out' / 'cut winner' need the coin's trades after our exit (data/m1/ticks); without them a trade falls
+    through to the record-only categories."""
+    key = (v, r["m"], r["t"])
+    if key in _REASON:
+        return _REASON[key]
+    p0 = r.get("p0") or 0
+    pk = r["peak"] / p0 if p0 else 1.0
+    stop = r.get("stop", 0.7 if v == "m1" else 0.9)
+    if r["ret"] > 0:
+        out = "win"
+    elif pk >= 1.3:
+        out = "gave_back"
+    elif r.get("exit") == "STOP" and p0 and r["p_exit"] / p0 < stop - 0.10:
+        out = "rug_gap"
+    else:
+        out = None
+        tp = DATA_DIR / "m1" / "ticks" / f"{r['m']}.json.gz"
+        if p0 and tp.exists():
+            import gzip
+            from .research.tf_replay import path
+            try:
+                with gzip.open(tp, "rt", encoding="utf-8") as fh:
+                    tr = sorted(json.load(fh)["trades"], key=lambda x: (x[0], x[1]))
+                _, post = path(r, tr)
+                after = max((y[1] for y in post if r["t_exit"] < y[0] <= r["t"] + 900), default=0) / p0
+                if after >= 2:
+                    out = "shaken_out" if r.get("exit") == "STOP" else "cut_winner"
+            except (OSError, ValueError, KeyError, ZeroDivisionError):
+                pass
+        if out is None:
+            out = "instant_dump" if pk < 1.05 else "slow_bleed"
+    _REASON[key] = out
+    return out
+
+
 def trade_list() -> list[dict]:
     rows = []
     for v in BOTS:
@@ -46,7 +86,7 @@ def trade_list() -> list[dict]:
             if "ret" in r:
                 rows.append(dict(v=v, m=r["m"], t=r["t"], name=r.get("name"), score=r.get("score"), mc=r.get("mc"),
                                  exit=r.get("exit"), ret=r["ret"], held=r["t_exit"] - r["t"],
-                                 peak=r["peak"] / r["p0"] if r.get("p0") else None, open=False))
+                                 peak=r["peak"] / r["p0"] if r.get("p0") else None, open=False, why=reason(v, r)))
         try:
             st = json.loads((d / "status.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -159,6 +199,8 @@ def chart(v: str, m: str) -> dict:
     if cand:
         info.update({k: cand.get(k) for k in ("crit", "why", "desc", "sym", "first", "model", "improves", "nkeys")})
     info["checks"] = [{k: c[k] for k in c if k not in ("stage", "m")} for c in checks[-3:]]
+    if trade.get("t_exit") and "ret" in trade:
+        info["outcome"] = reason(v, trade)
     return {"info": info, "marks": marks, "candles": data["candles"], "trades": data["trades"], "sol_usd": sol}
 
 
@@ -169,7 +211,11 @@ TRADES_HTML = (r"""<!doctype html>
 :root{--panel:var(--card);--text:var(--ink);--up:var(--good);--down:var(--bad)}
 body{font-size:13px}
 .filters{padding:8px 14px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:var(--card)}
-main{display:grid;grid-template-columns:minmax(330px,400px) 1fr;height:calc(100vh - 100px)}
+main{display:grid;grid-template-columns:minmax(420px,480px) 1fr;height:calc(100vh - 146px)}
+.reasons{display:flex;gap:6px;flex-wrap:wrap;padding:8px 14px;border-bottom:1px solid var(--line);background:var(--bg)}
+.rc{border:1px solid var(--line);background:var(--card2);border-radius:999px;padding:4px 11px;font-size:12px;cursor:pointer;font-weight:600;color:var(--mute)}
+.rc b{color:var(--ink);margin:0 3px}.rc.on{border-color:var(--acc);background:#1c2440;color:var(--ink)}
+.rtag{display:inline-block;font-size:10.5px;padding:0 6px;border-radius:4px;margin-left:4px;font-weight:650}
 #list{overflow:auto;border-right:1px solid var(--line)}
 table{width:100%;border-collapse:collapse}td,th{padding:5px 6px;border-bottom:1px solid var(--line);white-space:nowrap;text-align:left}
 th{position:sticky;top:0;background:var(--panel);color:var(--mute);font-weight:500}
@@ -197,6 +243,7 @@ tr.row{cursor:pointer}tr.row:hover{background:#1d212b}tr.sel{background:#22283a}
 <select id="bot"><option value="">all bots</option><option>m1</option><option>m2</option><option>m3</option><option>m4</option></select>
 <select id="res"><option value="">all results</option><option value="w">wins</option><option value="l">losses</option><option value="o">open</option></select>
 <input id="q" placeholder="search name" size="14"><span id="sum" class="mute"></span></header>
+<div class="reasons" id="reasons"></div>
 <main><div id="list"><table><thead><tr><th>time</th><th>bot</th><th>coin</th><th>sc</th><th>exit</th><th>ret</th></tr></thead><tbody id="rows"></tbody></table></div>
 <div id="right">
 <div id="bar"><button id="play" title="space">&#9654; Play</button>
@@ -216,12 +263,22 @@ const pct=x=>x==null||isNaN(x)?'-':(x>=0?'+':'')+(100*x).toFixed(1)+'%';
 const usd=x=>x>=1e6?'$'+(x/1e6).toFixed(2)+'M':x>=1e3?'$'+(x/1e3).toFixed(1)+'k':'$'+x.toFixed(0);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const FEE=0.0175;
+const WHY={instant_dump:['Instant dump','never above 1.05x after we bought','#ef4444'],rug_gap:['Rug gap','stop filled 10+ pts below its level','#dc2626'],
+ slow_bleed:['Slow bleed','drifted down, no rug','#f97316'],gave_back:['Gave back a gain','was up 30%+, sold at a loss','#eab308'],
+ shaken_out:['Shaken out','stopped out, then the coin did 2x','#a855f7'],cut_winner:['Cut a winner','sold early, then the coin did 2x','#8b5cf6'],win:['Win','closed in profit','#22c55e']};
+let WHYSEL='';
 async function load(){ALL=await (await fetch('/api/trades')).json();list()}
+function chips(base){const c={};base.filter(x=>!x.open&&x.why).forEach(x=>{(c[x.why]=c[x.why]||{n:0,s:0}).n++;c[x.why].s+=x.ret});
+ $('reasons').innerHTML='<span class="mute small" style="align-self:center;margin-right:4px">Why:</span>'+Object.keys(WHY).filter(k=>c[k]).sort((a,b)=>c[a].s-c[b].s).map(k=>
+  `<span class="rc${WHYSEL==k?' on':''}" data-w="${k}" title="${WHY[k][1]}"><i class="dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${WHY[k][2]}"></i> ${WHY[k][0]}<b>${c[k].n}</b><span class="${c[k].s>0?'pos':'neg'}">${(c[k].s*0.1>=0?'+':'')+(c[k].s*0.1).toFixed(2)} SOL</span></span>`).join('')+
+  (WHYSEL?'<span class="rc" data-w="">show all</span>':'')}
+$('reasons').onclick=e=>{const c=e.target.closest('.rc');if(!c)return;WHYSEL=WHYSEL==c.dataset.w?'':c.dataset.w;list()};
 function list(){const b=$('bot').value,r=$('res').value,q=$('q').value.toLowerCase();
- const rows=ALL.filter(x=>(!b||x.v==b)&&(!q||(x.name||'').toLowerCase().includes(q))&&(!r||(r=='o'?x.open:r=='w'?(!x.open&&x.ret>0):(!x.open&&x.ret<=0))));
+ const base=ALL.filter(x=>(!b||x.v==b)&&(!q||(x.name||'').toLowerCase().includes(q))&&(!r||(r=='o'?x.open:r=='w'?(!x.open&&x.ret>0):(!x.open&&x.ret<=0))));
+ chips(base);const rows=base.filter(x=>!WHYSEL||x.why==WHYSEL);
  const c=rows.filter(x=>!x.open),s=c.reduce((a,x)=>a+x.ret,0);
  $('sum').textContent=c.length+' closed, mean '+pct(c.length?s/c.length:0)+', '+c.filter(x=>x.ret>0).length+' wins';
- $('rows').innerHTML=rows.slice(0,1500).map(x=>`<tr class="row${SEL==x.v+x.m?' sel':''}" data-k="${x.v}|${x.m}"><td class="mute" title="${fmtD(x.t)}">${fmtD(x.t).split(' ')[1]}</td><td>${x.v}</td><td>${esc((x.name||'').slice(0,20))}</td><td>${x.score??''}</td><td>${x.open?'<i>open</i>':esc(x.exit)}</td><td class="${x.ret>0?'pos':'neg'}">${pct(x.ret)}</td></tr>`).join('')}
+ $('rows').innerHTML=rows.slice(0,1500).map(x=>`<tr class="row${SEL==x.v+x.m?' sel':''}" data-k="${x.v}|${x.m}"><td class="mute" title="${fmtD(x.t)}">${fmtD(x.t).split(' ')[1]}</td><td>${x.v}</td><td>${esc((x.name||'').slice(0,18))}${x.why&&x.why!='win'?`<span class="rtag" style="background:${WHY[x.why][2]}33;color:${WHY[x.why][2]}">${WHY[x.why][0]}</span>`:''}</td><td>${x.score??''}</td><td>${x.open?'<i>open</i>':esc(x.exit)}</td><td class="${x.ret>0?'pos':'neg'}">${pct(x.ret)}</td></tr>`).join('')}
 ['bot','res'].forEach(i=>$(i).onchange=list);$('q').oninput=list;
 $('rows').onclick=e=>{const tr=e.target.closest('tr');if(!tr)return;document.querySelectorAll('tr.sel').forEach(x=>x.classList.remove('sel'));tr.classList.add('sel');
  const [v,m]=tr.dataset.k.split('|');history.replaceState(null,'','#'+v+'|'+m);openTrade(v,m)};
@@ -305,7 +362,7 @@ function live(n){const I=D.info,tr=D.trades,k=S.k;const p=n?tr[n-1][1]:I.p0,s=n?
   rows.push(`<div><span class="mute">${fmtT(q[0])}</span><span class="${q[2]?'pos':'neg'}">${q[2]?'BUY':'SELL'}</span><span>${q[3].toFixed(3)}</span><span>${esc(q[4].slice(0,5))}${tg.map(t=>`<span class="tag t-${t}">${t}</span>`).join('')}</span></div>`)}
  $('tape').innerHTML=rows.join('')}
 function info(){const I=D.info,ck=(I.checks||[]).map(c=>`<div class="card"><h3>check ${fmtT(c.t)} &middot; ${c.ok?'<span class=pos>passed</span>':'<span class=neg>blocked</span>'}</h3>${kv(Object.fromEntries(Object.entries(c).filter(([a])=>a!='t'&&a!='ok')))}</div>`).join('');
- $('info').innerHTML=`<div class="card"><h3>${esc(I.v)} &middot; ${esc(I.name)}</h3>${kv({result:I.exit?I.exit+' '+pct(I.ret):'open '+pct(I.ret),'entry mc':I.mc?usd(I.mc):null,bought:fmtD(I.t)+' ('+Math.round(I.t-I.created)+' s after create)',held:(I.held/60).toFixed(1)+' min',peak:I.peak_x.toFixed(2)+'x',rules:I.rules})}
+ $('info').innerHTML=`<div class="card"><h3>${esc(I.v)} &middot; ${esc(I.name)}</h3>${kv({'why':I.outcome&&WHY[I.outcome]?WHY[I.outcome][0]+' — '+WHY[I.outcome][1]:null,result:I.exit?I.exit+' '+pct(I.ret):'open '+pct(I.ret),'entry mc':I.mc?usd(I.mc):null,bought:fmtD(I.t)+' ('+Math.round(I.t-I.created)+' s after create)',held:(I.held/60).toFixed(1)+' min',peak:I.peak_x.toFixed(2)+'x',rules:I.rules})}
  <a href="https://pump.fun/coin/${esc(I.m)}" target="_blank" rel="noopener">pump.fun</a>${I.link?' &middot; <a href="'+esc(I.link)+'" target="_blank" rel="noopener">X post</a>':''}</div>
  <div class="card"><h3>narrative score ${I.score??''} &middot; criterion ${I.crit??'-'}</h3>${kv({why:I.why,improves:I.improves,'first coin':I.first,copy:I.copy,model:I.model,desc:(I.desc||'').slice(0,300)})}</div>
  <div class="card"><h3>exit data</h3>${kv({stop:I.stop,'conviction high':I.high,activity:I.act!=null?I.act+' / max '+I.act_max:null,traction:I.traction,'buyers/min at 2x':I.tp_buyers,'buy/sell flow':I.tp_flow,'half at':I.half_at})}</div>${ck}
