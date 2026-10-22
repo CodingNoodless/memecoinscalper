@@ -36,8 +36,8 @@ def connect_db(path: Path = DB) -> sqlite3.Connection:
     db = sqlite3.connect(path, timeout=10, check_same_thread=False)
     db.execute("PRAGMA journal_mode=WAL")
     db.execute("CREATE TABLE IF NOT EXISTS tr (m TEXT, sig TEXT, i INTEGER, slot INTEGER, t REAL, w TEXT, b INTEGER, "
-               "sol REAL, tok REAL, vs REAL, vt REAL, PRIMARY KEY (sig, i))")
-    db.execute("CREATE INDEX IF NOT EXISTS tr_m ON tr (m, slot)")
+               "sol REAL, tok REAL, vs REAL, vt REAL, seq INTEGER, PRIMARY KEY (sig, i))")
+    db.execute("CREATE INDEX IF NOT EXISTS tr_m ON tr (m, slot, seq)")
     db.execute("CREATE TABLE IF NOT EXISTS coin (m TEXT PRIMARY KEY, created REAL, complete INTEGER)")
     db.execute("CREATE TABLE IF NOT EXISTS beat (k TEXT PRIMARY KEY, t REAL, up_since REAL)")
     return db
@@ -55,7 +55,7 @@ def feed_trades(m: str, db: sqlite3.Connection | None = None, max_age: float = 5
         c = db.execute("SELECT complete FROM coin WHERE m=?", (m,)).fetchone()
         if not c:
             return None, False
-        rows = db.execute("SELECT slot, t, w, b, sol, tok FROM tr WHERE m=? ORDER BY slot, sig, i", (m,)).fetchall()
+        rows = db.execute("SELECT slot, t, w, b, sol, tok FROM tr WHERE m=? ORDER BY slot, seq", (m,)).fetchall()
         return [(s, t, w, bool(b), sol, tok) for s, t, w, b, sol, tok in rows], bool(c[0])
     except sqlite3.Error:
         return None, False
@@ -105,7 +105,7 @@ def run() -> None:
     last: dict[str, float] = {}
     written: set[str] = set()
     wanted = Wanted()
-    state = {"up_since": 0.0, "n": 0}
+    state = {"up_since": 0.0, "n": 0, "seq": int(time.time() * 1e6)}   # seq keeps rising across restarts
 
     def beat():
         while True:
@@ -115,7 +115,7 @@ def run() -> None:
                 for m in want - written:
                     if m in hist or m in created:
                         rows = list(hist.get(m, ()))
-                        db.executemany("INSERT OR IGNORE INTO tr VALUES (?,?,?,?,?,?,?,?,?,?,?)", [(m, *r) for r in rows])
+                        db.executemany("INSERT OR IGNORE INTO tr VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", [(m, *r) for r in rows])
                         full = m in created and created[m] >= state["up_since"] > 0
                         db.execute("INSERT OR REPLACE INTO coin VALUES (?,?,?)", (m, created.get(m), int(full)))
                         written.add(m)
@@ -161,12 +161,13 @@ def run() -> None:
                             m = e["mint"]
                             if is_create and m not in created:
                                 created[m] = now
+                            state["seq"] += 1                             # arrival order = execution order in a slot
                             row = (sig, i, slot, float(e["ts"] or now), e["user"], int(e["buy"]), e["sol"] / 1e9,
-                                   e["tok"] / 1e6, e["vs"] / 1e9, e["vt"] / 1e6)
+                                   e["tok"] / 1e6, e["vs"] / 1e9, e["vt"] / 1e6, state["seq"])
                             hist[m].append(row)
                             last[m] = now
                             if m in written:
-                                db.execute("INSERT OR IGNORE INTO tr VALUES (?,?,?,?,?,?,?,?,?,?,?)", (m, *row))
+                                db.execute("INSERT OR IGNORE INTO tr VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (m, *row))
                     if now - last_note > 600:
                         last_note = now
                         log.info("%d trades decoded, %d coins in memory, %d written", state["n"], len(hist), len(written))
