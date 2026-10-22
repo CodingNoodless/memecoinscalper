@@ -4,7 +4,7 @@
 
 Why: the swap-api trade list the bots used for holders, volume and bundle checks runs 20 s to several minutes
 behind the chain (measured 2026-10-22 15:15: 22 s, 97 s, 156 s on three coins), so M4 bought "Aura Final Boss" on
-a holder count from the past. This listens to every pump.fun transaction on one Helius websocket (logsSubscribe on
+a holder count from the past. This listens to every pump.fun transaction on one public-RPC websocket (never Helius: see run()) (logsSubscribe on
 the program, `processed`), decodes each TradeEvent (scalper.trade_events, verified 400/400 against curve deltas),
 keeps the last 30 min of trades per coin in memory, and writes every trade of the coins the bots are watching
 (any mint in data/m*/cands.jsonl from the last 30 min) to data/feed/trades.sqlite, including their history from
@@ -23,7 +23,6 @@ from pathlib import Path
 
 from ..paths import DATA_DIR, PROJECT_ROOT
 from ..scalper.trade_events import parse_trade_events
-from .chain import env_rpc
 
 PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
 DB = DATA_DIR / "feed" / "trades.sqlite"
@@ -95,8 +94,12 @@ class Wanted:
 
 def run() -> None:
     from websockets.sync.client import connect
-    url = env_rpc()
-    ws_url = url.replace("https://", "wss://", 1)
+    from .history_miner import endpoints
+    # infra v5 (15:58): never Helius. Its websocket firehose used up the plan ("max usage reached") within 35 min and
+    # blinded every bot. The free public RPC websocket first, then RPCFast; switch on each reconnect.
+    wss = [u.replace("https://", "wss://", 1) for u, _ in endpoints(3.0) if "helius" not in u and "quiknode" not in u
+           and "alchemy" not in u and "shyft" not in u]
+    k = 0
     db = connect_db()
     lock = threading.Lock()
     hist: dict[str, deque] = defaultdict(lambda: deque(maxlen=20000))
@@ -133,6 +136,8 @@ def run() -> None:
     last_note = time.time()
     while True:
         try:
+            ws_url = wss[k % len(wss)]
+            k += 1
             with connect(ws_url, open_timeout=20, max_size=2 ** 24, ping_interval=20) as ws:
                 ws.send(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "logsSubscribe",
                                     "params": [{"mentions": [PUMP]}, {"commitment": "processed"}]}))
@@ -140,7 +145,7 @@ def run() -> None:
                     state["up_since"] = time.time()
                     db.execute("UPDATE coin SET complete=0")     # anything seen before this connection has a gap
                     db.commit()
-                log.info("live feed up (logsSubscribe on the pump.fun program)")
+                log.info("live feed up on %s (logsSubscribe on the pump.fun program)", ws_url.split("//")[1].split("/")[0])
                 while True:
                     msg = json.loads(ws.recv(timeout=30))
                     p = msg.get("params")

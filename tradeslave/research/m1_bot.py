@@ -334,20 +334,32 @@ def traction(o):
 
 
 class Rpc:
+    """Round-robin over every working RPC endpoint (RESEARCH_RPC_URL + HISTORY_RPC_URLS + public). infra v5
+    (2026-10-22 15:55): Helius hit "max usage reached" and every bot went blind; an endpoint that fails or rate-limits
+    now rests 10 min while the others carry on, and no single free plan takes all the load."""
+
     def __init__(self):
-        self.url, self.s = env_rpc(), requests.Session()
-        self.fcache = {}
+        from .history_miner import endpoints
+        urls = [env_rpc()] + [u for u, _ in endpoints(3.0)]
+        self.urls = list(dict.fromkeys(u for u in urls if u))
+        self.url, self.s = self.urls[0], requests.Session()
+        self.rest, self.i, self.fcache = {}, 0, {}
 
     def call(self, method, params):
-        for k in range(3):
+        for k in range(2 * len(self.urls)):
+            now = time.time()
+            live = [u for u in self.urls if self.rest.get(u, 0) <= now] or self.urls
+            self.i += 1
+            u = live[self.i % len(live)]
             try:
-                r = self.s.post(self.url, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
-                                timeout=20).json()
-                if "result" in r:
-                    return r["result"]
+                r = self.s.post(u, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params}, timeout=15)
+                j = r.json() if r.status_code != 429 else {}
+                if "result" in j:
+                    return j["result"]
             except (requests.RequestException, ValueError):
                 pass
-            time.sleep(1 + k)
+            self.rest[u] = now + 600
+            time.sleep(0.2 if k < len(self.urls) else 1.0)
         return None
 
     def curves(self, keys):
