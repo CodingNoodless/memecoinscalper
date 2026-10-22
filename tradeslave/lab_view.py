@@ -215,7 +215,7 @@ a{color:var(--acc)}.bar{display:flex;gap:4px;align-items:flex-end;height:60px}.b
 .bar div span{position:absolute;bottom:-17px;left:0;right:0;text-align:center;font-size:11px;color:var(--mute)}
 @media (max-width:600px){main,header{padding:12px 16px}}
 </style></head><body>
-<header><h1>Tradeslave Lab</h1><span class="mute">Paper only. Refreshes every 15 s.</span><span id="upd" class="mute small"></span><a href="/scalper" class="small">old scalper view</a></header>
+<header><h1>Tradeslave Lab</h1><span class="mute">Paper only. Refreshes every 15 s.</span><span id="upd" class="mute small"></span><a href="/trades" class="small"><b>trade charts</b></a> <a href="/scalper" class="small">old scalper view</a></header>
 <main>
 <section class="card"><h2>M1: automated manual process (paper)</h2><div class="kpis" id="m1k"></div>
 <div class="grid" style="margin-top:12px"><div><div class="mute small">Equity (SOL, 0.1 SOL per trade)</div><svg id="eq" viewBox="0 0 300 90" preserveAspectRatio="none"></svg></div>

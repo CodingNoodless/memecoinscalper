@@ -10,11 +10,12 @@ import math
 from pathlib import Path
 import time
 from collections import deque
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from .config import PAPER_NETWORK_FEE_USD, PAPER_STARTING_BALANCE
 from .state import STATE_DIR, STATE_LOCK, load_json
 from .lab_view import LAB_HTML, build_lab_snapshot
+from .trade_view import TRADES_HTML, chart, trade_list
 from .scalper.dashboard_view import build_scalper_snapshot, scalper_html
 
 
@@ -310,6 +311,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
             except (OSError, ValueError, TypeError, KeyError) as exc:
                 logger.exception("Lab snapshot failed")
                 body = json.dumps({"error": f"Could not read lab state: {exc}"}).encode("utf-8")
+            content_type = "application/json; charset=utf-8"
+        elif path == "/trades":
+            body = TRADES_HTML.encode("utf-8")
+            content_type = "text/html; charset=utf-8"
+        elif path in ("/api/trades", "/api/chart"):
+            try:
+                if path == "/api/trades":
+                    data = trade_list()
+                else:
+                    q = parse_qs(urlsplit(self.path).query)
+                    data = chart(q.get("v", [""])[0], q.get("m", [""])[0])
+                body = json.dumps(data, allow_nan=False, default=str).encode("utf-8")
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                logger.exception("Trade view failed")
+                body = json.dumps({"error": f"Could not build the trade view: {exc}"}).encode("utf-8")
             content_type = "application/json; charset=utf-8"
         elif path == "/scalper":
             body = SCALPER_PAGE.encode("utf-8")
