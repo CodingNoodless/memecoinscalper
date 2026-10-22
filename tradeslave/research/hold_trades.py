@@ -1,4 +1,4 @@
-"""Exact curve trades from create to entry + 10 min for every NC coin (for the fade-exit test, FX).
+"""Exact curve trades from entry - 30 s to entry + 10 min for every NC coin (for the fade-exit test, FX).
 
     uv run python -m tradeslave.research.hold_trades
 
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import random
 import time
 
 import requests
@@ -23,7 +24,8 @@ OUT = DATA_DIR / "m1" / "hold_trades"
 
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
-    rows = sorted(json.loads(NC.read_text()), key=lambda r: r["t0"])
+    rows = json.loads(NC.read_text())
+    random.Random(22).shuffle(rows)                 # random order: any stopping point is an unbiased sample
     todo = [r for r in rows if not (OUT / f"{r['m']}.json.gz").exists()]
     print(len(rows), "coins;", len(todo), "to fetch", flush=True)
     s = requests.Session()
@@ -32,8 +34,8 @@ def main() -> None:
     pace.good = lambda: None
     for i, r in enumerate(todo, 1):
         pace.rate = 0.12 if time.localtime().tm_hour >= 17 else 0.25
-        full_trades.WINDOW_S = r["te"] - r["t0"] + 600
-        tr = full_trades.fetch(s, pace, r["m"], r["t0"])
+        full_trades.WINDOW_S = 630                  # page back from entry + 10 min to entry - 30 s
+        tr = full_trades.fetch(s, pace, r["m"], r["te"] - 30)
         if tr is None:
             continue
         with gzip.open(OUT / f"{r['m']}.json.gz", "wt", encoding="utf-8") as fh:

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import random
 import statistics
 
 from ..paths import DATA_DIR
@@ -61,9 +62,16 @@ def run(tr, te, e, rule, stop):
 
 
 def main() -> None:
-    nc = {r["m"]: r for r in json.loads(NC.read_text())}
+    rows = json.loads(NC.read_text())
+    nc = {r["m"]: r for r in rows}
+    random.Random(22).shuffle(rows)                 # the fetch order; judged on its first 300 coins (amendment 14:25)
+    paths = [HOLD / f"{r['m']}.json.gz" for r in rows]
+    k = next((i for i, x in enumerate(paths) if not x.exists()), len(paths))
+    if k < min(300, len(paths)):
+        print(f"only {k} coins in fetch order so far; the test waits for 300")
+        return
     cells, n = {}, 0
-    for p in HOLD.glob("*.json.gz"):
+    for p in paths[:300]:
         d = json.load(gzip.open(p, "rt", encoding="utf-8"))
         r = nc.get(d["m"])
         if r is None:
