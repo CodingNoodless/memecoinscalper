@@ -133,7 +133,8 @@ def m1(variant: str = "m1") -> dict:
                   for k in dict.fromkeys(r.get("rules", "exits-v1") for r in trades)}, narratives=stats([statistics.mean(v) for v in groups.values()]), sol=round(sum(r["ret"] for r in trades) * 0.1, 4), curve=curve,
         exits=Counter(r["exit"] for r in trades), open=status.get("open", []),
         status={k: status.get(k) for k in ("t", "llm", "calls", "fails", "watching", "sol_usd")},
-        recent=[dict(t=r["t"], name=r.get("name"), score=r.get("score"), exit=r["exit"], ret=r["ret"],
+        rides=sum(1 for r in trades if r.get("half_at")),
+        recent=[dict(t=r["t"], m=r["m"], name=r.get("name"), score=r.get("score"), exit=r["exit"], ret=r["ret"],
                      narr=(r.get("nkey") or key.get(r["m"], ""))[-6:],
                      mc=r.get("mc"), held=round((r["t_exit"] - r["t"]) / 60, 1)) for r in trades[-25:]][::-1],
         funnel=dict(scored=len(scored), passed=sum((c["score"] or 0) >= 7 for c in scored),
@@ -198,83 +199,3 @@ def build_lab_snapshot() -> dict:
     return dict(t=time.time(), jobs=jobs(), m1=m1(), m2=m1("m2"), m3=m1("m3"), c1=c1(), kalshi=kalshi(), experiments=experiments())
 
 
-LAB_HTML = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Tradeslave Lab</title><style>
-:root{--bg:#f6f7f9;--card:#fff;--ink:#1b1f24;--mute:#66707c;--line:#e3e6ea;--good:#13804b;--bad:#c23b32;--warn:#a86a00;--acc:#3456d1}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1216;--card:#171b21;--ink:#e6e9ee;--mute:#8d97a3;--line:#262c34;--good:#3fbf7f;--bad:#ef6b62;--warn:#e0a63a;--acc:#7c95ff}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
-header{padding:18px 24px;border-bottom:1px solid var(--line);display:flex;gap:16px;align-items:baseline;flex-wrap:wrap}
-h1{font-size:20px;margin:0}h2{font-size:15px;margin:0 0 10px}.mute{color:var(--mute)}main{padding:18px 24px;display:grid;gap:16px;max-width:1400px}
-.grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;min-width:0}
-.kpis{display:flex;gap:18px;flex-wrap:wrap}.kpi b{display:block;font-size:20px}.kpi span{color:var(--mute);font-size:12px}
-table{width:100%;border-collapse:collapse;font-size:13px}td,th{text-align:left;padding:5px 6px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--mute);font-weight:600}
-.scroll{overflow:auto;max-height:420px}.pill{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;font-weight:600;border:1px solid}
-.running,.pass{color:var(--good);border-color:var(--good)}.quiet,.missing{color:var(--warn);border-color:var(--warn)}.fail{color:var(--bad);border-color:var(--bad)}.done{color:var(--acc);border-color:var(--acc)}
-.pos{color:var(--good)}.neg{color:var(--bad)}.small{font-size:12px}code{font-size:12px;word-break:break-all}svg{width:100%;height:90px}
-a{color:var(--acc)}.bar{display:flex;gap:4px;align-items:flex-end;height:60px}.bar div{background:var(--acc);flex:1;min-height:1px;border-radius:2px 2px 0 0;position:relative}
-.bar div span{position:absolute;bottom:-17px;left:0;right:0;text-align:center;font-size:11px;color:var(--mute)}
-@media (max-width:600px){main,header{padding:12px 16px}}
-</style></head><body>
-<header><h1>Tradeslave Lab</h1><span class="mute">Paper only. Refreshes every 15 s.</span><span id="upd" class="mute small"></span><a href="/trades" class="small"><b>trade charts</b></a> <a href="/label" class="small"><b>blind labels</b></a> <a href="/scalper" class="small">old scalper view</a></header>
-<main>
-<section class="card"><h2>M1: automated manual process (paper)</h2><div class="kpis" id="m1k"></div>
-<div class="grid" style="margin-top:12px"><div><div class="mute small">Equity (SOL, 0.1 SOL per trade)</div><svg id="eq" viewBox="0 0 300 90" preserveAspectRatio="none"></svg></div>
-<div><div class="mute small">Narrative scores, last 24 h</div><div class="bar" id="sc"></div></div></div>
-<div class="grid" style="margin-top:22px"><div><h2>Open positions</h2><div id="open" class="scroll"></div></div>
-<div><h2>Funnel, last 24 h</h2><div id="fun"></div></div></div>
-<div class="grid" style="margin-top:8px"><div><h2>Recent paper trades</h2><div id="rules" style="margin-bottom:10px"></div><div id="trades" class="scroll"></div></div>
-<div><h2>Every scored token <select id="minsc" class="small"><option value="0">all scores</option><option value="5">5+</option><option value="7">7+ (buy zone)</option></select></h2><div id="top" class="scroll" style="max-height:520px"></div></div></div></section>
-<section class="card"><h2>M2: M1 + sniper-bag rug filter, −10% stop, 1 s price checks (paper, started 09:20)</h2><div class="kpis" id="m2k"></div>
-<div class="grid" style="margin-top:12px"><div><h2>Recent M2 trades</h2><div id="m2t" class="scroll"></div></div><div><h2>M2 funnel, last 24 h</h2><div id="m2f"></div></div></div></section>
-<section class="card"><h2>M3: M2 + dead-coin, dev / fresh-wallet rug, copy-volume filters, real-cause scoring, ride runners with traction (paper, started 15:27, final test tonight)</h2><div class="kpis" id="m3k"></div>
-<div class="grid" style="margin-top:12px"><div><h2>Recent M3 trades</h2><div id="m3t" class="scroll"></div></div><div><h2>M3 funnel, last 24 h</h2><div id="m3f"></div></div></div></section>
-<section class="grid"><div class="card"><h2>Running jobs</h2><div id="jobs" class="scroll"></div></div>
-<div class="card"><h2>Kalshi paper bots</h2><div id="kal"></div><h2 style="margin-top:16px">C1 recorder</h2><div id="c1"></div></div></section>
-<section class="card"><h2>Experiments <span class="mute small" id="exn"></span></h2><div id="exp" class="scroll" style="max-height:520px"></div></section>
-</main><script>
-const $=id=>document.getElementById(id),esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const pct=(x,d=1)=>x==null?"–":`<span class="${x>0?"pos":x<0?"neg":""}">${(x>0?"+":"")+(100*x).toFixed(d)}%</span>`;
-const ago=t=>{const s=Date.now()/1e3-t;return s<90?`${s|0}s ago`:s<5400?`${(s/60)|0}m ago`:`${(s/3600).toFixed(1)}h ago`};
-const tm=t=>new Date(t*1e3).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
-function table(h,rows){return rows.length?`<table><tr>${h.map(x=>`<th>${x}</th>`).join("")}</tr>${rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join("")}</tr>`).join("")}</table>`:'<span class="mute">none yet</span>'}
-async function tick(){let d;try{d=await (await fetch("/api/lab",{cache:"no-store"})).json()}catch(e){$("upd").textContent="dashboard server unreachable";return}
-$("upd").textContent="updated "+new Date().toLocaleTimeString();const m=d.m1,s=m.stats;
-$("m1k").innerHTML=[["Trades",s.n],["Mean / trade",s.n?pct(s.mean):"–"],["Win rate",s.n?(100*s.win).toFixed(0)+"%":"–"],["t-stat",s.n>1?s.t.toFixed(2):"–"],
-["Narratives",m.narratives.n],["Mean / narrative",m.narratives.n?pct(m.narratives.mean):"–"],["P&L",`${m.sol>=0?"+":""}${m.sol} SOL`],["2x hits",m.exits.TP||0],["Open",m.open.length],["Watching",m.status.watching??"–"],
-["Model",esc(m.status.llm||"–")]].map(([a,b])=>`<div class="kpi"><b>${b}</b><span>${a}</span></div>`).join("")+
-`<div class="kpi"><b class="small">${s.n>=100?"verdict due":"verdict at 100 trades or Nov 1"}</b><span>bar: mean ≥ +3%, t ≥ 3</span></div>`;
-const c=m.curve;if(c.length>1){const ys=c.map(p=>p[1]),lo=Math.min(0,...ys),hi=Math.max(0,...ys),r=hi-lo||1;
-$("eq").innerHTML=`<line x1="0" x2="300" y1="${90-(0-lo)/r*85}" y2="${90-(0-lo)/r*85}" stroke="var(--line)"/><polyline fill="none" stroke="var(--acc)" stroke-width="2" points="${c.map((p,i)=>`${i/(c.length-1)*300},${90-(p[1]-lo)/r*85}`).join(" ")}"/>`}
-else $("eq").innerHTML='<text x="4" y="40" fill="var(--mute)" font-size="11">no closed trades yet</text>';
-const sc=m.funnel.scores,mx=Math.max(1,...Object.values(sc));$("sc").innerHTML=[...Array(11).keys()].map(k=>`<div style="height:${(sc[k]||0)/mx*100}%;${k>=7?"background:var(--good)":""}" title="score ${k}: ${sc[k]||0}"><span>${k}</span></div>`).join("");
-$("open").innerHTML=table(["Coin","Score","Entry","Now","Since"],m.open.map(o=>[esc(o.name),o.score,"$"+(o.mc||0).toLocaleString(),pct(o.ret_now),ago(o.t)]));
-const f=m.funnel;$("fun").innerHTML=table(["Stage","Count"],[["X-linked launches scored",f.scored],["Narrative ≥ 7",f.passed],["Reached $5–7k + checks",f.checked],["Passed checks (bought)",f.checks_ok],
-...Object.entries(f.blocked).map(([k,v])=>[`<span class="mute">blocked: ${esc(k)}</span>`,v]),[`<span class="mute">models</span>`,esc(Object.entries(f.models).map(([k,v])=>k+" "+v).join(", "))],
-[`<span class="mute">LLM calls today</span>`,esc(Object.entries(m.status.calls||{}).map(([k,v])=>k.split(" ")[1]+" "+v).join(", ")||"–")]]);
-const srow=(k,v)=>[esc(k),v.n,v.n?pct(v.mean):"–",v.n?(100*v.win).toFixed(0)+"%":"–",v.n>1?v.t.toFixed(2):"–"];
-$("rules").innerHTML=table(["Slice","Trades","Mean","Win","t"],[srow("<b>fresh: since 08:45</b>",m.fresh),...Object.entries(m.by_window).map(([k,v])=>srow(k,v)),...Object.entries(m.by_rules).map(([k,v])=>srow("rules "+k,v))]);
-$("trades").innerHTML=table(["Time","Coin","Narrative","Score","Exit","Return","Held"],m.recent.map(r=>[tm(r.t),esc(r.name),`<span class="mute small">…${esc(r.narr)}</span>`,r.score,esc(r.exit),pct(r.ret),r.held+"m"]));
-const ms=+$("minsc").value,crit={1:"influential",2:"potential",3:"cause",4:"correction"};
-$("top").innerHTML=table(["Time","Coin","Score","Why","Outcome"],m.top.filter(r=>(r.score??-1)>=ms).map(r=>[tm(r.t),
-(r.link?`<a href="${esc(r.link)}" target="_blank" rel="noopener">${esc(r.name)}</a>`:esc(r.name))+(r.after?`<div class="mute small">copy of ${esc(r.after)}${r.improves?" · improves":""}</div>`:""),
-`<b class="${r.score>=7?"pos":r.score==null?"neg":""}">${r.score??"err"}</b><div class="mute small">${esc(crit[r.crit]||"")}</div>`,
-`<span class="small">${esc(r.why)}</span>`,
-`<span class="small">${r.bought?'<b class="pos">bought</b>':r.check?esc(r.check):r.score>=7?(r.after&&!r.improves?"skipped: copy":"waiting for $4–7k"):"—"}</span>`]));
-$("jobs").innerHTML=table(["Job","Status","Last update"],d.jobs.map(j=>[`<b>${esc(j.name)}</b><div class="mute small">${esc(j.desc)}</div>`,`<span class="pill ${j.status}">${j.status}</span><div class="mute small">${j.age_min==null?"":j.age_min<90?j.age_min+" min":(j.age_min/60).toFixed(1)+" h"}</div>`,`<code>${esc(j.last)}</code>`]));
-$("kal").innerHTML=table(["Bot","Hours","Rewards","Settled P&L","Net","Open"],d.kalshi.map(k=>[k.name,k.hours,"$"+k.rewards.toFixed(2),`<span class="${k.settled>=0?"pos":"neg"}">$${k.settled.toFixed(2)}</span>`,`<span class="${k.rewards+k.settled>=0?"pos":"neg"}">$${(k.rewards+k.settled).toFixed(2)}</span>`,k.open]));
-$("c1").innerHTML=table(["Launches logged","Reached R 40","Trade files","Window"],[[d.c1.creates.toLocaleString(),d.c1.hot,d.c1.files,esc(d.c1.window)]]);
-const m2=d.m2,s2=m2.stats;
-$("m2k").innerHTML=[["Trades",s2.n],["Mean / trade",s2.n?pct(s2.mean):"–"],["Win rate",s2.n?(100*s2.win).toFixed(0)+"%":"–"],["t-stat",s2.n>1?s2.t.toFixed(2):"–"],
-["Narratives",m2.narratives.n],["Mean / narrative",m2.narratives.n?pct(m2.narratives.mean):"–"],["P&L",`${m2.sol>=0?"+":""}${m2.sol} SOL`],["2x hits",m2.exits.TP||0],["Open",m2.open.length],
-["vs M1 since 09:20",m.fresh.n?pct(m.fresh.mean)+` (${m.fresh.n})`:"–"]].map(([a,b])=>`<div class="kpi"><b>${b}</b><span>${a}</span></div>`).join("");
-$("m2t").innerHTML=table(["Time","Coin","Score","Exit","Return","Held"],m2.recent.map(r=>[tm(r.t),esc(r.name),r.score,esc(r.exit),pct(r.ret),r.held+"m"]));
-const f2=m2.funnel;$("m2f").innerHTML=table(["Stage","Count"],[["Narrative ≥ 7",f2.passed],["Reached $4–7k + checks",f2.checked],["Passed checks (bought)",f2.checks_ok],...Object.entries(f2.blocked).map(([k,v])=>[`<span class="mute">blocked: ${esc(k)}</span>`,v])]);
-const m3=d.m3,s3=m3.stats;
-$("m3k").innerHTML=[["Trades",s3.n],["Mean / trade",s3.n?pct(s3.mean):"–"],["Win rate",s3.n?(100*s3.win).toFixed(0)+"%":"–"],["t-stat",s3.n>1?s3.t.toFixed(2):"–"],
-["P&L",`${m3.sol>=0?"+":""}${m3.sol} SOL`],["2x hits",(m3.exits.TP||0)+(m3.exits.RUN||0)],["Rode past 2x",m3.exits.RUN||0],["Open",m3.open.length]].map(([a,b])=>`<div class="kpi"><b>${b}</b><span>${a}</span></div>`).join("");
-$("m3t").innerHTML=table(["Time","Coin","Score","Exit","Return","Held"],m3.recent.map(r=>[tm(r.t),esc(r.name),r.score,esc(r.exit),pct(r.ret),r.held+"m"]));
-const f3=m3.funnel;$("m3f").innerHTML=table(["Stage","Count"],[["Narrative ≥ 7",f3.passed],["Reached $4–7k + checks",f3.checked],["Passed checks (bought)",f3.checks_ok],...Object.entries(f3.blocked).map(([k,v])=>[`<span class="mute">blocked: ${esc(k)}</span>`,v])]);
-const e=d.experiments;$("exn").textContent=`${e.total} experiment rows · ${e.running} running`;
-$("exp").innerHTML=table(["Date","Experiment","What","Result","Verdict"],e.rows.map(r=>[r.date,`<b>${esc(r.note)}</b>`,`<span class="small">${esc(r.strategy)}</span>`,`<span class="small">${esc(r.result)}</span>`,`<span class="pill ${r.state}">${r.state}</span><div class="small mute">${esc(r.verdict)}</div>`]))}
-tick();setInterval(tick,15000);$("minsc").onchange=tick;
-</script></body></html>"""

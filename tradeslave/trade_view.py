@@ -13,6 +13,7 @@ from pathlib import Path
 import requests
 
 from .paths import DATA_DIR
+from .ui_theme import THEME, nav
 from .research.full_trades import ts as iso_ts
 
 BOTS = ("m1", "m2", "m3")
@@ -161,20 +162,16 @@ def chart(v: str, m: str) -> dict:
     return {"info": info, "marks": marks, "candles": data["candles"], "trades": data["trades"], "sol_usd": sol}
 
 
-TRADES_HTML = r"""<!doctype html>
+TRADES_HTML = (r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Trade Replay</title>
-<style>
-:root{--bg:#0f1115;--panel:#171a21;--line:#262b36;--text:#e6e8ee;--mute:#8b93a7;--up:#22c55e;--down:#ef4444;
---buy:#3b82f6;--sell:#f59e0b;--half:#a855f7}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:13px/1.4 system-ui,Segoe UI,sans-serif}
-header{padding:8px 14px;border-bottom:1px solid var(--line);display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-header h1{font-size:15px;margin:0}header a{color:var(--mute)}
-select,button,input{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:4px 8px;font:inherit}
-button{cursor:pointer}button.on{border-color:var(--buy);background:#1e2740}
-main{display:grid;grid-template-columns:minmax(260px,360px) 1fr;height:calc(100vh - 45px)}
+<style>""" + THEME + r"""
+:root{--panel:var(--card);--text:var(--ink);--up:var(--good);--down:var(--bad)}
+body{font-size:13px}
+.filters{padding:8px 14px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:var(--card)}
+main{display:grid;grid-template-columns:minmax(330px,400px) 1fr;height:calc(100vh - 100px)}
 #list{overflow:auto;border-right:1px solid var(--line)}
-table{width:100%;border-collapse:collapse}td,th{padding:5px 7px;border-bottom:1px solid var(--line);white-space:nowrap;text-align:left}
+table{width:100%;border-collapse:collapse}td,th{padding:5px 6px;border-bottom:1px solid var(--line);white-space:nowrap;text-align:left}
 th{position:sticky;top:0;background:var(--panel);color:var(--mute);font-weight:500}
 tr.row{cursor:pointer}tr.row:hover{background:#1d212b}tr.sel{background:#22283a}
 .pos{color:var(--up)}.neg{color:var(--down)}.mute{color:var(--mute)}
@@ -195,12 +192,11 @@ tr.row{cursor:pointer}tr.row:hover{background:#1d212b}tr.sel{background:#22283a}
 .card h3{margin:0 0 6px;font-size:12px;color:var(--mute);font-weight:500;text-transform:uppercase;letter-spacing:.04em}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:2px 10px}.kv div:nth-child(odd){color:var(--mute)}
 @media (max-width:900px){main{grid-template-columns:1fr;height:auto}#list{max-height:35vh}#stage{grid-template-columns:1fr;height:auto}#wrap{height:55vh}#side{max-height:40vh}}
-</style></head><body>
-<header><h1>Trade replay</h1>
+</style></head><body>""" + nav("trades", "Click a trade, then press Play (space)") + r"""
+<header class="filters">
 <select id="bot"><option value="">all bots</option><option>m1</option><option>m2</option><option>m3</option></select>
 <select id="res"><option value="">all results</option><option value="w">wins</option><option value="l">losses</option><option value="o">open</option></select>
-<input id="q" placeholder="search name" size="14"><span id="sum" class="mute"></span>
-<a href="/label">blind labels</a> <a href="/">lab</a></header>
+<input id="q" placeholder="search name" size="14"><span id="sum" class="mute"></span></header>
 <main><div id="list"><table><thead><tr><th>time</th><th>bot</th><th>coin</th><th>sc</th><th>exit</th><th>ret</th></tr></thead><tbody id="rows"></tbody></table></div>
 <div id="right">
 <div id="bar"><button id="play" title="space">&#9654; Play</button>
@@ -225,7 +221,7 @@ function list(){const b=$('bot').value,r=$('res').value,q=$('q').value.toLowerCa
  const rows=ALL.filter(x=>(!b||x.v==b)&&(!q||(x.name||'').toLowerCase().includes(q))&&(!r||(r=='o'?x.open:r=='w'?(!x.open&&x.ret>0):(!x.open&&x.ret<=0))));
  const c=rows.filter(x=>!x.open),s=c.reduce((a,x)=>a+x.ret,0);
  $('sum').textContent=c.length+' closed, mean '+pct(c.length?s/c.length:0)+', '+c.filter(x=>x.ret>0).length+' wins';
- $('rows').innerHTML=rows.slice(0,1500).map(x=>`<tr class="row${SEL==x.v+x.m?' sel':''}" data-k="${x.v}|${x.m}"><td class="mute">${fmtD(x.t)}</td><td>${x.v}</td><td>${esc((x.name||'').slice(0,20))}</td><td>${x.score??''}</td><td>${x.open?'<i>open</i>':esc(x.exit)}</td><td class="${x.ret>0?'pos':'neg'}">${pct(x.ret)}</td></tr>`).join('')}
+ $('rows').innerHTML=rows.slice(0,1500).map(x=>`<tr class="row${SEL==x.v+x.m?' sel':''}" data-k="${x.v}|${x.m}"><td class="mute" title="${fmtD(x.t)}">${fmtD(x.t).split(' ')[1]}</td><td>${x.v}</td><td>${esc((x.name||'').slice(0,20))}</td><td>${x.score??''}</td><td>${x.open?'<i>open</i>':esc(x.exit)}</td><td class="${x.ret>0?'pos':'neg'}">${pct(x.ret)}</td></tr>`).join('')}
 ['bot','res'].forEach(i=>$(i).onchange=list);$('q').oninput=list;
 $('rows').onclick=e=>{const tr=e.target.closest('tr');if(!tr)return;document.querySelectorAll('tr.sel').forEach(x=>x.classList.remove('sel'));tr.classList.add('sel');
  const [v,m]=tr.dataset.k.split('|');history.replaceState(null,'','#'+v+'|'+m);openTrade(v,m)};
@@ -257,28 +253,28 @@ function render(){if(!D)return;const I=D.info,cv=$('cv'),W=cv.clientWidth,H=cv.c
  x.font='11px system-ui';x.lineWidth=1;
  for(let i=0;i<=4;i++){const v=Math.exp(yl+(yh-yl)*i/4),y=Y(v);x.strokeStyle='#262b36';x.beginPath();x.moveTo(L,y);x.lineTo(W-R,y);x.stroke();x.fillStyle='#8b93a7';x.fillText(usd(v),4,y+4)}
  const pe=I.p0*k;x.setLineDash([5,4]);x.strokeStyle='#3b82f6aa';x.beginPath();x.moveTo(L,Y(pe));x.lineTo(W-R,Y(pe));x.stroke();
- x.fillStyle='#3b82f6';x.fillText('our entry',W-R-58,Y(pe)-4);
+ x.fillStyle='#60a5fa';x.fillText('our entry',W-R-58,Y(pe)-4);
  [[2,'2x'],[1.5,'1.5x']].forEach(([m,l])=>{if(pe*m<hi*1.07){x.strokeStyle='#22c55e55';x.beginPath();x.moveTo(L,Y(pe*m));x.lineTo(W-R,Y(pe*m));x.stroke();x.fillStyle='#22c55e99';x.fillText(l,W-R-22,Y(pe*m)-3)}});
  if(I.stop&&I.stop<1){x.strokeStyle='#ef444477';x.beginPath();x.moveTo(L,Y(pe*I.stop));x.lineTo(W-R,Y(pe*I.stop));x.stroke();x.fillStyle='#ef4444aa';x.fillText('stop',W-R-26,Y(pe*I.stop)+12)}
  x.setLineDash([]);
  if(CUR>=I.t){x.fillStyle='#3b82f614';x.fillRect(X(I.t),T,Math.max(1,X(Math.min(CUR,I.t_exit||CUR))-X(I.t)),P1-T)}
  // price line + trade dots up to the cursor
  x.strokeStyle='#cbd5e1';x.beginPath();for(let i=0;i<n;i++){const px=X(tr[i][0]),py=Y(tr[i][1]*k);i?x.lineTo(px,py):x.moveTo(px,py)}x.stroke();
- for(let i=Math.max(0,n-400);i<n;i++){const p=tr[i];x.fillStyle=p[2]?'#22c55e':'#ef4444';x.globalAlpha=0.8;x.beginPath();x.arc(X(p[0]),Y(p[1]*k),Math.min(7,1.4+Math.sqrt(p[3])*1.7),0,7);x.fill()}x.globalAlpha=1;
+ for(let i=Math.max(0,n-400);i<n;i++){const p=tr[i];x.fillStyle=p[2]?'#34d399':'#f87171';x.globalAlpha=0.8;x.beginPath();x.arc(X(p[0]),Y(p[1]*k),Math.min(7,1.4+Math.sqrt(p[3])*1.7),0,7);x.fill()}x.globalAlpha=1;
  // volume pane: buy SOL up, sell SOL down, per bucket
  const bw=Math.max(2,(S.t1-S.t0)/160),nb=Math.ceil((S.t1-S.t0)/bw),bu=new Array(nb).fill(0),se=new Array(nb).fill(0),by=new Array(nb).fill(0);
  const seenB=[];for(let i=0;i<n;i++){const b=Math.floor((tr[i][0]-S.t0)/bw);if(b<0||b>=nb)continue;if(tr[i][2])bu[b]+=tr[i][3];else se[b]+=tr[i][3]}
  const vmax=Math.max(0.5,...bu,...se),mid=(P1+P2)/2+4,hh=(P2-P1)/2-6,pw=Math.max(1,(W-L-R)/nb-1);
  x.fillStyle='#8b93a7';x.fillText('buy / sell SOL',4,P1+16);x.strokeStyle='#262b36';x.beginPath();x.moveTo(L,mid);x.lineTo(W-R,mid);x.stroke();
- for(let b=0;b<nb;b++){const px=L+b*(W-L-R)/nb;if(bu[b]){x.fillStyle='#22c55e';x.fillRect(px,mid-bu[b]/vmax*hh,pw,bu[b]/vmax*hh)}if(se[b]){x.fillStyle='#ef4444';x.fillRect(px,mid,pw,se[b]/vmax*hh)}}
+ for(let b=0;b<nb;b++){const px=L+b*(W-L-R)/nb;if(bu[b]){x.fillStyle='#34d399';x.fillRect(px,mid-bu[b]/vmax*hh,pw,bu[b]/vmax*hh)}if(se[b]){x.fillStyle='#f87171';x.fillRect(px,mid,pw,se[b]/vmax*hh)}}
  // buyers pane: unique buyers and sellers in the last 20 s
  const step=Math.max(1,(S.t1-S.t0)/240);let bmax=4;const pts=[];
  for(let t=S.t0;t<=Math.min(CUR,S.t1);t+=step){const a=idx(t-20),z=idx(t);const B1=new Set(),S1=new Set();for(let i=a;i<z;i++)(tr[i][2]?B1:S1).add(tr[i][4]);pts.push([t,B1.size,S1.size]);bmax=Math.max(bmax,B1.size,S1.size)}
- const Yb=v=>H-B-(v/bmax)*(H-B-P2-6);x.fillStyle='#8b93a7';x.fillText('wallets / 20 s',4,P2+14);x.fillText('max '+bmax,L+4,P2+12);
- [[1,'#22c55e'],[2,'#ef4444']].forEach(([j,c])=>{x.strokeStyle=c;x.lineWidth=1.5;x.beginPath();pts.forEach((p,i)=>{const px=X(p[0]),py=Yb(p[j]);i?x.lineTo(px,py):x.moveTo(px,py)});x.stroke()});x.lineWidth=1;
+ const Yb=v=>H-B-(v/bmax)*(H-B-P2-6);x.fillStyle='#8b93a7';x.fillText('wallets / 20 s',4,P2+14);x.fillText('max '+bmax,4,P2+28);
+ [[1,'#34d399'],[2,'#f87171']].forEach(([j,c])=>{x.strokeStyle=c;x.lineWidth=1.5;x.beginPath();pts.forEach((p,i)=>{const px=X(p[0]),py=Yb(p[j]);i?x.lineTo(px,py):x.moveTo(px,py)});x.stroke()});x.lineWidth=1;
  for(let i=0;i<=4;i++){const t=S.t0+(S.t1-S.t0)*i/4;x.fillStyle='#8b93a7';x.fillText('+'+Math.round(t-I.created)+'s',X(t)-12,H-5)}
  // bot actions appear when the replay reaches them
- let ban=null;D.marks.forEach(m=>{if(m.t>CUR)return;const px=X(m.t),py=Y(m.p*k);x.fillStyle=m.kind=='buy'?'#3b82f6':m.kind=='sell'?'#f59e0b':'#a855f7';
+ let ban=null;D.marks.forEach(m=>{if(m.t>CUR)return;const px=X(m.t),py=Y(m.p*k);x.fillStyle=m.kind=='buy'?'#60a5fa':m.kind=='sell'?'#f59e0b':'#a855f7';
   x.beginPath();if(m.kind=='buy'){x.moveTo(px,py+3);x.lineTo(px-8,py+17);x.lineTo(px+8,py+17)}else if(m.kind=='sell'){x.moveTo(px,py-3);x.lineTo(px-8,py-17);x.lineTo(px+8,py-17)}else{x.moveTo(px,py-8);x.lineTo(px+8,py);x.lineTo(px,py+8);x.lineTo(px-8,py)}x.fill();
   x.strokeStyle=x.fillStyle;x.setLineDash([2,3]);x.beginPath();x.moveTo(px,T);x.lineTo(px,H-B);x.stroke();x.setLineDash([]);
   x.fillStyle='#e6e8ee';x.fillText(m.label,Math.min(px+10,W-190),m.kind=='sell'?py-20:py+30);if(CUR-m.t<4)ban=m});
@@ -289,8 +285,8 @@ function overview(x,W,H){const I=D.info,k=S.k,c=D.candles.filter(y=>y[0]>=I.crea
  let lo=1e99,hi=0;c.forEach(y=>{lo=Math.min(lo,y[3]);hi=Math.max(hi,y[2])});lo*=k;hi*=k;const L=62,R=10,T=10,B=20,a=c[0][0],b=c[c.length-1][0]+60;
  const X=t=>L+(t-a)/(b-a)*(W-L-R),yl=Math.log(lo*0.95),yh=Math.log(hi*1.05),Y=v=>T+(1-(Math.log(v)-yl)/(yh-yl))*(H-T-B);
  x.font='11px system-ui';for(let i=0;i<=4;i++){const v=Math.exp(yl+(yh-yl)*i/4);x.fillStyle='#8b93a7';x.fillText(usd(v),4,Y(v)+4)}
- const w=Math.max(1,(X(a+60)-X(a))*0.7);c.forEach(y=>{x.strokeStyle=x.fillStyle=y[4]>=y[1]?'#22c55e':'#ef4444';const cx=X(y[0]+30);x.beginPath();x.moveTo(cx,Y(y[2]*k));x.lineTo(cx,Y(y[3]*k));x.stroke();const o=Y(y[1]*k),z=Y(y[4]*k);x.fillRect(cx-w/2,Math.min(o,z),w,Math.max(1,Math.abs(o-z)))});
- D.marks.forEach(m=>{x.fillStyle=m.kind=='buy'?'#3b82f6':m.kind=='sell'?'#f59e0b':'#a855f7';x.beginPath();x.arc(X(m.t),Y(m.p*k),5,0,7);x.fill();x.fillStyle='#e6e8ee';x.fillText(m.label,Math.min(X(m.t)+8,W-190),Y(m.p*k)-8)});
+ const w=Math.max(1,(X(a+60)-X(a))*0.7);c.forEach(y=>{x.strokeStyle=x.fillStyle=y[4]>=y[1]?'#34d399':'#f87171';const cx=X(y[0]+30);x.beginPath();x.moveTo(cx,Y(y[2]*k));x.lineTo(cx,Y(y[3]*k));x.stroke();const o=Y(y[1]*k),z=Y(y[4]*k);x.fillRect(cx-w/2,Math.min(o,z),w,Math.max(1,Math.abs(o-z)))});
+ D.marks.forEach(m=>{x.fillStyle=m.kind=='buy'?'#60a5fa':m.kind=='sell'?'#f59e0b':'#a855f7';x.beginPath();x.arc(X(m.t),Y(m.p*k),5,0,7);x.fill();x.fillStyle='#e6e8ee';x.fillText(m.label,Math.min(X(m.t)+8,W-190),Y(m.p*k)-8)});
  x.fillStyle='#8b93a7';x.fillText('1-min candles from create to 1 h after the exit',L,H-5)}
 function live(n){const I=D.info,tr=D.trades,k=S.k;const p=n?tr[n-1][1]:I.p0,s=n?S.st[n-1]:{hold:0,devp:0,top10:0};
  const a=idx(CUR-20),f=idx(CUR-15);const B1=new Set(),S1=new Set();for(let i=a;i<n;i++)(tr[i][2]?B1:S1).add(tr[i][4]);
@@ -324,4 +320,4 @@ $('ov').onclick=()=>{OV=!OV;$('ov').classList.toggle('on',OV);render()};
 document.onkeydown=e=>{if(e.target.tagName=='INPUT'&&e.target.type!='range')return;if(e.code=='Space'){e.preventDefault();$('play').click()}
  if(e.key=='ArrowRight'&&D){CUR=Math.min(S.t1,CUR+2);render()}if(e.key=='ArrowLeft'&&D){CUR=Math.max(S.t0,CUR-2);render()}};
 window.onresize=()=>render();load().then(()=>{const h=decodeURIComponent(location.hash.slice(1)).split('|');if(h.length>=2)openTrade(h[0],h[1],h[2]!=null?+h[2]:null)});setInterval(()=>{if(!PLAY)load()},30000);
-</script></body></html>"""
+</script></body></html>""")

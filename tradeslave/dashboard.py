@@ -14,8 +14,10 @@ from urllib.parse import parse_qs, urlsplit
 
 from .config import PAPER_NETWORK_FEE_USD, PAPER_STARTING_BALANCE
 from .state import STATE_DIR, STATE_LOCK, load_json
-from .lab_view import LAB_HTML, build_lab_snapshot
-from .label_view import LABEL_HTML, label_next, label_save
+from .lab_page import LAB_HTML
+from .lab_view import build_lab_snapshot
+from .label_page import LABEL_HTML
+from .label_view import label_next, label_save
 from .trade_view import TRADES_HTML, chart, trade_list
 from .scalper.dashboard_view import build_scalper_snapshot, scalper_html
 
