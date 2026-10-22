@@ -84,8 +84,12 @@ RIDE_MIN, SUP_EVERY, SUP_FADE = 1.3, 10.0, 0.40
 # m4-v2 (15:20, Rohit: "it literally bought into a dying token"): the watchlist also needs holders >= 90% of their max
 # so far (never buy what the holder exit would sell at once), and M4 reads trades from the real-time feed
 # (research.live_feed) instead of the swap-api list, which lags 20 s to minutes.
+# m4-v3 (17:05, Rohit's M4 notes, vault "2026-10-22 Rohit M4 notes (TF3)"): skip a coin back near its launch price in
+# a downtrend (<= 1.15x launch and <= 0.8x its high; TF3 accepted), and skip posts whose author has < 100 or >= 10k
+# followers (found while testing his deleted-posts idea: -18% vs -7%/-9% in both halves; forward test decides).
 H_MIN, H_DROP, H_EVERY, TOP_UP = 20, 0.10, 2.0, 1.3
-RULES = "m4-v2" if M4 else "m3-v3" if M3 else "m2-v1" if M2 else "exits-v2"                                # bump on every rule change; the dashboard splits results by it
+LAUNCH_X, LAUNCH_HIGH, FOLL = 1.15, 0.80, (100, 10_000)
+RULES = "m4-v3" if M4 else "m3-v3" if M3 else "m2-v1" if M2 else "exits-v2"                                # bump on every rule change; the dashboard splits results by it
 ACT_EVERY = 6.0
 WATCH_S, POLL_S, RECHECK_S = 20 * 60, (1.0 if M2 else 2.0), (5 if M4 else 30)
 SIZE_SOL, TX_SOL, MAX_OPEN = 0.1, 0.0005, 5
@@ -485,6 +489,8 @@ def checks(rpc, tr, dev, sol_usd):
         flow10 = sum(x[4] if x[3] else -x[4] for x in tr if x[1] >= now - 10)
         if px and lo60 and px[-1][1] >= TOP_UP * lo60 and flow10 < 0:
             why.append("top: >= 1.3x the 60 s low into net selling")
+        if full and px and px[-1][1] <= LAUNCH_X * px[0][1] and px[-1][1] <= LAUNCH_HIGH * max(q for _, q in px):
+            why.append("launch: back near the launch price in a downtrend")
         if det["holders"] is not None and det["holders"] < H_MIN:
             why.append("watch: < 20 holders")
         elif det["holders"] is not None and det["holders"] < (1 - H_DROP) * det["holders_max"]:
@@ -516,6 +522,8 @@ def run():
         meta = c.get("_meta") or {}
         desc = str(meta.get("description", ""))[:400]
         info, keys = tweet_info(s, link)
+        fm = re.search(r"([\d,]+) followers", info)              # first count = the post author's (or the profile's)
+        foll = int(fm.group(1).replace(",", "")) if fm else None
         with lock:
             prev = next((first[k] for k in keys if k in first), None)
             if prev is None:
@@ -531,7 +539,11 @@ def run():
         jlog(CANDS, {"t": time.time(), "m": c["m"], "name": c.get("name"), "sym": c.get("sym"), "desc": desc,
                      "link": link, "score": sc, "crit": crit, "why": why, "age": round(time.time() - c["t"]),
                      "model": llm.used, "nkeys": keys, "first": prev is None,
-                     "improves": better if prev else None, "after": prev.get("name") if prev else None})
+                     "improves": better if prev else None, "after": prev.get("name") if prev else None,
+                     "followers": foll})
+        if M4 and foll is not None and not FOLL[0] <= foll < FOLL[1]:
+            with lock:
+                done.add(c["m"])                         # m4-v3: author outside 100-10k followers
 
     def intake(c):
         if not c["m"].endswith("pump") or c.get("mh"):
