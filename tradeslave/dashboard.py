@@ -18,6 +18,7 @@ from .lab_page import LAB_HTML
 from .lab_view import build_lab_snapshot
 from .label_page import LABEL_HTML
 from .label_view import label_next, label_save
+from .paper_view import paper_next, paper_save
 from .trade_view import TRADES_HTML, chart, trade_list
 from .scalper.dashboard_view import build_scalper_snapshot, scalper_html
 
@@ -321,6 +322,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
         elif path == "/label":
             body = LABEL_HTML.encode("utf-8")
             content_type = "text/html; charset=utf-8"
+        elif path == "/api/paper/next":
+            try:
+                body = json.dumps(paper_next(), allow_nan=False, default=str).encode("utf-8")
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                logger.exception("Paper view failed")
+                body = json.dumps({"error": f"Could not load a coin: {exc}"}).encode("utf-8")
+            content_type = "application/json; charset=utf-8"
         elif path == "/api/label/next":
             try:
                 body = json.dumps(label_next(), allow_nan=False, default=str).encode("utf-8")
@@ -380,12 +388,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib handler API; only the local blind-label form writes
-        if urlsplit(self.path).path != "/api/label":
+        route = urlsplit(self.path).path
+        if route not in ("/api/label", "/api/paper"):
             self.send_error(404)
             return
         try:
             n = min(int(self.headers.get("Content-Length") or 0), 10000)
-            data = label_save(json.loads(self.rfile.read(n) or b"{}"))
+            data = (paper_save if route == "/api/paper" else label_save)(json.loads(self.rfile.read(n) or b"{}"))
         except (OSError, ValueError, TypeError, KeyError) as exc:
             logger.exception("Label save failed")
             data = {"error": f"Could not save the label: {exc}"}

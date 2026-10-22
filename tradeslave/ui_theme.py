@@ -39,7 +39,7 @@ tbody tr:hover,table tr:hover td{background:#ffffff05}
 
 
 def nav(active: str, note: str = "") -> str:
-    tabs = (("lab", "/", "Lab"), ("trades", "/trades", "Trade replay"), ("label", "/label", "Blind labels"))
+    tabs = (("lab", "/", "Lab"), ("trades", "/trades", "Trade replay"), ("label", "/label", "Paper trade"))
     links = "".join(f'<a class="tab{" on" if k == active else ""}" href="{h}">{t}</a>' for k, h, t in tabs)
     return (f'<nav class="nav"><span class="brand"><i></i>Tradeslave</span>{links}<span class="sp"></span>'
             f'<span class="note" id="navnote">{note}</span></nav>')
