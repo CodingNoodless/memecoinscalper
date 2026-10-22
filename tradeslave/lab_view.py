@@ -22,6 +22,10 @@ VAULT = Path(r"D:\vault\tradeslave")
 JOBS = [
     ("M1 automated manual process", "paper bot", "m1_bot.out", 15,
      "Rohit's new-pairs process: X-linked launches, Gemini narrative score, bundle/chart checks, 2x / -5%"),
+    ("M4 = M1 + TF fixes", "paper bot", "m4_bot.out", 15,
+     "Watchlist until >= 20 holders and >= 90% of their max, sell when holders fall 10%, skip a top; live feed"),
+    ("Live trade feed", "data feed", "live_feed.log", 15,
+     "Every pump.fun trade from a Helius websocket; real-time trades for the coins the bots watch (data/feed)"),
     ("C1 curve reach model", "forward recorder", "c1_curve.out", 15,
      "Records every launch reaching curve R 40 (Oct 21-28); logistic model + 40->75 trade judged once after"),
     ("Launch watcher (J1/J2)", "forward recorder", "launch_watch.out", 15,

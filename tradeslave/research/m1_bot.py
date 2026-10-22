@@ -47,6 +47,7 @@ from ..scalper.curve import decode_bonding_curve
 from .c1_curve import CREATES, CURVE_FEE, SOL_USDC, T0, V0, sell_curve
 from .chain import env_rpc
 from .full_trades import Pace, ts as iso_ts
+from .live_feed import feed_trades
 
 VARIANT = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] in ("m1", "m2", "m3", "m4") else "m1"
 M4 = VARIANT == "m4"                             # M4 (2026-10-22 15:10): M1 + the fixes accepted by the TF sweep (see below)
@@ -80,10 +81,13 @@ RIDE_MIN, SUP_EVERY, SUP_FADE = 1.3, 10.0, 0.40
 # M4 (TF sweep, vault "2026-10-22 trade forensics and fix sweep (TF)"): Rohit's watchlist (buy only once >= 20 wallets
 # hold it, re-checked every 10 s while in the buy band), Rohit's holder exit (sell when holders fall 10% from their max
 # since entry; holders re-read every 5 s), and skip a coin bought at a local top (>= 1.3x its 60 s low into net selling).
-H_MIN, H_DROP, H_EVERY, TOP_UP = 20, 0.10, 5.0, 1.3
-RULES = "m4-v1" if M4 else "m3-v3" if M3 else "m2-v1" if M2 else "exits-v2"                                # bump on every rule change; the dashboard splits results by it
+# m4-v2 (15:20, Rohit: "it literally bought into a dying token"): the watchlist also needs holders >= 90% of their max
+# so far (never buy what the holder exit would sell at once), and M4 reads trades from the real-time feed
+# (research.live_feed) instead of the swap-api list, which lags 20 s to minutes.
+H_MIN, H_DROP, H_EVERY, TOP_UP = 20, 0.10, 2.0, 1.3
+RULES = "m4-v2" if M4 else "m3-v3" if M3 else "m2-v1" if M2 else "exits-v2"                                # bump on every rule change; the dashboard splits results by it
 ACT_EVERY = 6.0
-WATCH_S, POLL_S, RECHECK_S = 20 * 60, (1.0 if M2 else 2.0), (10 if M4 else 30)
+WATCH_S, POLL_S, RECHECK_S = 20 * 60, (1.0 if M2 else 2.0), (5 if M4 else 30)
 SIZE_SOL, TX_SOL, MAX_OPEN = 0.1, 0.0005, 5
 LINK = re.compile(r"https?://(?:www\.)?(?:x|twitter)\.com/\S+", re.I)
 
@@ -456,6 +460,14 @@ def checks(rpc, tr, dev, sol_usd):
     if M4:
         now, full = time.time(), tr[0][2] == dev
         det["holders"] = sum(1 for v in hold.values() if v > 1) if full else None   # TF definition: > 1 token, dev in
+        if full:
+            run_bal, h, hmax = defaultdict(float), 0, 0
+            for x in tr:
+                b0 = run_bal[x[2]]
+                run_bal[x[2]] = b1 = b0 + (x[5] if x[3] else -x[5])
+                h += (b0 <= 1 < b1) - (b1 <= 1 < b0)
+                hmax = max(hmax, h)
+            det["holders_max"] = hmax
         px = [(x[1], x[4] / x[5]) for x in tr if x[5] > 0]
         lo60 = min((q for t, q in px if t >= now - 60), default=None)
         flow10 = sum(x[4] if x[3] else -x[4] for x in tr if x[1] >= now - 10)
@@ -463,6 +475,8 @@ def checks(rpc, tr, dev, sol_usd):
             why.append("top: >= 1.3x the 60 s low into net selling")
         if det["holders"] is not None and det["holders"] < H_MIN:
             why.append("watch: < 20 holders")
+        elif det["holders"] is not None and det["holders"] < (1 - H_DROP) * det["holders_max"]:
+            why.append("watch: holders falling (< 90% of their max)")
     buys = [x[4] for x in tr[1:] if x[3] and x[2] != dev] if tr and tr[0][2] == dev else [x[4] for x in tr if x[3]]
     if buys and max(buys) > 0.40 * sum(buys):
         why.append("chart: one buy dominates")
@@ -573,12 +587,21 @@ def run():
             if t_loop - last_check[m] < RECHECK_S:
                 continue
             last_check[m] = t_loop
-            tr = trades(s, pace, m)
+            tr, src = None, "swap-api"
+            if M4:                                               # real-time feed; the swap-api list lags
+                tr, full = feed_trades(m)
+                if not full:                                     # feed down, or it missed the create / had a gap
+                    tr = None
+                src = "feed" if tr else "swap-api"
+            if not tr:
+                tr = trades(s, pace, m)
             if not tr:
                 continue
             ok, why, det = checks(rpc, tr, c.get("dev"), sol["usd"])
             if M3 and copy and det.get("vol_usd", 0) < VOL_COPY and "volume" not in why:
                 ok, why = False, why + ["volume: copy coin < $3k"]
+            if M4:
+                det["src"] = src
             jlog(CANDS, {"t": time.time(), "m": m, "stage": "checks", "mc": round(mc), "ok": ok, "why": why, **det})
             if not ok:
                 if not any(w.startswith(("volume", "dead", "watch")) for w in why):   # these can change: re-check
@@ -683,8 +706,18 @@ def manage(opened, m, p, cs, done, rpc=None):
 
 
 def holders_update(o, now):
-    """M4: fold the coin's newest curve trades into the holder book; a gap in the history switches the exit off."""
+    """M4: holders now, from the real-time feed (all trades since create), else by folding the swap-api's newest
+    trades into the holder book; a gap in the history switches the exit off."""
     o["t_h"] = now
+    rows, full = feed_trades(o["m"])
+    if rows and full:
+        bal = defaultdict(float)
+        for x in rows:
+            bal[x[2]] += x[5] if x[3] else -x[5]
+        o["holders"] = sum(1 for v in bal.values() if v > 1)
+        o["h_max"] = max(o["h_max"], o["holders"])
+        o["h_src"] = "feed"
+        return
     try:
         rows = SOC.get(SWAP.format(o["m"]), params={"limit": 100}, timeout=8).json()["trades"]
     except Exception:  # noqa: BLE001
