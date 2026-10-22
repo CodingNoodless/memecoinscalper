@@ -27,7 +27,8 @@ SPLIT = time.mktime(time.strptime("2026-10-22 00:00", "%Y-%m-%d %H:%M"))
 SIZE, TX = 0.1, 0.0005
 BASE = dict(tp=2.0, trend_arm=1.3, trend_give=0.8, stall_s=120, stall_act=0.5, max_hold=600,
             hi_arm=1.5, hi_give=0.6, hi_dead=0.2, hi_hold=7200, high=True,
-            lock_arm=None, lock_give=None, fade=None, be_arm=None, half15=False, early=None, m1_stop=None)
+            lock_arm=None, lock_give=None, fade=None, be_arm=None, half15=False, early=None, m1_stop=None,
+            actfade=None, hdecl=None)
 HORIZON = 900
 
 
@@ -46,7 +47,13 @@ def load():
             with gzip.open(p, "rt", encoding="utf-8") as fh:
                 d = json.load(fh)
             ticks[x["m"]] = sorted(d["trades"], key=lambda r: (r[0], r[1]))     # chain order: slot, then time
-    return trades, ticks
+    created = {}
+    for v in ("m1", "m2", "m3"):
+        for line in (DATA_DIR / v / "cands.jsonl").open(encoding="utf-8"):
+            c = json.loads(line)
+            if "age" in c and c.get("m") in ticks:
+                created[c["m"]] = min(created.get(c["m"], 9e12), c["t"] - c["age"])
+    return trades, ticks, created
 
 
 def implied_v(b, sol, tok):
@@ -55,12 +62,13 @@ def implied_v(b, sol, tok):
     return (-sol + math.sqrt(sol * sol + 4 * c)) / 2 if b else (sol + math.sqrt(sol * sol + 4 * c)) / 2
 
 
-def path(x, tr):
+def path(x, tr, created=None):
     """Spot price after each curve trade. Token changes are exact for every transaction (the SOL change is hidden
     for some routers), so the token reserve is walked by token deltas and its level is the median of the levels
     implied by the trades whose SOL is known. The entry boundary within the entry's second is the split whose
     price is closest to the bot's own p0; the path is then scaled to p0 (a small correction).
-    Returns (pre, post): lists of [t, spot, is_buy, sol, wallet], before and after our entry."""
+    Holders (wallets holding > 1 token, curve excluded) are counted only when the window starts at the create.
+    Returns (pre, post): lists of [t, spot, is_buy, sol, wallet, tokens, holders|None], before and after our entry."""
     d, cum = 0.0, []
     for s, t, w, b, sol, tok in tr:
         cum.append(d)                                           # token delta before this trade
@@ -71,10 +79,16 @@ def path(x, tr):
         return [], []
     t_start = statistics.median(est)
     rows, prev_v = [], K / t_start
+    full = created is not None and tr[0][1] <= created + 3
+    bal, hold = {}, 0
     for i, (s, t, w, b, sol, tok) in enumerate(tr):
         tk = max(1.0, t_start + cum[i] + (-tok if b else tok))
         v = K / tk
-        rows.append([t, v / tk, b, sol if sol is not None else abs(v - prev_v), w])
+        b0 = bal.get(w, 0.0)
+        b1 = b0 + (tok if b else -tok)
+        bal[w] = b1
+        hold += (b0 <= 1 < b1) - (b1 <= 1 < b0)
+        rows.append([t, v / tk, b, sol if sol is not None else abs(v - prev_v), w, tok, hold if full else None])
         prev_v = v
     sec = math.floor(x["t"])
     lo = next((i for i, r in enumerate(rows) if r[0] >= sec - 1), len(rows))
@@ -121,6 +135,7 @@ def sim(x, pre, post, P):
     p, peak, t_peak, act, amax, t_act = p0, p0, t0, None, 0, -99
     pending, cash, qq, run, half_done = None, 0.0, q, None, False
     t_end = t0 + HORIZON
+    a30max, hmax = 0, (pre[-1][6] if pre and pre[-1][6] is not None else None)
     pre_t = [r for r in pre if r[0] > t0 - 60]
     act_pre = len(pre_t)
     tick_t = t0
@@ -137,6 +152,9 @@ def sim(x, pre, post, P):
             act = len(w.since(tick_t - 60, tick_t)) + (act_pre if tick_t - t0 < 60 else 0)
             amax, t_act = max(amax, act), tick_t
         r, held = p / p0, tick_t - t0
+        a30max = max(a30max, len({y[4] for y in w.since(tick_t - 30, tick_t)}))
+        if hmax is not None and n and post[n - 1][6] is not None:
+            hmax = max(hmax, post[n - 1][6])
         if run is not None:                                     # M3 ride
             if tick_t - run["t_sup"] >= 10:
                 run["sup"], run["flow"] = support(w, tick_t)
@@ -161,6 +179,11 @@ def sim(x, pre, post, P):
             P["_bmax"][id(x)] = run_max
             if flow < 0 and buyers < P["fade"] * run_max:
                 pending = "FADE"
+        elif P["actfade"] and len(post) and (lambda a30: a30 < P["actfade"] * a30max and p < 0.9 * peak)(
+                len({y[4] for y in w.since(tick_t - 30, tick_t)})):
+            pending = "AFADE"
+        elif P["hdecl"] and hmax and n and post[n - 1][6] is not None and post[n - 1][6] <= (1 - P["hdecl"]) * hmax:
+            pending = "HDECL"
         elif P["early"] and held >= P["early"] and peak < p0 * 1.05:
             last = w.since(tick_t - 15, tick_t)
             if sum(y[3] if y[2] else -y[3] for y in last) < 0:
@@ -211,27 +234,57 @@ def stats(v):
             f"SOL {sum(v) * SIZE:+.3f} (ex best 2 {sum(srt[:-2]) * SIZE:+.3f})")
 
 
+def entry_at(x, pre, post, H):
+    """R4 watchlist: the first moment from the bot's entry (up to 15 min) with holders >= H and mc in the buy band.
+    Returns a trade dict entered there (curve fill for 0.1 SOL), the bot's own trade if it already qualified, or None.
+    Unknown holders -> the bot's own trade (no change)."""
+    h0 = pre[-1][6] if pre else None
+    if h0 is None:
+        return x
+    if h0 >= H:
+        return x
+    top = 10000.0 if (x.get("score") or 0) >= 9 else 7000.0
+    usd = 1e9 * (x.get("sol_usd") or 105.0)
+    for r in post:
+        if r[0] > x["t"] + HORIZON:
+            return None
+        if r[6] is not None and r[6] >= H and 4000.0 <= r[1] * usd <= top:
+            v = math.sqrt(r[1] * K)
+            q = K / v - K / (v + SIZE * (1 - 0.0125))
+            return dict(x, t=r[0] + 1.0, p0=r[1], q=q, peak=r[1])
+    return None
+
+
+def resplit(x, pre, post):
+    rows = pre + post
+    j = next((i for i, r in enumerate(rows) if r[0] > x["t"]), len(rows))
+    return rows[:j], rows[j:]
+
+
 def main() -> None:
-    trades, ticks = load()
+    trades, ticks, created = load()
     rows = []
     for x in trades:
         tr = ticks.get(x["m"])
         if not tr:
             continue
-        pre, post = path(x, tr)
-        rows.append((x, pre, post))
-    print(f"{len(rows)} of {len(trades)} trades have exact curve trades")
-    half = lambda x: int(x["t"] >= SPLIT)
+        pre, post = path(x, tr, created.get(x["m"]))
+        if post or pre:
+            rows.append((x, pre, post))
+    print(f"{len(rows)} of {len(trades)} trades have exact curve trades; "
+          f"{sum(1 for x, pre, _ in rows if pre and pre[-1][6] is not None)} with holder counts from create")
+    half = lambda x: int(x["t"] >= SPLIT)                       # noqa: E731
 
     # 1. calibration
-    base = {id(x): sim(x, pre, post, dict(BASE)) for x, pre, post in rows}
+    base = {id(x): sim(x, pre, post, dict(BASE))[0] for x, pre, post in rows}
     act = [x["ret"] for x, _, _ in rows]
-    rep = [base[id(x)][0] for x, _, _ in rows]
+    rep = [base[id(x)] for x, _, _ in rows]
     corr = statistics.correlation(act, rep) if len(rows) > 2 else 0
+    same = sum(sim(x, pre, post, dict(BASE))[1] == x["exit"] for x, pre, post in rows) / len(rows)
     print(f"\n1. CALIBRATION  actual mean {statistics.mean(act):+.1%}  replay mean {statistics.mean(rep):+.1%}  "
-          f"corr {corr:.2f}  same exit {sum(base[id(x)][1] == x['exit'] for x, _, _ in rows) / len(rows):.0%}")
+          f"corr {corr:.2f}  same exit {same:.0%}")
     for v in ("m1", "m2", "m3"):
-        z = [(x["ret"], base[id(x)][0]) for x, _, _ in rows if x["v"] == v]
+        z = [(x["ret"], base[id(x)]) for x, _, _ in rows if x["v"] == v]
         if z:
             print(f"   {v}: actual {statistics.mean(a for a, b in z):+.1%} replay {statistics.mean(b for a, b in z):+.1%} n {len(z)}")
     ok = abs(statistics.mean(act) - statistics.mean(rep)) <= 0.03 and corr >= 0.8
@@ -243,6 +296,7 @@ def main() -> None:
         p0, te = x["p0"], x["t_exit"]
         after = max((y[1] for y in post if te < y[0] <= x["t"] + HORIZON), default=0) / p0
         pk = x["peak"] / p0
+        h = pre[-1][6] if pre else None
         if x["ret"] > 0:
             c = "win"
         elif pk >= 1.3:
@@ -257,81 +311,121 @@ def main() -> None:
             c = "instant dump (never > 1.05x)"
         else:
             c = "slow bleed"
-        cat[c].append(x)
-    print("\n2. TAXONOMY (actual trades)              design                         | check")
-    for c, z in sorted(cat.items(), key=lambda kv: sum(x["ret"] for x in kv[1])):
-        h = [[x["ret"] for x in z if half(x) == k] for k in (0, 1)]
-        print(f"   {c:36s} n {len(h[0]):3d} SOL {sum(h[0]) * SIZE:+.3f} | n {len(h[1]):3d} SOL {sum(h[1]) * SIZE:+.3f}"
-              f"   bots {dict(sorted(defaultdict(int, {v: sum(x['v'] == v for x in z) for v in ('m1', 'm2', 'm3')}).items()))}")
-
+        cat[c].append((x, h))
+    print("\n2. TAXONOMY (actual trades)              design             | check              | median holders at entry")
+    for c, z in sorted(cat.items(), key=lambda kv: sum(x["ret"] for x, _ in kv[1])):
+        hh = [[x["ret"] for x, _ in z if half(x) == k] for k in (0, 1)]
+        hs = [h for _, h in z if h is not None]
+        print(f"   {c:36s} n {len(hh[0]):3d} SOL {sum(hh[0]) * SIZE:+.3f} | n {len(hh[1]):3d} SOL {sum(hh[1]) * SIZE:+.3f} | "
+              f"{statistics.median(hs) if hs else '-'} (n {len(hs)})")
+    hb = [(pre[-1][6], x["ret"]) for x, pre, _ in rows if pre and pre[-1][6] is not None]
+    for lo, hi in ((0, 10), (10, 15), (15, 20), (20, 30), (30, 999)):
+        z = [r for h, r in hb if lo <= h < hi]
+        if z:
+            print(f"   holders at entry {lo:3d}-{hi:<3d}: {stats(z)}")
     if "calib" in sys.argv:                            # calibration and taxonomy only (no fix results)
         return
 
     # 3. fix sweep vs replayed baseline
-    fams = {
-        "X1 profit lock": [dict(lock_arm=a, lock_give=b) for a in (1.2, 1.3, 1.5) for b in (0.10, 0.15, 0.20)],
-        "X2 hype fade": [dict(fade=f) for f in (0.3, 0.5)],
-        "X3 no high mode": [dict(high=False)],
-        "X4 breakeven stop": [dict(be_arm=a) for a in (1.2, 1.3)],
-        "X5 half at 1.5x": [dict(half15=True)],
-        "X6 early dead exit": [dict(early=s) for s in (30, 60)],
-        "X7 tighter M1 stop": [dict(m1_stop=s) for s in (0.8, 0.85)],
-    }
-
-    def score(over):
-        P = dict(BASE, **over)
-        res = {id(x): sim(x, pre, post, P) for x, pre, post in rows}
+    def judge(new):
+        """new: id(x) -> new return (0 for a skipped trade). Per half: totals and acceptance inputs."""
         out = []
         for k in (0, 1):
-            z = [(res[id(x)][0], base[id(x)][0]) for x, _, _ in rows if half(x) == k]
-            out.append(dict(n=len(z), new=sum(a for a, b in z), old=sum(b for a, b in z),
-                            dmean=statistics.mean(a - b for a, b in z),
+            z = [(new[id(x)], base[id(x)]) for x, _, _ in rows if half(x) == k]
+            out.append(dict(new=sum(a for a, b in z), old=sum(b for a, b in z), dmean=statistics.mean(a - b for a, b in z),
                             win_new=sum(a for a, b in z if a > 0), win_old=sum(b for a, b in z if b > 0)))
-        return out, res
+        acc = (all(h["new"] >= h["old"] for h in out) and out[0]["dmean"] >= 0.02
+               and all(h["win_new"] >= 0.75 * h["win_old"] for h in out))
+        return out, acc
 
-    accepted = {}
-    print("\n3. FIX SWEEP (vs replayed baseline; SOL at 0.1 SOL a trade)")
+    def exits(over):
+        P = dict(BASE, **over)
+        return {id(x): sim(x, pre, post, P)[0] for x, pre, post in rows}
+
+    def r1(H):
+        return {id(x): 0.0 if pre and pre[-1][6] is not None and pre[-1][6] < H else base[id(x)] for x, pre, post in rows}
+
+    def r4(H, over=None):
+        P, out = dict(BASE, **(over or {})), {}
+        for x, pre, post in rows:
+            y = entry_at(x, pre, post, H)
+            if y is None:
+                out[id(x)] = 0.0
+            elif y is x:
+                out[id(x)] = sim(x, pre, post, P)[0]
+            else:
+                a, b = resplit(y, pre, post)
+                out[id(x)] = sim(y, a, b, P)[0]
+        return out
+
+    pf = lambda x: pre_feats(x[0], x[1])                        # noqa: E731
+    feats = {id(x): pre_feats(x, pre) for x, pre, _ in rows}
+    s1 = lambda f: f["flow10"] < 0                              # noqa: E731
+    s2 = lambda f: f["from_lo60"] >= 1.3 and f["flow10"] < 0     # noqa: E731
+    fams = {
+        "X1 profit lock": [("exit", dict(lock_arm=a, lock_give=b)) for a in (1.2, 1.3, 1.5) for b in (0.10, 0.15, 0.20)],
+        "X2 hype fade": [("exit", dict(fade=f)) for f in (0.3, 0.5)],
+        "X3 no high mode": [("exit", dict(high=False))],
+        "X4 breakeven stop": [("exit", dict(be_arm=a)) for a in (1.2, 1.3)],
+        "X5 half at 1.5x": [("exit", dict(half15=True))],
+        "X6 early dead exit": [("exit", dict(early=s)) for s in (30, 60)],
+        "X7 tighter M1 stop": [("exit", dict(m1_stop=s)) for s in (0.8, 0.85)],
+        "S1 skip: selling into entry": [("skip", s1)],
+        "S2 skip: bought the top": [("skip", s2)],
+        "R1 holder floor (Rohit)": [("r1", H) for H in (15, 20)],
+        "R2 activity fade (Rohit)": [("exit", dict(actfade=f)) for f in (0.3, 0.4)],
+        "R3 holder decline (Rohit)": [("exit", dict(hdecl=d)) for d in (0.10, 0.20)],
+        "R4 watchlist entry (Rohit)": [("r4", H) for H in (15, 20)],
+    }
+
+    def run(kind, arg):
+        if kind == "exit":
+            return exits(arg)
+        if kind == "skip":
+            return {id(x): 0.0 if arg(feats[id(x)]) else base[id(x)] for x, _, _ in rows}
+        return r1(arg) if kind == "r1" else r4(arg)
+
+    print("\n3. FIX SWEEP (vs replayed baseline; SOL at 0.1 SOL a trade; best variant chosen on design)")
+    accepted = []
     for fam, variants in fams.items():
-        scored = [(o, score(o)) for o in variants]
-        o, (h, _) = max(scored, key=lambda z: z[1][0][0]["new"] - z[1][0][0]["old"])
-        acc = (all(hh["new"] >= hh["old"] for hh in h) and h[0]["dmean"] >= 0.02
-               and all(hh["win_new"] >= 0.75 * hh["win_old"] for hh in h))
-        for oo, (hh, _) in scored:
-            print(f"   {fam:20s} {json.dumps(oo):42s} design {(hh[0]['new'] - hh[0]['old']) * SIZE:+.3f} SOL "
-                  f"({hh[0]['dmean']:+.1%}/trade) | check {(hh[1]['new'] - hh[1]['old']) * SIZE:+.3f} SOL ({hh[1]['dmean']:+.1%})"
-                  f"{'   <- chosen' if oo is o else ''}")
+        res = [(k, a, judge(run(k, a))) for k, a in variants]
+        best = max(res, key=lambda z: z[2][0][0]["new"] - z[2][0][0]["old"])
+        for k, a, (h, acc) in res:
+            lab = a if k != "skip" else "rule"
+            print(f"   {fam:28s} {json.dumps(lab) if not callable(lab) else '':34s} design {(h[0]['new'] - h[0]['old']) * SIZE:+.3f} SOL "
+                  f"({h[0]['dmean']:+5.1%}/trade) | check {(h[1]['new'] - h[1]['old']) * SIZE:+.3f} SOL ({h[1]['dmean']:+5.1%})"
+                  f"{'  <- chosen' if (k, a) == best[:2] else ''}")
+        acc = best[2][1]
         print(f"   => {fam}: {'ACCEPTED' if acc else 'rejected'}")
         if acc:
-            accepted.update(o)
+            accepted.append((fam, best[0], best[1]))
 
-    skips = {}
-    for x, pre, post in rows:
-        skips[id(x)] = pre_feats(x, pre)
-    for name, f in (("S1 skip: net selling into entry", lambda s: s["flow10"] < 0),
-                    ("S2 skip: bought the top", lambda s: s["from_lo60"] >= 1.3 and s["flow10"] < 0)):
-        h = [[base[id(x)][0] for x, _, _ in rows if half(x) == k and f(skips[id(x)])] for k in (0, 1)]
-        acc = all(sum(z) < 0 for z in h) and all(z for z in h)
-        print(f"   {name:32s} skipped design n {len(h[0])} SOL {sum(h[0]) * SIZE:+.3f} | check n {len(h[1])} SOL "
-              f"{sum(h[1]) * SIZE:+.3f}  => {'ACCEPTED' if acc else 'rejected'}")
-        if acc:
-            accepted.setdefault("_skip", []).append(name)
-
-    # 4. final backtest
-    print("\n4. FINAL BACKTEST: new logic =", json.dumps({k: v for k, v in accepted.items()}))
-    skip_rules = accepted.pop("_skip", [])
-    _, res = score(accepted)
-    sk = {"S1 skip: net selling into entry": lambda s: s["flow10"] < 0,
-          "S2 skip: bought the top": lambda s: s["from_lo60"] >= 1.3 and s["flow10"] < 0}
+    # 4. final backtest: accepted entry rule (R4 over R1), accepted skips, accepted exits together
+    over = {}
+    for fam, k, a in accepted:
+        if k == "exit":
+            over.update(a)
+    ent = next(((k, a) for fam, k, a in accepted if k == "r4"), None) or next(((k, a) for fam, k, a in accepted if k == "r1"), None)
+    skips = [a for fam, k, a in accepted if k == "skip"]
+    print("\n4. FINAL BACKTEST  new logic:", [fam + (f" {json.dumps(a)}" if k != "skip" else "") for fam, k, a in accepted] or "no fix accepted")
+    new = r4(ent[1], over) if ent and ent[0] == "r4" else exits(over)
+    if ent and ent[0] == "r1":
+        new = {i: 0.0 if r1(ent[1])[i] == 0.0 and base[i] != 0.0 else new[i] for i in new}
+    for i in new:
+        if any(f(feats[i]) for f in skips):
+            new[i] = 0.0
+    taken = lambda x: not (new[id(x)] == 0.0)                   # noqa: E731
     for v in ("m1", "m2", "m3", "all"):
         for k, lab in ((0, "design"), (1, "check")):
-            z = [(x, pre) for x, pre, _ in rows if half(x) == k and (v == "all" or x["v"] == v)]
+            z = [x for x, _, _ in rows if half(x) == k and (v == "all" or x["v"] == v)]
             if not z:
                 continue
-            keep = [x for x, pre in z if not any(sk[s](skips[id(x)]) for s in skip_rules)]
-            print(f"   {v:3s} {lab:6s} actual   {stats([x['ret'] for x, _ in z])}")
-            print(f"   {'':3s} {'':6s} baseline {stats([base[id(x)][0] for x, _ in z])}")
-            print(f"   {'':3s} {'':6s} NEW      {stats([res[id(x)][0] for x in keep])}")
-    json.dump({"accepted": accepted, "skips": skip_rules}, open(DATA_DIR / "m1" / "tf_accepted.json", "w"))
+            print(f"   {v:3s} {lab:6s} actual   {stats([x['ret'] for x in z])}")
+            print(f"   {'':3s} {'':6s} baseline {stats([base[id(x)] for x in z])}")
+            print(f"   {'':3s} {'':6s} NEW      {stats([new[id(x)] for x in z if taken(x)])}  "
+                  f"(skipped {sum(not taken(x) for x in z)}; SOL incl. skips {sum(new[id(x)] for x in z) * SIZE:+.3f})")
+    json.dump({"accepted": [(fam, k, a if k != "skip" else fam) for fam, k, a in accepted]},
+              open(DATA_DIR / "m1" / "tf_accepted.json", "w"))
 
 
 if __name__ == "__main__":

@@ -48,7 +48,8 @@ from .c1_curve import CREATES, CURVE_FEE, SOL_USDC, T0, V0, sell_curve
 from .chain import env_rpc
 from .full_trades import Pace, ts as iso_ts
 
-VARIANT = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] in ("m1", "m2", "m3") else "m1"
+VARIANT = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] in ("m1", "m2", "m3", "m4") else "m1"
+M4 = VARIANT == "m4"                             # M4 (2026-10-22 15:10): M1 + the fixes accepted by the TF sweep (see below)
 M3 = VARIANT == "m3"                             # M3 (2026-10-21 16:00): M2 + Rohit's post-mortem changes (see below)
 M2 = VARIANT in ("m2", "m3")                     # M2 (2026-10-21 09:40): M1 + sniper-bag filter, -10% stop, 1 s polls
 OUT = DATA_DIR / VARIANT
@@ -76,9 +77,13 @@ SNIP_SLOTS, SNIP_MAX = 2, 8.0                    # M2: wallets buying within 2 s
 DEAD_HOLDERS, DEAD_GROWTH, DEV_MAX, FRESH_H, FRESH_MAX, VOL_COPY = 15, 8, 10.0, 6 * 3600, 25.0, 3000.0
 RUN_BUYERS, RUN_FLOW, RUN_SOCIAL, RUN_GIVE, RUN_FLOOR, RUN_HOLD = 25, 1.5, 2.0, 0.50, 1.4, 7200
 RIDE_MIN, SUP_EVERY, SUP_FADE = 1.3, 10.0, 0.40
-RULES = "m3-v3" if M3 else "m2-v1" if M2 else "exits-v2"                                # bump on every rule change; the dashboard splits results by it
+# M4 (TF sweep, vault "2026-10-22 trade forensics and fix sweep (TF)"): Rohit's watchlist (buy only once >= 20 wallets
+# hold it, re-checked every 10 s while in the buy band), Rohit's holder exit (sell when holders fall 10% from their max
+# since entry; holders re-read every 5 s), and skip a coin bought at a local top (>= 1.3x its 60 s low into net selling).
+H_MIN, H_DROP, H_EVERY, TOP_UP = 20, 0.10, 5.0, 1.3
+RULES = "m4-v1" if M4 else "m3-v3" if M3 else "m2-v1" if M2 else "exits-v2"                                # bump on every rule change; the dashboard splits results by it
 ACT_EVERY = 6.0
-WATCH_S, POLL_S, RECHECK_S = 20 * 60, (1.0 if M2 else 2.0), 30
+WATCH_S, POLL_S, RECHECK_S = 20 * 60, (1.0 if M2 else 2.0), (10 if M4 else 30)
 SIZE_SOL, TX_SOL, MAX_OPEN = 0.1, 0.0005, 5
 LINK = re.compile(r"https?://(?:www\.)?(?:x|twitter)\.com/\S+", re.I)
 
@@ -448,6 +453,16 @@ def checks(rpc, tr, dev, sol_usd):
         det["fresh_pct"] = round(100 * sum(v for v, f in fr if f and f[1] and f[1] >= now - FRESH_H) / 1e9, 2)
         if det["fresh_pct"] > FRESH_MAX:
             why.append("rug: fresh wallets hold > 25%")
+    if M4:
+        now, full = time.time(), tr[0][2] == dev
+        det["holders"] = sum(1 for v in hold.values() if v > 1) if full else None   # TF definition: > 1 token, dev in
+        px = [(x[1], x[4] / x[5]) for x in tr if x[5] > 0]
+        lo60 = min((q for t, q in px if t >= now - 60), default=None)
+        flow10 = sum(x[4] if x[3] else -x[4] for x in tr if x[1] >= now - 10)
+        if px and lo60 and px[-1][1] >= TOP_UP * lo60 and flow10 < 0:
+            why.append("top: >= 1.3x the 60 s low into net selling")
+        if det["holders"] is not None and det["holders"] < H_MIN:
+            why.append("watch: < 20 holders")
     buys = [x[4] for x in tr[1:] if x[3] and x[2] != dev] if tr and tr[0][2] == dev else [x[4] for x in tr if x[3]]
     if buys and max(buys) > 0.40 * sum(buys):
         why.append("chart: one buy dominates")
@@ -566,7 +581,7 @@ def run():
                 ok, why = False, why + ["volume: copy coin < $3k"]
             jlog(CANDS, {"t": time.time(), "m": m, "stage": "checks", "mc": round(mc), "ok": ok, "why": why, **det})
             if not ok:
-                if not any(w.startswith(("volume", "dead")) for w in why):   # these can still change: re-check
+                if not any(w.startswith(("volume", "dead", "watch")) for w in why):   # these can change: re-check
                     done.add(m)
                 continue
             fresh = rpc.curves([bc]).get(bc)                     # fill at the state after our decision
@@ -577,6 +592,13 @@ def run():
             opened[m] = dict(m=m, name=c.get("name"), score=sc, t=time.time(), p0=price(fresh), q=q, peak=price(fresh),
                              stop=STOP, high=sc >= SCORE_HIGH, bc=bc, rules=RULES, mc=round(mc), sol_usd=sol["usd"],
                              nkey=nkey)
+            if M4 and tr[0][2] == c.get("dev"):                # holder book for the holder exit
+                bal = defaultdict(float)
+                for x in tr:
+                    bal[x[2]] += x[5] if x[3] else -x[5]
+                h0 = sum(1 for v in bal.values() if v > 1)
+                opened[m].update(bal=dict(bal), seen=[list(x[:4]) for x in tr[-100:]], last_slot=tr[-1][0],
+                                 holders=h0, h_max=h0, t_h=0.0)
             if M3:                                               # exits by traction, not by score
                 opened[m].update(high=False, link=link, copy=copy, eng0=engagement(link))
             print(time.strftime("%H:%M"), f"BUY  {c.get('name')!r} score {sc} mc ${mc:,.0f}", flush=True)
@@ -620,6 +642,11 @@ def manage(opened, m, p, cs, done, rpc=None):
             o["act_max"], o["t_act"] = max(o.get("act_max", 0), o["act"]), now
         act, amax = o.get("act"), o.get("act_max") or 0
         r, held = p / o["p0"], now - o["t"]
+        if M4 and o.get("bal") is not None and now - o["t_h"] >= H_EVERY:
+            holders_update(o, now)
+        if M4 and r > o["stop"] and o.get("bal") is not None and o["holders"] <= (1 - H_DROP) * o["h_max"]:
+            o["pending"] = "HDECL"
+            return
         if o.get("run"):                                        # M3 ride: hold the other half until support fades
             if now - o.get("t_sup", 0) >= SUP_EVERY:
                 o["sup"], o["sup_flow"] = support(m)
@@ -646,11 +673,40 @@ def manage(opened, m, p, cs, done, rpc=None):
         return
     out = sell_curve(o["q"], p) + o.get("cash", 0.0)
     ret = (out - 2 * TX_SOL) / SIZE_SOL - 1
-    row = {**o, "exit": why, "t_exit": time.time(), "p_exit": p, "ret": ret}
+    row = {**{k: v for k, v in o.items() if k not in ("bal", "seen")}, "exit": why, "t_exit": time.time(), "p_exit": p,
+           "ret": ret}
     jlog(TRADES_LOG, row)
     opened.pop(m)
     done.add(m)
     print(time.strftime("%H:%M"), f"SELL {o['name']!r} {why} {ret:+.1%}", flush=True)
+
+
+def holders_update(o, now):
+    """M4: fold the coin's newest curve trades into the holder book; a gap in the history switches the exit off."""
+    o["t_h"] = now
+    try:
+        rows = SOC.get(SWAP.format(o["m"]), params={"limit": 100}, timeout=8).json()["trades"]
+    except Exception:  # noqa: BLE001
+        return
+    seen = {tuple(x) for x in o["seen"]}
+    new = []
+    for x in reversed(rows):                                    # oldest first
+        if x.get("program", "pump") != "pump":
+            continue
+        k = [int(x["slotIndexId"][:12]), iso_ts(x["timestamp"]), x["userAddress"], x["type"] == "buy"]
+        if k[0] < o["last_slot"] or tuple(k) in seen:
+            continue
+        new.append((k, float(x["baseAmount"])))
+    if len(new) >= 100:
+        o["bal"] = None                                         # more than one page since the last read: book broken
+        return
+    for k, tok in new:
+        o["bal"][k[2]] = o["bal"].get(k[2], 0.0) + (tok if k[3] else -tok)
+        o["seen"].append(k)
+        o["last_slot"] = max(o["last_slot"], k[0])
+    o["seen"] = o["seen"][-200:]
+    o["holders"] = sum(1 for v in o["bal"].values() if v > 1)
+    o["h_max"] = max(o["h_max"], o["holders"])
 
 
 def summary():

@@ -16,7 +16,7 @@ from .paths import DATA_DIR
 from .ui_theme import THEME, nav
 from .research.full_trades import ts as iso_ts
 
-BOTS = ("m1", "m2", "m3")
+BOTS = ("m1", "m2", "m3", "m4")
 CACHE = DATA_DIR / "m1" / "chart_cache"
 CANDLES = "https://swap-api.pump.fun/v2/coins/{}/candles"
 TRADES = "https://swap-api.pump.fun/v2/coins/{}/trades"
@@ -194,7 +194,7 @@ tr.row{cursor:pointer}tr.row:hover{background:#1d212b}tr.sel{background:#22283a}
 @media (max-width:900px){main{grid-template-columns:1fr;height:auto}#list{max-height:35vh}#stage{grid-template-columns:1fr;height:auto}#wrap{height:55vh}#side{max-height:40vh}}
 </style></head><body>""" + nav("trades", "Click a trade, then press Play (space)") + r"""
 <header class="filters">
-<select id="bot"><option value="">all bots</option><option>m1</option><option>m2</option><option>m3</option></select>
+<select id="bot"><option value="">all bots</option><option>m1</option><option>m2</option><option>m3</option><option>m4</option></select>
 <select id="res"><option value="">all results</option><option value="w">wins</option><option value="l">losses</option><option value="o">open</option></select>
 <input id="q" placeholder="search name" size="14"><span id="sum" class="mute"></span></header>
 <main><div id="list"><table><thead><tr><th>time</th><th>bot</th><th>coin</th><th>sc</th><th>exit</th><th>ret</th></tr></thead><tbody id="rows"></tbody></table></div>
