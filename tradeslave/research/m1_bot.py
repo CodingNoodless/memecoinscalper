@@ -26,10 +26,12 @@ TX_SOL per transaction.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import math
 import os
 import re
+import sqlite3
 import statistics
 import sys
 import threading
@@ -136,11 +138,17 @@ def jlog(path, row):
         fh.write(json.dumps(row) + "\n")
 
 
+SHARED = DATA_DIR / "llm_scores.sqlite"   # infra v2 (2026-10-21 22:50): bots with the same prompt share one answer
+
+
 class Llm:
     def __init__(self):
         self.key = os.environ.get("GEMINI_API_KEY") or self._env("GEMINI_API_KEY")
         self.name = "+".join(m for m, _ in GEMINI) if self.key else f"ollama:{OLLAMA_MODEL}"
         self.used, self.fails, self.calls = None, defaultdict(int), defaultdict(int)   # calls: (PT date, model) -> n
+        self.cool = {}                                          # model -> unix time its per-minute 429 cools off
+        self.db = sqlite3.connect(SHARED, timeout=30, check_same_thread=False, isolation_level=None)
+        self.db.execute("CREATE TABLE IF NOT EXISTS s (h TEXT PRIMARY KEY, t REAL, model TEXT, out TEXT)")
 
     @staticmethod
     def _env(k):
@@ -153,6 +161,27 @@ class Llm:
         return None
 
     def score(self, text):
+        """Identical prompts (M1 and M2 see the same coins with the same prompt) are scored once: the first bot claims
+        the prompt, the others wait up to 20 s for its answer instead of spending the shared Gemini quota again."""
+        h = hashlib.sha1(text.encode("utf-8")).hexdigest()
+        try:
+            if self.db.execute("INSERT OR IGNORE INTO s VALUES (?, ?, NULL, NULL)", (h, time.time())).rowcount == 0:
+                for _ in range(40):
+                    row = self.db.execute("SELECT model, out FROM s WHERE h = ?", (h,)).fetchone()
+                    if row and row[1]:
+                        self.used = row[0]
+                        return self._parse(row[1])
+                    time.sleep(0.5)
+        except sqlite3.Error:
+            pass
+        return self._score(text)
+
+    def _parse(self, out):
+        d = json.loads(out[out.find("{"):out.rfind("}") + 1])
+        return int(d.get("score", 0)), d.get("criterion"), str(d.get("why", ""))[:200], bool(d.get("improves"))
+
+    def _score(self, text):
+        h = hashlib.sha1(text.encode("utf-8")).hexdigest()
         try:
             out = None
             if self.key:
@@ -163,15 +192,19 @@ class Llm:
                     "model": OLLAMA_MODEL, "prompt": text, "stream": False, "format": "json",
                     "options": {"temperature": 0}})
                 out = r.json()["response"]
-            d = json.loads(out[out.find("{"):out.rfind("}") + 1])
-            return int(d.get("score", 0)), d.get("criterion"), str(d.get("why", ""))[:200], bool(d.get("improves"))
+            res = self._parse(out)
+            try:
+                self.db.execute("UPDATE s SET model = ?, out = ? WHERE h = ?", (self.used, out, h))
+            except sqlite3.Error:
+                pass
+            return res
         except Exception as exc:  # noqa: BLE001 - unscored = no buy
             return None, None, f"llm error: {type(exc).__name__}", False
 
     def _gemini(self, text):
         day = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 7 * 3600))
         for model, budget in GEMINI:
-            if self.calls[(day, model)] >= budget:
+            if self.calls[(day, model)] >= budget or self.cool.get(model, 0) > time.time():
                 continue
             self.calls[(day, model)] += 1
             try:
@@ -184,8 +217,10 @@ class Llm:
                     self.used = model
                     return r.json()["candidates"][0]["content"]["parts"][0]["text"]
                 self.fails[(model, r.status_code)] += 1
-                if r.status_code == 429:                        # quota hit early: spend the rest of the day on the next
+                if r.status_code == 429 and "PerDay" in r.text:   # daily quota gone: the next model for the rest of the day
                     self.calls[(day, model)] = budget
+                elif r.status_code == 429:                      # per-minute limit (infra v2): back off 2 min, not all day
+                    self.cool[model] = time.time() + 120
             except (requests.RequestException, KeyError, IndexError, ValueError) as exc:
                 self.fails[(model, type(exc).__name__)] += 1
         return None
@@ -449,9 +484,14 @@ def run():
     def intake(c):
         if not c["m"].endswith("pump") or c.get("mh"):
             return
-        try:
-            meta = s.get(c["uri"], timeout=6).json() if c.get("uri") else {}
-        except Exception:  # noqa: BLE001
+        meta = None
+        for k in range(3):                       # infra v2: one failed fetch used to drop the coin silently (Remi Collet)
+            try:
+                meta = s.get(c["uri"], timeout=6).json() if c.get("uri") else {}
+                break
+            except Exception:  # noqa: BLE001
+                time.sleep(1 + k)
+        if meta is None:
             return
         link = next((str(meta[k]) for k in ("twitter", "website", "telegram") if LINK.match(str(meta.get(k) or ""))),
                     None)
