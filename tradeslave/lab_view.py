@@ -91,6 +91,7 @@ def stats(v: list[float]) -> dict:
                 t=m / sd * math.sqrt(len(v)) if sd else 0.0, best=max(v), worst=min(v))
 
 
+M4_FROM = time.mktime(time.strptime("2026-10-22 15:01", "%Y-%m-%d %H:%M"))   # M4 start: M1 over the same hours
 FRESH_FROM = time.mktime(time.strptime("2026-10-21 09:20", "%Y-%m-%d %H:%M"))   # = M2 start, so M1 vs M2 compare   # fresh daytime count (Rohit)
 
 
@@ -134,6 +135,8 @@ def m1(variant: str = "m1") -> dict:
         exits=Counter(r["exit"] for r in trades), open=status.get("open", []),
         status={k: status.get(k) for k in ("t", "llm", "calls", "fails", "watching", "sol_usd")},
         rides=sum(1 for r in trades if r.get("half_at")),
+        ex2=round(sum(sorted(r["ret"] for r in trades)[:-2]) * 0.1, 4) if len(trades) > 2 else None,
+        fresh4=stats([r["ret"] for r in trades if r["t"] >= M4_FROM]),
         recent=[dict(t=r["t"], m=r["m"], name=r.get("name"), score=r.get("score"), exit=r["exit"], ret=r["ret"],
                      narr=(r.get("nkey") or key.get(r["m"], ""))[-6:],
                      mc=r.get("mc"), held=round((r["t_exit"] - r["t"]) / 60, 1)) for r in trades[-25:]][::-1],

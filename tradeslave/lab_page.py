@@ -45,6 +45,10 @@ a.coin{color:var(--ink)}a.coin:hover{color:var(--acc)}
 <div class="grid"><div><div class="lbl">Recent trades</div><div id="m2t" class="scroll"></div></div><div><div class="lbl">Funnel, last 24 h</div><div id="m2f" class="scroll"></div></div></div></div></details>
 <details class="card"><summary><span class="chev">&#9654;</span><b>M3 details</b><span class="mute small">M2 + dead-coin and dev filters, real-cause scoring, rides runners</span></summary><div class="body">
 <div class="grid"><div><div class="lbl">Recent trades</div><div id="m3t" class="scroll"></div></div><div><div class="lbl">Funnel, last 24 h</div><div id="m3f" class="scroll"></div></div></div></div></details>
+<details class="card" open><summary><span class="chev">&#9654;</span><b>M4 details</b><span class="mute small">M1 + TF fixes: watchlist until 20 holders, sell when holders fall 10%, skip buying a top &middot; forward paper test from Oct 22 15:01</span></summary><div class="body">
+<div class="grid"><div><div class="lbl">Open positions (holders now / max since buy)</div><div id="m4o"></div><div class="lbl" style="margin-top:14px">Exit reasons</div><div id="m4x"></div></div>
+<div><div class="lbl">Verdict bar</div><div id="m4v"></div></div></div>
+<div class="grid"><div><div class="lbl">Recent trades &middot; click a coin to replay it</div><div id="m4t" class="scroll"></div></div><div><div class="lbl">Funnel, last 24 h (watch = waiting for 20 holders)</div><div id="m4f" class="scroll"></div></div></div></div></details>
 <section class="grid"><div class="card"><h2>Running jobs</h2><div id="jobs" class="scroll"></div></div>
 <div class="card"><h2>Kalshi paper bots</h2><div id="kal"></div><h2 style="margin-top:18px">C1 recorder</h2><div id="c1"></div></div></section>
 <section class="card"><h2>Experiments <span class="mute small" id="exn" style="text-transform:none;letter-spacing:0"></span></h2><div id="exp" class="scroll" style="max-height:560px"></div></section>
@@ -89,7 +93,13 @@ async function tick(){let d;try{d=await (await fetch("/api/lab",{cache:"no-store
   `<span class="small">${r.bought?'<b class="pos">bought</b>':r.check?esc(r.check):r.score>=7?(r.after&&!r.improves?"skipped: copy":"waiting for $4&ndash;7k"):"&mdash;"}</span>`]));
  $("m2t").innerHTML=table(["Time","Coin","Score","Exit","Return","Held"],m2.recent.map(r=>trow("m2",r)));
  $("m3t").innerHTML=table(["Time","Coin","Score","Exit","Return","Held"],m3.recent.map(r=>trow("m3",r)));
- $("m2f").innerHTML=funnel(m2.funnel);$("m3f").innerHTML=funnel(m3.funnel);
+ $("m2f").innerHTML=funnel(m2.funnel);$("m3f").innerHTML=funnel(m3.funnel);$("m4f").innerHTML=funnel(m4.funnel);
+ $("m4t").innerHTML=table(["Time","Coin","Score","Exit","Return","Held"],m4.recent.map(r=>trow("m4",r)));
+ $("m4o").innerHTML=table(["Coin","Score","Entry","Now","Holders","Since"],m4.open.map(o=>[esc(o.name),o.score,"$"+(o.mc||0).toLocaleString(),pct(o.ret_now),o.holders!=null?o.holders+" / "+o.h_max:DASH,ago(o.t)]));
+ $("m4x").innerHTML=table(["Exit","Trades"],Object.entries(m4.exits).sort((a,b)=>b[1]-a[1]).map(([k,v])=>[esc(k)+(k=="HDECL"?' <span class="mute small">holders fell 10%</span>':""),v]));
+ const s4=m4.stats,vs=(m.fresh4||{});
+ $("m4v").innerHTML=table(["Test","Now","Bar"],[["Trades",s4.n||0,"60 (or Nov 1)"],["Mean / trade",s4.n?pct(s4.mean):DASH,"&ge; +5%"],["t-stat",s4.n>1?s4.t.toFixed(2):DASH,"&ge; 3"],
+  ["P&amp;L without best 2",m4.ex2!=null?(m4.ex2>=0?"+":"")+m4.ex2.toFixed(3)+" SOL":DASH,"&gt; 0"],["M1 over the same hours",vs.n?pct(vs.mean)+` (${vs.n})`:DASH,"M4 must beat it"]]);
  $("jobs").innerHTML=table(["Job","Status","Last line"],d.jobs.map(j=>[`<b>${esc(j.name)}</b><div class="mute small">${esc(j.desc)}</div>`,
   `<span class="pill ${j.status}">${j.status}</span><div class="mute small">${j.age_min==null?"":j.age_min<90?j.age_min+" min":(j.age_min/60).toFixed(1)+" h"}</div>`,`<code>${esc(j.last)}</code>`]));
  $("kal").innerHTML=table(["Bot","Hours","Rewards","Settled","Net","Open"],d.kalshi.map(k=>[k.name,k.hours,"$"+k.rewards.toFixed(2),

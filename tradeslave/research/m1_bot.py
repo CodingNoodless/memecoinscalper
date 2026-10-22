@@ -608,7 +608,8 @@ def run():
                                         "fails": {str(k): n for k, n in llm.fails.items()},
                                         "watching": len(watch), "scored": len(scored),
                                         "open": [{k: o.get(k) for k in ("m", "name", "score", "t", "p0", "last", "peak",
-                                                                        "stop", "mc")} for o in opened.values()]}))
+                                                                        "stop", "mc", "holders", "h_max")}
+                                                 for o in opened.values()]}))
         except OSError:
             pass
         if time.time() - last_note > 600:
