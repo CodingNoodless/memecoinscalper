@@ -59,6 +59,8 @@ MC_MIN, VOL_MIN, MC_BUY, MC_HIGH = 4000.0, 1500.0, (4000.0, 7000.0), 10000.0   #
                                                                          # up to 10k if the narrative is really good
 SCORE_MIN, SCORE_HIGH = 7, 9
 GEMINI = (("gemini-3.8-flash", 9_000), ("gemini-3.5-flash-lite", 140_000))   # (model, daily budget): free-tier RPD
+DAY_CAP, EVENING = 1500, 17                     # infra v3: before 17:00 PT each bot spends at most 1,500 flash calls,
+                                                 # so the shared 9k quota lasts through Rohit's 17-24 test hours
                                                  # 10k / 150k (Rohit's AI Studio limits, 2026-10-21); resets at midnight PT
 TP, STOP, TREND_ARM, TREND_GIVE, STALL_S, STALL_ACT, MAX_HOLD = 2.0, 0.70, 1.30, 0.80, 120, 0.50, 600
 HI_ARM, HI_GIVE, HI_DEAD, HI_HOLD = 1.50, 0.60, 0.20, 7200
@@ -147,6 +149,13 @@ class Llm:
         self.name = "+".join(m for m, _ in GEMINI) if self.key else f"ollama:{OLLAMA_MODEL}"
         self.used, self.fails, self.calls = None, defaultdict(int), defaultdict(int)   # calls: (PT date, model) -> n
         self.cool = {}                                          # model -> unix time its per-minute 429 cools off
+        day = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 7 * 3600))
+        t0 = time.mktime(time.strptime(day, "%Y-%m-%d"))
+        for line in CANDS.open(encoding="utf-8") if CANDS.exists() else ():   # a restart keeps today's count
+            if '"model"' in line:
+                r = json.loads(line)
+                if r.get("t", 0) >= t0 and r.get("model"):
+                    self.calls[(day, r["model"])] += 1
         self.db = sqlite3.connect(SHARED, timeout=30, check_same_thread=False, isolation_level=None)
         self.db.execute("CREATE TABLE IF NOT EXISTS s (h TEXT PRIMARY KEY, t REAL, model TEXT, out TEXT)")
 
@@ -204,6 +213,8 @@ class Llm:
     def _gemini(self, text):
         day = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 7 * 3600))
         for model, budget in GEMINI:
+            if model == GEMINI[0][0] and time.localtime().tm_hour < EVENING and self.calls[(day, model)] >= DAY_CAP:
+                continue
             if self.calls[(day, model)] >= budget or self.cool.get(model, 0) > time.time():
                 continue
             self.calls[(day, model)] += 1
