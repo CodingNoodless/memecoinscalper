@@ -59,6 +59,12 @@ a.coin{color:var(--ink)}a.coin:hover{color:var(--acc)}
 <div><div class="lbl">Verdict bar (judged once at 50 m6-v2 trades or Nov 1)</div><div id="m6v"></div></div></div>
 <div class="grid"><div><div class="lbl">Recent trades &middot; click a coin to replay it</div><div id="m6t" class="scroll"></div></div>
 <div><div class="lbl">Recent funding checks (largest same-funder share of the top-20)</div><div id="m6e" class="scroll"></div></div></div></div></details>
+<details class="card" open><summary><span class="chev">&#9654;</span><b>M7 vs M8 details</b><span class="mute small">same m6-v3 entries (M6 cluster skip + skip creators whose funder funded an earlier creator) &middot; M7 stop &minus;30%, M8 stop &minus;10% &middot; 1 s polls &middot; forward paper test from Oct 23 16:00, judged once at &ge; 60 trades each</span></summary><div class="body">
+<div class="grid"><div><div class="lbl">Entry checks (M5 buy signals since 16:00)</div><div id="m78c"></div><div class="lbl" style="margin-top:14px">Open positions</div><div id="m78o"></div><div class="lbl" style="margin-top:14px">Exit reasons</div><div id="m78x"></div></div>
+<div><div class="lbl">Side by side (same hours) &middot; verdict bars</div><div id="m78v"></div></div></div>
+<div class="grid"><div><div class="lbl">Same coin, both bots &middot; the cleanest stop comparison</div><div id="m78p" class="scroll"></div></div>
+<div><div class="lbl">Recent trades &middot; click a coin to replay it</div><div id="m78t" class="scroll"></div></div></div>
+<div class="lbl" style="margin-top:14px">Recent entry decisions (cluster = largest same-funder share of the top-20; serial = earlier creators this funder funded)</div><div id="m78d" class="scroll"></div></div></details>
 <section class="grid"><div class="card"><h2>Running jobs</h2><div id="jobs" class="scroll"></div></div>
 <div class="card"><h2>Kalshi paper bots</h2><div id="kal"></div><h2 style="margin-top:18px">C1 recorder</h2><div id="c1"></div></div></section>
 <section class="card"><h2>Experiments <span class="mute small" id="exn" style="text-transform:none;letter-spacing:0"></span></h2><div id="exp" class="scroll" style="max-height:560px"></div></section>
@@ -132,6 +138,30 @@ async function tick(){let d;try{d=await (await fetch("/api/lab",{cache:"no-store
  $("m6v").innerHTML=table(["Test","M6","Bar"],[["Trades",s6.n||0,"50 (or Nov 1)"],["Mean / trade",s6.n?pct(s6.mean):DASH,m5same.n?"&ge; M5 same hours + 5 pts ("+pct(m5same.mean)+", "+m5same.n+")":"M5 same hours + 5 pts"],
   ["Share &le; &minus;25%",m6.deep!=null?pct(m6.deep):DASH,v6.m5_deep!=null?"&lt; M5 same hours ("+pct(v6.m5_deep)+")":"&lt; M5 same hours"],["t-stat",s6.n>1?s6.t.toFixed(2):DASH,"report only"],
   ["P&amp;L without best 2",m6.ex2!=null?(m6.ex2>=0?"+":"")+m6.ex2.toFixed(3)+" SOL":DASH,"&gt; 0"]]);
+ const z_q=d.m78||{m7:{},m8:{},m5:{},m6:{},checks:{},decisions:[],pairs:[],recent:[],open:[]},z_c78=z_q.checks||{},z_B={m7:"M7",m8:"M8"};
+ const z_DEC={bought:'<b class="pos">bought</b>',cluster:'<span class="neg">skip: cluster</span>',serial:'<span class="neg">skip: serial funder</span>',lookup:'<span class="neg">skip: lookup failed</span>',other:'<span class="mute">skip</span>'};
+ $("m78c").innerHTML=table(["Measure","Count"],[["M5 buy signals checked",z_c78.signals??0],["Bought (both bots)",z_c78.bought??0],["Skipped: funding cluster &ge; 15%",z_c78.cluster??0],["Skipped: serial-funder creator",z_c78.serial??0],["Skipped: funder lookup failed",z_c78.lookup??0]]);
+ $("m78o").innerHTML=table(["Bot","Coin","Entry","Now","Stop","Holders","Since"],(z_q.open||[]).map(o=>[z_B[o.bot],esc(o.name),"$"+(o.mc||0).toLocaleString(),pct(o.ret_now),o.stop!=null?pct(o.stop-1,0):DASH,o.holders!=null?o.holders+" / "+o.h_max:DASH,ago(o.t)]));
+ const z_xk=[...new Set([...Object.keys(z_q.m7.exits||{}),...Object.keys(z_q.m8.exits||{})])];
+ $("m78x").innerHTML=table(["Exit","M7","M8"],z_xk.map(k=>[esc(k),(z_q.m7.exits||{})[k]||0,(z_q.m8.exits||{})[k]||0]));
+ const z_f=(s,k,fn)=>s&&s.n?fn(s[k]):DASH,z_P=x=>pct(x),z_S=x=>x==null?DASH:(x>=0?"+":"")+x.toFixed(3)+" SOL",z_N=x=>x==null?DASH:(100*x).toFixed(0)+"%";
+ const z_M7=z_q.m7,z_M8=z_q.m8,z_M5=z_q.m5,z_M6=z_q.m6;
+ $("m78v").innerHTML=table(["Measure","M7 (&minus;30%)","M8 (&minus;10%)","M5","M6","Bar"],[
+  ["Trades",z_M7.n||0,z_M8.n||0,z_M5.n||0,z_M6.n||0,"&ge; 60 each (or Nov 1)"],
+  ["Mean / trade",z_f(z_M7,"mean",z_P),z_f(z_M8,"mean",z_P),z_f(z_M5,"mean",z_P),z_f(z_M6,"mean",z_P),"M7: &gt; 0, &ge; M5 + 3 pts, &ge; M6"],
+  ["Share &le; &minus;25%",z_f(z_M7,"deep",z_N),z_f(z_M8,"deep",z_N),z_f(z_M5,"deep",z_N),z_f(z_M6,"deep",z_N),"M8 adopted if lower than M7&hellip;"],
+  ["Mean gap M8 &minus; M7",DASH,z_M7.n&&z_M8.n?pct(z_M8.mean-z_M7.mean):DASH,DASH,DASH,"&hellip;and within 2 pts of M7"],
+  ["Median",z_f(z_M7,"median",z_P),z_f(z_M8,"median",z_P),z_f(z_M5,"median",z_P),z_f(z_M6,"median",z_P),"report only"],
+  ["Win rate",z_f(z_M7,"win",z_N),z_f(z_M8,"win",z_N),z_f(z_M5,"win",z_N),z_f(z_M6,"win",z_N),"report only"],
+  ["Worst trade",z_f(z_M7,"worst",z_P),z_f(z_M8,"worst",z_P),z_f(z_M5,"worst",z_P),z_f(z_M6,"worst",z_P),"report only"],
+  ["Spread (sd)",z_f(z_M7,"sd",z_N),z_f(z_M8,"sd",z_N),z_f(z_M5,"sd",z_N),z_f(z_M6,"sd",z_N),"report only"],
+  ["P&amp;L (0.1 SOL / trade)",z_f(z_M7,"sol",z_S),z_f(z_M8,"sol",z_S),z_f(z_M5,"sol",z_S),z_f(z_M6,"sol",z_S),"report only"],
+  ["P&amp;L without best 2",z_S(z_M7.ex2),z_S(z_M8.ex2),z_S(z_M5.ex2),z_S(z_M6.ex2),"report only"]]);
+ $("m78p").innerHTML=(z_q.pairs&&z_q.pairs.length?`<div class="small mute" style="padding:4px 0 8px">${z_q.pairs.length} coins in both &middot; mean M8 &minus; M7 ${pct(z_q.pair_diff)}</div>`:"")+
+  table(["Time","Coin","M7 exit","M7","M8 exit","M8","M8 &minus; M7"],(z_q.pairs||[]).map(r=>[tm(r.t),`<a class="coin" href="/trades#m7|${esc(r.m)}">${esc(r.name)}</a>`,esc(r.x7),pct(r.r7),esc(r.x8),pct(r.r8),pct(r.r8-r.r7)]));
+ $("m78t").innerHTML=table(["Bot","Time","Coin","Exit","Return","Held"],(z_q.recent||[]).map(r=>{const c=trow(r.bot,r);return [z_B[r.bot],c[0],c[1],c[3],c[4],c[5]]}));
+ $("m78d").innerHTML=table(["Time","Coin","Market cap","Cluster","Serial","Decision"],(z_q.decisions||[]).map(r=>[tm(r.t),esc((r.name||r.m.slice(0,6)).slice(0,22)),r.mc?"$"+r.mc.toLocaleString():DASH,
+  r.cluster!=null?`<b class="${r.cluster>=0.15?"neg":"mute"}">${(r.cluster*100).toFixed(0)}%</b>`:DASH,r.serial!=null?(r.serial>=1?`<b class="neg">${r.serial}</b>`:"0"):DASH,z_DEC[r.decision]||esc(r.decision)]));
  $("m4t").innerHTML=table(["Time","Coin","Score","Exit","Return","Held"],m4.recent.map(r=>trow("m4",r)));
  $("m4o").innerHTML=table(["Coin","Score","Entry","Now","Holders","Since"],m4.open.map(o=>[esc(o.name),o.score,"$"+(o.mc||0).toLocaleString(),pct(o.ret_now),o.holders!=null?o.holders+" / "+o.h_max:DASH,ago(o.t)]));
  $("m4x").innerHTML=table(["Exit","Trades"],Object.entries(m4.exits).sort((a,b)=>b[1]-a[1]).map(([k,v])=>[esc(k)+(k=="HDECL"?' <span class="mute small">holders fell 10%</span>':""),v]));

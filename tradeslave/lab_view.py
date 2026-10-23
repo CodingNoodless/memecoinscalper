@@ -147,6 +147,65 @@ def m6_view(cands: list[dict]) -> dict:
                 m5_deep=(sum(x <= -0.25 for x in same) / len(same)) if same else None)
 
 
+
+M78_FROM = time.mktime(time.strptime("2026-10-23 16:00", "%Y-%m-%d %H:%M"))   # M7 / M8 start (m6-v3 entries, 1 s polls)
+
+
+def m78_view() -> dict:
+    """M7 vs M8 side by side: same m6-v3 entries, stop -30% vs -10% (vault "2026-10-23 M7 vs M8 forward test")."""
+    def load(v):
+        try:
+            return [r for r in jsonl(DATA_DIR / v / "trades.jsonl") if r["t"] >= M78_FROM]
+        except OSError:
+            return []
+
+    tr = {v: load(v) for v in ("m5", "m6", "m7", "m8")}
+
+    def card(v):
+        rs = [r["ret"] for r in tr[v]]
+        st = stats(rs)
+        st.update(deep=(sum(x <= -0.25 for x in rs) / len(rs)) if rs else None,
+                  sd=statistics.pstdev(rs) if len(rs) > 1 else None, sol=round(sum(rs) * 0.1, 4),
+                  ex2=round(sum(sorted(rs)[:-2]) * 0.1, 4) if len(rs) > 2 else None,
+                  exits=Counter(r["exit"] for r in tr[v]))
+        return st
+
+    try:
+        cands = jsonl(DATA_DIR / "m7" / "cands.jsonl")
+    except OSError:
+        cands = []
+    names = {c["m"]: c.get("name") for c in cands if c.get("name")}
+    for v in ("m7", "m8"):
+        names.update({r["m"]: r.get("name") for r in tr[v]})
+    ev = [c for c in cands if c.get("stage") == "m5" and c["t"] >= M78_FROM and ("m6_cluster" in c or "M6 skip" in str(c.get("why")))]
+
+    def reason(c):
+        w = str(c.get("why") or "")
+        return ("bought" if c.get("buy") else "cluster" if "funding cluster" in w else "serial" if "M7 skip: creator's" in w
+                else "lookup" if "lookup failed" in w else "other")
+    why = Counter(reason(c) for c in ev)
+    decisions = [dict(t=c["t"], m=c["m"], name=names.get(c["m"]), cluster=c.get("m6_cluster"), serial=c.get("m7_serial"),
+                      decision=reason(c), mc=c.get("mc")) for c in ev[-40:]][::-1]
+    by8 = {r["m"]: r for r in tr["m8"]}
+    pairs = [dict(t=r["t"], m=r["m"], name=r.get("name"), r7=r["ret"], x7=r["exit"], r8=by8[r["m"]]["ret"], x8=by8[r["m"]]["exit"])
+             for r in tr["m7"] if r["m"] in by8][::-1]
+    recent = sorted([dict(bot=v, t=r["t"], m=r["m"], name=r.get("name"), score=r.get("score"), exit=r["exit"], ret=r["ret"],
+                          mc=r.get("mc"), held=round((r["t_exit"] - r["t"]) / 60, 1)) for v in ("m7", "m8") for r in tr[v]],
+                    key=lambda x: -x["t"])[:30]
+    opened = []
+    for v in ("m7", "m8"):
+        try:
+            st = json.loads((DATA_DIR / v / "status.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for o in st.get("open", []):
+            opened.append(dict(bot=v, name=o.get("name"), mc=o.get("mc"), t=o.get("t"), holders=o.get("holders"),
+                               h_max=o.get("h_max"), stop=o.get("stop"),
+                               ret_now=(o["last"] / o["p0"] - 1) if o.get("last") and o.get("p0") else None))
+    return dict(since=M78_FROM, m7=card("m7"), m8=card("m8"), m5=card("m5"), m6=card("m6"), checks=dict(
+                signals=len(ev), **why), decisions=decisions, pairs=pairs,
+                pair_diff=statistics.mean(p["r8"] - p["r7"] for p in pairs) if pairs else None, recent=recent, open=opened)
+
 def m1(variant: str = "m1") -> dict:
     d = DATA_DIR / variant
     trades = jsonl(d / "trades.jsonl")
@@ -255,6 +314,6 @@ def experiments() -> dict:
 
 
 def build_lab_snapshot() -> dict:
-    return dict(t=time.time(), jobs=jobs(), m1=m1(), m2=m1("m2"), m3=m1("m3"), m4=m1("m4"), m5=m1("m5"), m6=m1("m6"), m7=m1("m7"), m8=m1("m8"), c1=c1(), kalshi=kalshi(), experiments=experiments())
+    return dict(t=time.time(), jobs=jobs(), m1=m1(), m2=m1("m2"), m3=m1("m3"), m4=m1("m4"), m5=m1("m5"), m6=m1("m6"), m7=m1("m7"), m8=m1("m8"), m78=m78_view(), c1=c1(), kalshi=kalshi(), experiments=experiments())
 
 
