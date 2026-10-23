@@ -123,6 +123,25 @@ def m5_view(cands: list[dict]) -> dict:
                 near=sum(1 for r in rows if P and r["p"] >= 0.8 * P), recent=rows[:40])
 
 
+M6V2_FROM = time.mktime(time.strptime("2026-10-23 13:03", "%Y-%m-%d %H:%M"))   # m6-v2 (funding-cluster skip) start
+
+
+def m6_view(cands: list[dict]) -> dict:
+    """M6's funding checks: every M5 buy signal M6 looked up, with its cluster share and whether it bought."""
+    names = {c["m"]: c.get("name") for c in cands if "score" in c}
+    ev = [c for c in cands if c.get("stage") == "m5" and "m6_cluster" in c and c["t"] >= M6V2_FROM]
+    rows = [dict(t=c["t"], m=c["m"], name=names.get(c["m"]), cluster=c["m6_cluster"], creator=c.get("m6_creator"),
+                 fresh=c.get("m6_fresh"), buy=bool(c.get("buy")), mc=c.get("mc")) for c in ev]
+    try:
+        m5 = jsonl(DATA_DIR / "m5" / "trades.jsonl")
+    except OSError:
+        m5 = []
+    same = [r["ret"] for r in m5 if r["t"] >= M6V2_FROM]
+    return dict(checked=len(rows), bought=sum(r["buy"] for r in rows), skipped=sum(not r["buy"] for r in rows),
+                recent=sorted(rows, key=lambda r: -r["t"])[:40], m5_same=stats(same),
+                m5_deep=(sum(x <= -0.25 for x in same) / len(same)) if same else None)
+
+
 def m1(variant: str = "m1") -> dict:
     d = DATA_DIR / variant
     trades = jsonl(d / "trades.jsonl")
@@ -167,6 +186,8 @@ def m1(variant: str = "m1") -> dict:
         fresh4=stats([r["ret"] for r in trades if r["t"] >= M4_FROM]),
         fresh5=stats([r["ret"] for r in trades if r["t"] >= M5_FROM]),
         m5=m5_view(cands) if variant in ("m5", "m6") else None,
+        m6=m6_view(cands) if variant == "m6" else None,
+        deep=(sum(r["ret"] <= -0.25 for r in trades) / len(trades)) if trades else None,
         recent=[dict(t=r["t"], m=r["m"], name=r.get("name"), score=r.get("score"), exit=r["exit"], ret=r["ret"],
                      narr=(r.get("nkey") or key.get(r["m"], ""))[-6:],
                      mc=r.get("mc"), held=round((r["t_exit"] - r["t"]) / 60, 1)) for r in trades[-25:]][::-1],

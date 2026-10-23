@@ -54,6 +54,11 @@ a.coin{color:var(--ink)}a.coin:hover{color:var(--acc)}
 <div><div class="lbl">Verdict bar</div><div id="m5v"></div></div></div>
 <div class="grid"><div><div class="lbl">Recent trades &middot; click a coin to replay it</div><div id="m5t" class="scroll"></div></div>
 <div><div class="lbl">Coins the model evaluated (best runner probability so far)</div><div id="m5e" class="scroll"></div></div></div></div></details>
+<details class="card" open><summary><span class="chev">&#9654;</span><b>M6 details</b><span class="mute small">M5 v1 + funding-cluster skip: no buy when one funder controls &ge; 15% of the top-20 holders (Helius funding lookups) &middot; m6-v2 forward paper test from Oct 23 13:03 (FL backtest failed narrowly; this is its clean test)</span></summary><div class="body">
+<div class="grid"><div><div class="lbl">Funding checks (M5 buy signals M6 looked up)</div><div id="m6s"></div><div class="lbl" style="margin-top:14px">Open positions</div><div id="m6o"></div><div class="lbl" style="margin-top:14px">Exit reasons</div><div id="m6x"></div></div>
+<div><div class="lbl">Verdict bar (judged once at 50 m6-v2 trades or Nov 1)</div><div id="m6v"></div></div></div>
+<div class="grid"><div><div class="lbl">Recent trades &middot; click a coin to replay it</div><div id="m6t" class="scroll"></div></div>
+<div><div class="lbl">Recent funding checks (largest same-funder share of the top-20)</div><div id="m6e" class="scroll"></div></div></div></div></details>
 <section class="grid"><div class="card"><h2>Running jobs</h2><div id="jobs" class="scroll"></div></div>
 <div class="card"><h2>Kalshi paper bots</h2><div id="kal"></div><h2 style="margin-top:18px">C1 recorder</h2><div id="c1"></div></div></section>
 <section class="card"><h2>Experiments <span class="mute small" id="exn" style="text-transform:none;letter-spacing:0"></span></h2><div id="exp" class="scroll" style="max-height:560px"></div></section>
@@ -114,6 +119,17 @@ async function tick(){let d;try{d=await (await fetch("/api/lab",{cache:"no-store
  const s5=m5.stats,vs5=(m.fresh5||{});
  $("m5v").innerHTML=table(["Test","Now","Bar"],[["Trades",s5.n||0,"60 (or Nov 1)"],["Mean / trade",s5.n?pct(s5.mean):DASH,"&ge; +5%"],["t-stat",s5.n>1?s5.t.toFixed(2):DASH,"&ge; 3"],
   ["P&amp;L without best 2",m5.ex2!=null?(m5.ex2>=0?"+":"")+m5.ex2.toFixed(3)+" SOL":DASH,"&gt; 0"],["M1 over the same hours",vs5.n?pct(vs5.mean)+` (${vs5.n})`:DASH,"M5 must beat M1&ndash;M4"]]);
+ const m6=d.m6||{stats:{},recent:[],open:[],exits:{}},v6=m6.m6||{},s6=m6.stats||{},ms=v6.m5_same||{};
+ $("m6s").innerHTML=table(["Measure","Value"],[["Rule","skip if one funder holds &ge; 15% of the top-20"],["Signals checked",v6.checked??0],["Bought",v6.bought??0],["Skipped (funding cluster)",v6.skipped??0],["Rules",esc(Object.keys(m6.by_rules||{}).join(", ")||"m6-v2")]]);
+ $("m6e").innerHTML=table(["Time","Coin","Cluster","Creator-linked","Fresh","Decision"],(v6.recent||[]).map(r=>[tm(r.t),`<a class="coin" href="/watch">${esc((r.name||r.m.slice(0,6)).slice(0,22))}</a>`,
+  `<b class="${r.cluster>=0.15?"neg":"mute"}">${(r.cluster*100).toFixed(0)}%</b>`,r.creator!=null?(r.creator*100).toFixed(0)+"%":DASH,r.fresh!=null?(r.fresh*100).toFixed(0)+"%":DASH,
+  r.buy?'<b class="pos">bought</b>':'<span class="neg">skipped</span>']));
+ $("m6t").innerHTML=table(["Time","Coin","Score","Exit","Return","Held"],(m6.recent||[]).map(r=>trow("m6",r)));
+ $("m6o").innerHTML=table(["Coin","Entry","Now","Holders","Since"],(m6.open||[]).map(o=>[esc(o.name),"$"+(o.mc||0).toLocaleString(),pct(o.ret_now),o.holders!=null?o.holders+" / "+o.h_max:DASH,ago(o.t)]));
+ $("m6x").innerHTML=table(["Exit","Trades"],Object.entries(m6.exits||{}).sort((a,b)=>b[1]-a[1]).map(([k,v])=>[esc(k),v]));
+ $("m6v").innerHTML=table(["Test","M6","Bar"],[["Trades",s6.n||0,"50 (or Nov 1)"],["Mean / trade",s6.n?pct(s6.mean):DASH,ms.n?"&ge; M5 same hours + 5 pts ("+pct(ms.mean)+", "+ms.n+")":"M5 same hours + 5 pts"],
+  ["Share &le; &minus;25%",m6.deep!=null?pct(m6.deep):DASH,v6.m5_deep!=null?"&lt; M5 same hours ("+pct(v6.m5_deep)+")":"&lt; M5 same hours"],["t-stat",s6.n>1?s6.t.toFixed(2):DASH,"report only"],
+  ["P&amp;L without best 2",m6.ex2!=null?(m6.ex2>=0?"+":"")+m6.ex2.toFixed(3)+" SOL":DASH,"&gt; 0"]]);
  $("m4t").innerHTML=table(["Time","Coin","Score","Exit","Return","Held"],m4.recent.map(r=>trow("m4",r)));
  $("m4o").innerHTML=table(["Coin","Score","Entry","Now","Holders","Since"],m4.open.map(o=>[esc(o.name),o.score,"$"+(o.mc||0).toLocaleString(),pct(o.ret_now),o.holders!=null?o.holders+" / "+o.h_max:DASH,ago(o.t)]));
  $("m4x").innerHTML=table(["Exit","Trades"],Object.entries(m4.exits).sort((a,b)=>b[1]-a[1]).map(([k,v])=>[esc(k)+(k=="HDECL"?' <span class="mute small">holders fell 10%</span>':""),v]));
