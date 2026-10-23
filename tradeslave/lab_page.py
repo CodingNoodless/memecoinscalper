@@ -119,7 +119,7 @@ async function tick(){let d;try{d=await (await fetch("/api/lab",{cache:"no-store
  const s5=m5.stats,vs5=(m.fresh5||{});
  $("m5v").innerHTML=table(["Test","Now","Bar"],[["Trades",s5.n||0,"60 (or Nov 1)"],["Mean / trade",s5.n?pct(s5.mean):DASH,"&ge; +5%"],["t-stat",s5.n>1?s5.t.toFixed(2):DASH,"&ge; 3"],
   ["P&amp;L without best 2",m5.ex2!=null?(m5.ex2>=0?"+":"")+m5.ex2.toFixed(3)+" SOL":DASH,"&gt; 0"],["M1 over the same hours",vs5.n?pct(vs5.mean)+` (${vs5.n})`:DASH,"M5 must beat M1&ndash;M4"]]);
- const m6=d.m6||{stats:{},recent:[],open:[],exits:{}},v6=m6.m6||{},s6=m6.stats||{},ms=v6.m5_same||{};
+ const m6=d.m6||{stats:{},recent:[],open:[],exits:{}},v6=m6.m6||{},s6=m6.stats||{},m5same=v6.m5_same||{};
  $("m6s").innerHTML=table(["Measure","Value"],[["Rule","skip if one funder holds &ge; 15% of the top-20"],["Signals checked",v6.checked??0],["Bought",v6.bought??0],["Skipped (funding cluster)",v6.skipped??0],["Rules",esc(Object.keys(m6.by_rules||{}).join(", ")||"m6-v2")]]);
  $("m6e").innerHTML=table(["Time","Coin","Cluster","Creator-linked","Fresh","Decision"],(v6.recent||[]).map(r=>[tm(r.t),`<a class="coin" href="/watch">${esc((r.name||r.m.slice(0,6)).slice(0,22))}</a>`,
   `<b class="${r.cluster>=0.15?"neg":"mute"}">${(r.cluster*100).toFixed(0)}%</b>`,r.creator!=null?(r.creator*100).toFixed(0)+"%":DASH,r.fresh!=null?(r.fresh*100).toFixed(0)+"%":DASH,
@@ -127,7 +127,7 @@ async function tick(){let d;try{d=await (await fetch("/api/lab",{cache:"no-store
  $("m6t").innerHTML=table(["Time","Coin","Score","Exit","Return","Held"],(m6.recent||[]).map(r=>trow("m6",r)));
  $("m6o").innerHTML=table(["Coin","Entry","Now","Holders","Since"],(m6.open||[]).map(o=>[esc(o.name),"$"+(o.mc||0).toLocaleString(),pct(o.ret_now),o.holders!=null?o.holders+" / "+o.h_max:DASH,ago(o.t)]));
  $("m6x").innerHTML=table(["Exit","Trades"],Object.entries(m6.exits||{}).sort((a,b)=>b[1]-a[1]).map(([k,v])=>[esc(k),v]));
- $("m6v").innerHTML=table(["Test","M6","Bar"],[["Trades",s6.n||0,"50 (or Nov 1)"],["Mean / trade",s6.n?pct(s6.mean):DASH,ms.n?"&ge; M5 same hours + 5 pts ("+pct(ms.mean)+", "+ms.n+")":"M5 same hours + 5 pts"],
+ $("m6v").innerHTML=table(["Test","M6","Bar"],[["Trades",s6.n||0,"50 (or Nov 1)"],["Mean / trade",s6.n?pct(s6.mean):DASH,m5same.n?"&ge; M5 same hours + 5 pts ("+pct(m5same.mean)+", "+m5same.n+")":"M5 same hours + 5 pts"],
   ["Share &le; &minus;25%",m6.deep!=null?pct(m6.deep):DASH,v6.m5_deep!=null?"&lt; M5 same hours ("+pct(v6.m5_deep)+")":"&lt; M5 same hours"],["t-stat",s6.n>1?s6.t.toFixed(2):DASH,"report only"],
   ["P&amp;L without best 2",m6.ex2!=null?(m6.ex2>=0?"+":"")+m6.ex2.toFixed(3)+" SOL":DASH,"&gt; 0"]]);
  $("m4t").innerHTML=table(["Time","Coin","Score","Exit","Return","Held"],m4.recent.map(r=>trow("m4",r)));
