@@ -133,6 +133,10 @@ LINEAGE = [
     ("The path to profitability", "Max profit and max 25% loss - what the vault says"),
     ("Max profit and max 25% loss - what the vault says", "M6 proposals (m6-v3)"),
     ("2026-10-22 fade exits (FX)", "2026-10-23 exit anatomy - max loss and max profit (XA)"),
+    ("2026-10-23 exit anatomy - max loss and max profit (XA)", "2026-10-23 M7 vs M8 forward test (m6-v3 entries, two exit sets)"),
+    ("M6 proposals (m6-v3)", "2026-10-23 M7 vs M8 forward test (m6-v3 entries, two exit sets)"),
+    ("Max profit and max 25% loss - what the vault says", "2026-10-23 M7 vs M8 forward test (m6-v3 entries, two exit sets)"),
+    ("2026-10-23 M6 bad-buy filters (M6)", "2026-10-23 M7 vs M8 forward test (m6-v3 entries, two exit sets)"),
     ("Rug avoidance research (R4-R5)", "Research synthesis R7 - avoiding the deep losses"),
     ("Research synthesis R7 - avoiding the deep losses", "Research R7 - source digest (S468-S789)"),
     ("Research synthesis R7 - avoiding the deep losses", "2026-10-23 coordinated-exit and serial-funder tests (CX)"),
@@ -160,7 +164,17 @@ def body(text):
 
 
 def links(text):
-    return {l.split("|")[0].split("#")[0].strip() for l in re.findall(r"\[\[([^\]]+)\]\]", text)}
+    return {l.split("|")[0].split("#")[0].rstrip("\\").strip() for l in re.findall(r"\[\[([^\]]+)\]\]", text)}
+
+
+def escape_table_links(text):
+    """In a table row an unescaped | inside [[note|alias]] splits the cell and Obsidian loses the link."""
+    out = []
+    for line in text.split("\n"):
+        if line.lstrip().startswith("|"):
+            line = re.sub(r"\[\[([^\]]*?)(?<!\\)\|([^\]]*?)\]\]", r"[[\1\\|\2]]", line)
+        out.append(line)
+    return "\n".join(out)
 
 
 def issue_notes():
@@ -188,9 +202,9 @@ def verdicts():
     """Experiment note -> its row's verdict (last column of Experiments.md)."""
     out = {}
     for line in (VAULT / "Experiments" / "Experiments.md").read_text(encoding="utf-8").splitlines():
-        m = re.match(r"^\|.*?\[\[([^\]|]+)(?:\|[^\]]*)?\]\].*\|\s*([^|]+?)\s*\|\s*$", line)
+        m = re.match(r"^\|.*?\[\[([^\]|]+)(?:\|[^\]]*)?\]\].*(?<!\\)\|\s*([^|]+?)\s*\|\s*$", line)
         if m:
-            out.setdefault(m.group(1).strip(), re.sub(r"\[\[([^\]|]+)(\|[^\]]*)?\]\]", r"\1", m.group(2))[:160])
+            out.setdefault(m.group(1).rstrip("\\").strip(), re.sub(r"\[\[([^\]|]+)(\|[^\]]*)?\]\]", r"\1", m.group(2))[:160])
     return out
 
 
@@ -235,16 +249,11 @@ def main() -> None:
                     edges[n].add(m_)
                     edges[m_].add(n)
 
-    def related(n, k=8):
-        sc = {}
-        for m_ in notes:
-            if m_ == n or kind(m_) == "theme" and kind(n) == "theme":
-                continue
-            shared = set(tops[n]) & set(tops[m_])
-            s = sum(math.log(len(notes) / freq[x]) for x in shared) + (4 if m_ in edges[n] else 0)
-            if len(shared) >= 2 or m_ in edges[n]:
-                sc[m_] = s
-        return [m_ for m_, _ in sorted(sc.items(), key=lambda x: -x[1])[:k]]
+    for n in notes:                                             # notes no keyword places inherit their links' topics
+        if not tops[n]:
+            co = Counter(x for m_ in edges[n] if kind(m_) != "note" or len(edges[m_]) < 60 for x in tops.get(m_, []))
+            tops[n] = [x for x, _ in co.most_common(2)]
+    freq = Counter(k for v in tops.values() for k in v)
 
     # research sources (Research/Runner research/Sources): topics from their text and their theme links
     srcs = {p.stem: p for p in SRC_DIR.glob("S*.md")}
@@ -301,6 +310,21 @@ def main() -> None:
         return (f"- **Trades ({len(ts)} link here):** "
                 + ", ".join(f"[[{CAT_NOTE.get(c, c)}|{c.replace('_', ' ')}]] {v}" for c, v in cats.most_common())
                 + " · e.g. " + ", ".join(f"[[{t}]]" for t in pick))
+
+    GROUPS = [("Experiments", {"Experiments"}, 5), ("Strategies and ideas", {"Strategies", "note"}, 4),
+              ("Known issues", {"issue"}, 3), ("Research notes and themes", {"Runner research", "theme"}, 3),
+              ("Sessions, project and reviews", {"Sessions", "Project", "Reviews", "Codebase", "Data & Infra"}, 3)]
+
+    def pick(n, kinds, k):
+        sc = {}
+        for m_ in notes:
+            if m_ == n or kind(m_) not in kinds or (kind(m_) == "theme" and kind(n) == "theme"):
+                continue
+            shared = set(tops[n]) & set(tops[m_])
+            s_ = sum(math.log(len(notes) / freq[x]) for x in shared) + (6 if m_ in edges[n] else 0)
+            if shared or m_ in edges[n]:
+                sc[m_] = s_
+        return [m_ for m_, _ in sorted(sc.items(), key=lambda x: (-x[1], x[0]))[:k]]
 
     vd = verdicts()
     md = VAULT / "Map"
@@ -362,14 +386,10 @@ def main() -> None:
         raw = p.read_text(encoding="utf-8", errors="ignore")
         blk = [START, "## Connections (auto map)",
                "- **Topics:** " + (", ".join(f"[[Map - {k}]]" for k in tops[n]) or "none") + " · [[Memecoin bot knowledge map]]"]
-        rel = related(n)
-        for g in ("Experiments", "Strategies", "issue", "theme"):
-            xs = [m_ for m_ in rel if kind(m_) == g]
+        for g, kinds, k in GROUPS:                              # every kind of note gets its own picks
+            xs = pick(n, kinds, k)
             if xs:
-                blk.append(f"- **{label.get(g, g)}:** " + ", ".join(f"[[{m_}]]" for m_ in xs))
-        rest = [m_ for m_ in rel if kind(m_) not in ("Experiments", "Strategies", "issue", "theme")]
-        if rest:
-            blk.append("- **Also related:** " + ", ".join(f"[[{m_}]]" for m_ in rest))
+                blk.append(f"- **{g}:** " + ", ".join(f"[[{m_}]]" for m_ in xs))
         if kind(n) == "theme":
             ex = [m_ for m_ in by_topic.get(next(iter(k for k, v in TOPICS.items() if n in v[2]), ""), [])
                   if kind(m_) == "Experiments"]
@@ -427,6 +447,16 @@ def main() -> None:
         else:
             raw = raw.rstrip("\n") + "\n\n" + block + "\n"
         p.write_text(raw, encoding="utf-8")
+    fixed = 0
+    for p in VAULT.rglob("*.md"):                               # last: table links Obsidian can read
+        if ".obsidian" in p.parts:
+            continue
+        t = p.read_text(encoding="utf-8", errors="ignore")
+        t2 = escape_table_links(t)
+        if t2 != t:
+            p.write_text(t2, encoding="utf-8")
+            fixed += 1
+    print(f"table links escaped in {fixed} notes")
     print(f"{len(notes)} notes, {len(srcs)} sources, {len(issues)} issue notes, {len(TOPICS)} topics; topic sizes:",
           {k: len(v) for k, v in by_topic.items()})
 
