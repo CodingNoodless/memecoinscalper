@@ -115,6 +115,30 @@ LINEAGE = [
     ("2026-10-15 wallet signal, launch sniping, market heat", "G - Selective launch sniping"),
     ("2026-10-14 money flows, copy trading, graduations", "B - Smart-wallet copy"),
     ("2026-10-21 post-graduation dip spec (PGD0)", "C - Migration trades"),
+    ("2026-10-22 M5 runner bot (M5)", "2026-10-23 M6 bad-buy filters (M6)"),
+    ("The path to profitability", "The path to profitability - evidence"),
+    ("The path to profitability - evidence", "2026-10-23 M6 bad-buy filters (M6)"),
+    ("The path to profitability", "Rug avoidance research (R4-R5)"),
+    ("Rug avoidance research (R4-R5)", "2026-10-23 coin age gate (AG)"),
+    ("Rug avoidance research (R4-R5)", "2026-10-23 funding links (FL)"),
+    ("Rug avoidance research (R4-R5)", "2026-10-23 BOOST window (BW)"),
+    ("2026-10-23 M6 bad-buy filters (M6)", "2026-10-23 coin age gate (AG)"),
+    ("2026-10-23 sniper overhang test (OH)", "2026-10-23 M6 bad-buy filters (M6)"),
+    ("2026-10-23 creator dump veto (CV)", "2026-10-23 funding links (FL)"),
+    ("2026-10-21 post-graduation dip spec (PGD0)", "2026-10-23 BOOST window (BW)"),
+    ("C - Migration trades", "2026-10-23 BOOST window (BW)"),
+    ("Rug avoidance research (R4-R5)", "Runner research hub"),
+    ("Brainstorm(running on 0 sleep)", "F - Autopilot (self-learning)"),
+    ("Brainstorm(running on 0 sleep)", "2026-10-18 learned exits (U)"),
+    ("Brainstorm(running on 0 sleep)", "2026-10-22 M5 runner bot (M5)"),
+    ("Brainstorm(running on 0 sleep)", "2026-10-15 autopilot v3 first cycles"),
+    ("trading bot", "Home"),
+    ("trading bot", "Path to 1k (2026-10-19)"),
+    ("trading bot", "Profit plan v2"),
+    ("trading bot", "Idea bank 2026-10-19"),
+    ("trading bot", "2026-10-21 M1 automated manual process"),
+    ("Idea bank 2026-10-19", "Path to 1k (2026-10-19)"),
+    ("notes on m5 trades", "The path to profitability"),
 ]
 
 
@@ -174,7 +198,8 @@ def main() -> None:
     for n, t in text.items():
         words = max(200, len(t.split()))
         hits = {k: len(re.findall(rx, t, re.I)) + 5 * len(re.findall(rx, n, re.I)) for k, (_, rx, _) in TOPICS.items()}
-        dens = {k: v / words * 1000 for k, v in hits.items() if v >= 3}
+        need = 3 if len(t.split()) >= 300 else 1                 # short notes (Rohit's ideas) still get topics
+        dens = {k: v / words * 1000 for k, v in hits.items() if v >= need}
         tops[n] = [k for k, _ in sorted(dens.items(), key=lambda x: -x[1])[:5]]
         if n in themes:
             tops[n] = sorted({k for k, v in TOPICS.items() if n in v[2]} | set(tops[n][:2]))
@@ -231,7 +256,38 @@ def main() -> None:
                 if v > 0 and len(set(n_tops) & set(pool[m_])) >= need][:k]
 
     note_src = {n: best(tops[n], stops, 8, need=2 if len(tops[n]) > 2 else 1) for n in notes
-                if kind(n) in ("Experiments", "Strategies", "issue", "Sessions", "note")}
+                if kind(n) in ("Experiments", "Strategies", "issue", "Sessions", "note", "Project", "Reviews",
+                               "Runner research", "Data & Infra", "Codebase")}
+
+    # trades (Trades/<bot>/*.md, written by trade_notes) -> the notes they link, so every note can link back
+    trades = {p.stem: p for p in (VAULT / "Trades").glob("M*/*.md")}
+    tcat, tret, cited = {}, {}, defaultdict(list)
+    for tn, p in trades.items():
+        tt = p.read_text(encoding="utf-8", errors="ignore")
+        m_ = re.search(r"^category: (\w+)", tt, re.M)
+        r_ = re.search(r"^ret: (-?[\d.]+)", tt, re.M)
+        tcat[tn], tret[tn] = (m_.group(1) if m_ else "?"), (float(r_.group(1)) if r_ else 0.0)
+        for lk in links(tt):
+            cited[lk].append(tn)
+    CAT_NOTE = {"win_big": "Trades - Win, 2x or more", "win": "Trades - Win", "gave_back": "Trades - Gave back a gain",
+                "rug_gap": "Trades - Rug gap", "shaken_out": "Trades - Shaken out", "cut_winner": "Trades - Cut a winner",
+                "instant_dump": "Trades - Instant dump", "slow_bleed": "Trades - Slow bleed"}
+    TOPIC_DP = defaultdict(list)                                  # topic -> data-point notes
+    for d, ts in dtops.items():
+        for k in ts:
+            TOPIC_DP[k].append(d)
+
+    def trade_line(n, k=6):
+        """'Trades: N cite this (category counts) · examples' for a note that trades link to, else None."""
+        ts = cited.get(n, [])
+        if not ts:
+            return None
+        cats = Counter(tcat[t] for t in ts)
+        ex = sorted(ts, key=lambda t: tret[t])
+        pick = list(dict.fromkeys(ex[:k // 2] + ex[::-1][:k - k // 2]))   # worst and best examples
+        return (f"- **Trades ({len(ts)} link here):** "
+                + ", ".join(f"[[{CAT_NOTE.get(c, c)}|{c.replace('_', ' ')}]] {v}" for c, v in cats.most_common())
+                + " · e.g. " + ", ".join(f"[[{t}]]" for t in pick))
 
     vd = verdicts()
     md = VAULT / "Map"
@@ -258,6 +314,11 @@ def main() -> None:
             lines.append(f"## {label.get(g, g)}")
             for n in sorted(groups[g]):
                 lines.append(f"- [[{n}]]" + (f": {vd[n]}" if n in vd else ""))
+            lines.append("")
+        if TOPIC_DP.get(k):
+            lines.append("## Trade data points")
+            lines += [f"- [[{d}]]" for d in sorted(TOPIC_DP[k])]
+            lines.append("- All trades: [[Trades index]]")
             lines.append("")
         ss = sorted(s for s, ts in stops.items() if k in ts)
         if ss:
@@ -303,6 +364,12 @@ def main() -> None:
                 blk.append("- **Our experiments on this theme:** " + ", ".join(f"[[{m_}]]" for m_ in sorted(ex)))
         if note_src.get(n):
             blk.append("- **Research sources:** " + ", ".join(f"[[{s}|{s[:4]}]]" for s in note_src[n]))
+        dp = sorted({d for k in tops[n] for d in TOPIC_DP.get(k, [])})[:5]
+        if dp and kind(n) != "theme":
+            blk.append("- **Trade data points:** " + ", ".join(f"[[{d}]]" for d in dp) + " · [[Trades index]]")
+        tl = trade_line(n)
+        if tl:
+            blk.append(tl)
         blk.append(END)
         block = "\n".join(blk)
         if START in raw:
@@ -336,6 +403,9 @@ def main() -> None:
             blk.append("- **Notes that cite this topic:** " + ", ".join(f"[[{n}]]" for n in other))
         if sib:
             blk.append("- **Related sources:** " + ", ".join(f"[[{x}|{x[:4]}]]" for x in sib))
+        tl = trade_line(s)
+        if tl:
+            blk.append(tl.replace("link here", "cite this source"))
         blk.append(END)
         block = "\n".join(blk)
         raw = p.read_text(encoding="utf-8", errors="ignore")

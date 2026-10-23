@@ -33,7 +33,15 @@ BOTS = {
     "m3": ("M3", ["2026-10-21 M3 post-mortem fixes", "2026-10-21 M1 automated manual process"], "notes on m1m2m3 trades"),
     "m4": ("M4", ["2026-10-22 M4 variants backtest (MV)", "2026-10-22 Rohit M4 notes (TF3)"], "Notes on M4 trades"),
     "m5": ("M5", ["2026-10-22 M5 runner bot (M5)", "2026-10-23 M5 entry redesign (ER)"], "notes on m5 trades"),
+    "m6": ("M6", ["2026-10-23 M6 bad-buy filters (M6)", "2026-10-22 M5 runner bot (M5)"], "The path to profitability"),
 }
+# Rohit's idea / brainstorm notes and research write-ups each outcome category speaks to
+IDEAS = {"rug_gap": ["The path to profitability", "The path to profitability - evidence", "Rug avoidance research (R4-R5)"],
+         "instant_dump": ["The path to profitability", "Rug avoidance research (R4-R5)", "Brainstorm(running on 0 sleep)"],
+         "slow_bleed": ["Brainstorm(running on 0 sleep)", "trading bot"],
+         "gave_back": ["trading bot", "Idea bank 2026-10-19"], "shaken_out": ["Idea bank 2026-10-19"],
+         "cut_winner": ["Idea bank 2026-10-19"], "win": ["trading bot", "Path to 1k (2026-10-19)"],
+         "win_big": ["Path to 1k (2026-10-19)", "Brainstorm(running on 0 sleep)"]}
 CATS = {   # category: (title, what it means, experiments, research themes, issue keywords)
     "win_big": ("Win, 2x or more", "The coin ran and the bot sold into it.",
                 ["2026-10-22 what separates runners (RN)"], ["Exits and profit-taking"], []),
@@ -42,15 +50,18 @@ CATS = {   # category: (title, what it means, experiments, research themes, issu
                   ["2026-10-22 fade exits (FX)", "2026-10-22 trade forensics and fix sweep (TF)"],
                   ["Exits and profit-taking"], []),
     "rug_gap": ("Rug gap", "The stop filled far below its level: one or a few sells took the price through it.",
-                ["2026-10-23 creator dump veto (CV)", "2026-10-23 buy quality and big-holder dumps (BQ)"],
-                ["Bots, snipers and bundles", "Dev and creator behaviour"], ["Issue 01", "Issue 36"]),
+                ["2026-10-23 creator dump veto (CV)", "2026-10-23 buy quality and big-holder dumps (BQ)",
+                 "2026-10-23 M6 bad-buy filters (M6)", "2026-10-23 funding links (FL)", "2026-10-23 coin age gate (AG)"],
+                ["Bots, snipers and bundles", "Dev and creator behaviour"], ["Issue 01", "Issue 14", "Issue 36"]),
     "shaken_out": ("Shaken out", "Stopped out, then the coin went to 2x of our entry within 15 min.",
                    ["2026-10-22 trade forensics and fix sweep (TF)"], ["Exits and profit-taking"], []),
     "cut_winner": ("Cut a winner", "A non-stop exit sold, then the coin went to 2x of our entry within 15 min.",
                    ["2026-10-22 trade forensics and fix sweep (TF)", "2026-10-22 M4 variants backtest (MV)"],
                    ["Exits and profit-taking"], []),
     "instant_dump": ("Instant dump", "Never got 5% above entry: we bought the top of the move.",
-                     ["2026-10-23 sniper overhang test (OH)", "2026-10-23 M5 entry redesign (ER)"],
+                     ["2026-10-23 sniper overhang test (OH)", "2026-10-23 M5 entry redesign (ER)",
+                      "2026-10-23 M6 bad-buy filters (M6)", "2026-10-23 coin age gate (AG)",
+                      "2026-10-23 funding links (FL)"],
                      ["Entries", "Bots, snipers and bundles"], ["Issue 36"]),
     "slow_bleed": ("Slow bleed", "Rose a little, never 30%, drifted down to an exit.",
                    ["2026-10-22 trade patterns (TF2)", "2026-10-22 fade exits (FX)"],
@@ -364,13 +375,15 @@ DIMS = {
                            r"follower|influencer|\bKOL|tweet", ["2026-10-22 narrative coins and blind labels (NC, LB)"]),
     "Holders at entry": ("Wallets holding more than 1 token when we bought.",
                          lambda a, r: (a.get("h_entry", r.get("holders")), b_hold(a.get("h_entry", r.get("holders")))),
-                         r"holders?\b", ["2026-10-22 what separates runners (RN)", "2026-10-22 Rohit M4 notes (TF3)"]),
+                         r"holders?\b", ["2026-10-22 what separates runners (RN)", "2026-10-22 Rohit M4 notes (TF3)",
+                                          "2026-10-23 M6 bad-buy filters (M6)"]),
     "Holder trend before entry": ("Holders at entry vs the most the coin had before entry.", _holder_trend,
                                   r"dying|holders.{0,30}(drop|fall|leav|sell)|exit liquidity",
                                   ["2026-10-22 Rohit M4 notes (TF3)", "2026-10-22 M4 variants backtest (MV)"]),
     "Run-up before entry": ("Lowest price in the 10 min before entry, as a fraction of our entry price.", _runup,
                             r"\bdip|pullback|top.?blast|chas|fomo|vertical|exit liquidity",
-                            ["2026-10-23 M5 entry redesign (ER)", "2026-10-21 entry timing and evening review"]),
+                            ["2026-10-23 M5 entry redesign (ER)", "2026-10-21 entry timing and evening review",
+                             "2026-10-23 coin age gate (AG)"]),
     "Market cap at entry": ("Market cap in USD when we bought.", lambda a, r: (a.get("mc"), b_mc(a.get("mc"))),
                             r"market cap|\bmc\b|migration", ["2026-10-22 trade patterns (TF2)"]),
     "Hour of entry": ("Pacific time of the buy.",
@@ -379,13 +392,16 @@ DIMS = {
                       ["2026-10-21 entry timing and evening review", "2026-10-22 evening missed runners (MR)"]),
     "First buyers out before entry": ("How many of the first 5 buyers (creator excluded) had sold out before our "
                                       "entry.", _top5, r"early buyers|first buyers|sniper|insider",
-                                      ["2026-10-23 sniper overhang test (OH)", "2026-10-22 Rohit M4 notes (TF3)"]),
+                                      ["2026-10-23 sniper overhang test (OH)", "2026-10-22 Rohit M4 notes (TF3)",
+                                       "2026-10-23 M6 bad-buy filters (M6)", "2026-10-23 funding links (FL)"]),
     "Create-slot buyers": ("Wallets that bought in the coin's create slot (bundle sign; M1–M4 checks).", _slot,
                            r"bundl|same block|create.?slot|jito",
-                           ["2026-10-21 M2 rug-filtered M1", "2026-10-23 sniper overhang test (OH)"]),
+                           ["2026-10-21 M2 rug-filtered M1", "2026-10-23 sniper overhang test (OH)",
+                            "2026-10-23 funding links (FL)"]),
     "Biggest seller while held": ("Who made the largest single sell while we held.", _seller,
                                   r"dev.?sell|creator|dump|bundl|rug",
-                                  ["2026-10-23 creator dump veto (CV)", "2026-10-23 buy quality and big-holder dumps (BQ)"]),
+                                  ["2026-10-23 creator dump veto (CV)", "2026-10-23 buy quality and big-holder dumps (BQ)",
+                                   "2026-10-23 funding links (FL)"]),
     "Sell vs buy flow while held": ("SOL sold vs SOL bought by everyone else while we held.", _flow,
                                     r"sell pressure|buy.?sell|net flow|volume",
                                     ["2026-10-23 buy quality and big-holder dumps (BQ)", "2026-10-22 fade exits (FX)"]),
@@ -545,7 +561,10 @@ def main() -> None:
                 i = txt.lower().find(x["name"].lower())
                 md.append(f"- In [[{f}]]: “{txt[i:i + 450].strip()}…”")
         others = [o for o in by_mint[x["m"]] if o != nm]
-        dexps = list(dict.fromkeys(e for k in it["dims"] for e in DIMS[k][3]))
+        # only the experiments behind this trade's telling data points (range mean <= -5% for a loss, >= +5% for a win)
+        tell = [k for k, (v, b) in it["dims"].items()
+                if (bin_mean[(k, b)] <= -0.05 if x["ret"] <= 0 else bin_mean[(k, b)] >= 0.05)]
+        dexps = list(dict.fromkeys(e for k in tell for e in DIMS[k][3])) or ["2026-10-22 trade patterns (TF2)"]
         md += ["", "## Links",
                "- **Bot experiments:** " + ", ".join(f"[[{e}]]" for e in bot_exps) + f" · Rohit: [[{bot_note}]]",
                "- **Why-category experiments:** " + ", ".join(f"[[{e}]]" for e in exps),
@@ -554,6 +573,7 @@ def main() -> None:
                "- **Map:** " + ", ".join(f"[[{m_}]]" for m_ in sorted(mlinks | {"Map - Paper bots M1-M5"}))]
         if ilinks:
             md.append("- **Known issues:** " + ", ".join(f"[[{i}]]" for i in ilinks))
+        md.append("- **Ideas and write-ups:** " + ", ".join(f"[[{n}]]" for n in IDEAS[cat]))
         if others:
             md.append("- **Same coin, other trades:** " + ", ".join(f"[[{o}]]" for o in others))
         d = OUT / label
