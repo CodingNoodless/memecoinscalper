@@ -30,6 +30,8 @@ JOBS = [
      "M5 v1, but skips the buy when one funder controls >= 15% of the top-20 holders (Helius funding lookups); m6-v2 from 13:10"),
     ("M7 = m6-v3, M5 exits", "paper bot", "m7_bot.out", 15,
      "M6 + skip when the creator's funder funded an earlier creator; stop -30% (side by side with M8)"),
+    ("M9 = M5 or M1 entries, loss controls", "paper bot", "m9_bot.out", 15,
+     "M5's runner signal or M1's narrative signal; cluster + serial-funder skips; M5 exits with a -10% stop, 1 s polls"),
     ("M8 = M7 twin book, -10% stop", "paper bot", "m7_bot.out", 15,
      "Runs inside the M7 process (m8-v2): same fills and polls as M7, -10% stop instead of -30% (max-loss test, vault XA)"),
     ("Live trade feed", "data feed", "live_feed.log", 15,
@@ -261,6 +263,10 @@ def m1(variant: str = "m1") -> dict:
         m5=m5_view(cands) if variant in ("m5", "m6", "m7", "m8") else None,
         m6=m6_view(cands) if variant in ("m6", "m7", "m8") else None,
         deep=(sum(r["ret"] <= -0.25 for r in trades) / len(trades)) if trades else None,
+        by_src={k: dict(stats([r["ret"] for r in trades if r.get("src9") == k]),
+                        two_x=(sum(1 for r in trades if r.get("src9") == k and r.get("peak", 0) >= 2 * r["p0"])
+                               / max(1, sum(1 for r in trades if r.get("src9") == k))))
+                for k in ("m5", "m1")} if variant == "m9" else None,
         recent=[dict(t=r["t"], m=r["m"], name=r.get("name"), score=r.get("score"), exit=r["exit"], ret=r["ret"],
                      narr=(r.get("nkey") or key.get(r["m"], ""))[-6:],
                      mc=r.get("mc"), held=round((r["t_exit"] - r["t"]) / 60, 1)) for r in trades[-25:]][::-1],
@@ -323,6 +329,6 @@ def experiments() -> dict:
 
 
 def build_lab_snapshot() -> dict:
-    return dict(t=time.time(), jobs=jobs(), m1=m1(), m2=m1("m2"), m3=m1("m3"), m4=m1("m4"), m5=m1("m5"), m6=m1("m6"), m7=m1("m7"), m8=m1("m8"), m78=m78_view(), c1=c1(), kalshi=kalshi(), experiments=experiments())
+    return dict(t=time.time(), jobs=jobs(), m1=m1(), m2=m1("m2"), m3=m1("m3"), m4=m1("m4"), m5=m1("m5"), m6=m1("m6"), m7=m1("m7"), m8=m1("m8"), m9=m1("m9"), m78=m78_view(), c1=c1(), kalshi=kalshi(), experiments=experiments())
 
 

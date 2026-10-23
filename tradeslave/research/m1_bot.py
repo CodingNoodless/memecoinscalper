@@ -51,12 +51,13 @@ from .full_trades import Pace, ts as iso_ts
 from .live_feed import feed_rows, feed_trades
 from .fl_test import LiveFunding
 
-VARIANT = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] in ("m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8") else "m1"
-M6 = VARIANT in ("m6", "m7", "m8")               # M6 (2026-10-23 17:00): M5 v1 + bad-buy skip filters (see below)
-M7 = VARIANT in ("m7", "m8")                     # M7/M8 (2026-10-23 16:00): m6-v3 entries, side by side with two exit sets
+VARIANT = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] in ("m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9") else "m1"
+M6 = VARIANT in ("m6", "m7", "m8", "m9")             # M6 (2026-10-23 17:00): M5 v1 + bad-buy skip filters (see below)
+M7 = VARIANT in ("m7", "m8", "m9")                   # M7/M8 (2026-10-23 16:00): m6-v3 entries, side by side with two exit sets
 M8 = VARIANT == "m8"
+M9 = VARIANT == "m9"                             # M9 (2026-10-23 16:53): M5 or M1 entries, loss controls (below)
 TWIN = VARIANT == "m7"                           # m8-v2 (16:15): M8 is a second exit book inside M7 on the same fills
-M5 = VARIANT in ("m5", "m6", "m7", "m8")                     # M5 (2026-10-22 23:00): trade only predicted runners (see below)
+M5 = VARIANT in ("m5", "m6", "m7", "m8", "m9")                     # M5 (2026-10-22 23:00): trade only predicted runners (see below)
 M4 = VARIANT == "m4"                             # M4 (2026-10-22 15:10): M1 + the fixes accepted by the TF sweep (see below)
 M3 = VARIANT == "m3"                             # M3 (2026-10-21 16:00): M2 + Rohit's post-mortem changes (see below)
 M2 = VARIANT in ("m2", "m3")                     # M2 (2026-10-21 09:40): M1 + sniper-bag filter, -10% stop, 1 s polls
@@ -73,7 +74,7 @@ DAY_CAP, EVENING = 1500, 17                     # infra v3: before 17:00 PT each
                                                  # 10k / 150k (Rohit's AI Studio limits, 2026-10-21); resets at midnight PT
 TP, STOP, TREND_ARM, TREND_GIVE, STALL_S, STALL_ACT, MAX_HOLD = 2.0, 0.70, 1.30, 0.80, 120, 0.50, 600
 HI_ARM, HI_GIVE, HI_DEAD, HI_HOLD = 1.50, 0.60, 0.20, 7200
-if M2 or M8:
+if M2 or M8 or M9:
     STOP = 0.90                                  # Rohit: losses ~15-20% even when rugged (a -10% stop fills ~-17..-20%)
 SNIP_SLOTS, SNIP_MAX = 2, 8.0                    # M2: wallets buying within 2 slots of the create, % of supply still held
 # M3 (assumptions, not fitted): dead coin = < 15 holders and < 8 new buyers in 2 min; rug = dev holds > 10% or
@@ -119,9 +120,13 @@ SERIAL_SEED = DATA_DIR / "m1" / "serial_seed.json"
 # gap mixed timing noise into the stop effect. M8 now runs inside the M7 process as a twin book: same fill, same polls,
 # only the stop differs (-10%). It writes data/m8/trades.jsonl and data/m8/status.json; `run m8` alone is retired.
 TWIN_STOP, TWIN_DIR, TWIN_RULES = 0.90, DATA_DIR / "m8", "m8-v2+1s"
+# M9 (vault "2026-10-23 M9 design test - M1 + M5 entries with loss controls (M9)", passed 16:52 on 21 kept M1 coins):
+# buy on M5 v1's runner signal OR, when the model doesn't buy, on M1's signal (score >= 7, $4-7k band, M1's checks).
+# Both sources then need the M6 cluster skip and the serial-funder skip (as M7; M1-path checks don't add to the counts,
+# as in the test). Every position uses M5's exits with a -10% stop on 1 s polls (XA L5). Forward test.
 # 1 s polls on every bot from 2026-10-23 16:00 (Rohit: simulate a 1 s delay, not 2-4 s): an exit decided on one poll
 # fills at the next, 1 s later; rules carry "+1s" so the dashboard splits results from before the change.
-RULES = ("m8-v1" if M8 else "m7-v1" if M7 else "m6-v2" if M6 else "m5-v1" if M5 else "m4-v3" if M4 else "m3-v3" if M3 else "m2-v1" if M2 else "exits-v2") + "+1s"                                # bump on every rule change; the dashboard splits results by it
+RULES = ("m9-v1" if M9 else "m8-v1" if M8 else "m7-v1" if M7 else "m6-v2" if M6 else "m5-v1" if M5 else "m4-v3" if M4 else "m3-v3" if M3 else "m2-v1" if M2 else "exits-v2") + "+1s"                                # bump on every rule change; the dashboard splits results by it
 ACT_EVERY = 6.0
 WATCH_S, POLL_S, RECHECK_S = 20 * 60, 1.0, (5 if M4 else 30)
 SIZE_SOL, TX_SOL, MAX_OPEN = 0.1, 0.0005, 5
@@ -543,6 +548,7 @@ def run():
     sol = {"usd": 0.0, "t": 0.0}
     watch, scored, opened = {}, {}, {}           # mint -> create row; mint -> (score, narrative ok, key); mint -> pos
     twins = {}                                   # M7 process only: mint -> M8 twin position (same fill, stop -10%)
+    m1_done = set()                              # M9: coins M1's checks rejected (M5's model can still buy them)
     first = {}                                   # narrative key -> the first coin seen on it (Rohit: prefer the first)
     for r in (json.loads(x) for x in CANDS.open(encoding="utf-8")) if CANDS.exists() else ():
         for k in r.get("nkeys") or []:
@@ -649,6 +655,7 @@ def run():
                 continue
             mc = p * 1e9 * sol["usd"]
             sc, narr_ok, nkey, copy, link = scored.get(m, (None, False, None, False, None))
+            m1path = False                                       # M9: this coin is on M1's entry path this poll
             if M5:
                 if m not in scored:
                     continue
@@ -680,21 +687,26 @@ def run():
                             det5.update(final=True, why=f"M7 skip: creator's funder funded {seen_before} earlier creator(s)")
                 if det5:
                     jlog(CANDS, {"t": time.time(), "m": m, "stage": "m5", "mc": round(mc), "buy": go, **det5})
-                if not go:
+                skipped9 = bool(det5) and str(det5.get("why", "")).startswith(("M6 skip", "M7 skip"))
+                if not go and not (M9 and not skipped9):
                     if det5 and det5.get("final"):
                         done.add(m)
                     continue
-                tr = [(0, r[0], r[4], r[2], r[3], r[5]) for r in rows5]
+                m1path = M9 and not go                           # M9: the model said no; try M1's signal instead
+                if m1path and m in m1_done:
+                    continue
+                if not m1path:
+                    tr = [(0, r[0], r[4], r[2], r[3], r[5]) for r in rows5]
             top = MC_HIGH if (sc or 0) >= SCORE_HIGH else MC_BUY[1]
-            if not M5 and (sc is None or sc < SCORE_MIN or not narr_ok or not (MC_MIN <= mc and MC_BUY[0] <= mc <= top)):
+            if (not M5 or m1path) and (sc is None or sc < SCORE_MIN or not narr_ok or not (MC_MIN <= mc and MC_BUY[0] <= mc <= top)):
                 continue
-            if not M5 and t_loop - last_check[m] < RECHECK_S:
+            if (not M5 or m1path) and t_loop - last_check[m] < RECHECK_S:
                 continue
             last_check[m] = t_loop
             ok, why, det = True, [], {}
-            if not M5:
+            if not M5 or m1path:
                 tr = None
-            src = "feed" if M5 else "swap-api"
+            src = "feed" if M5 and not m1path else "swap-api"
             if M4:                                               # real-time feed; the swap-api list lags
                 tr, full = feed_trades(m)
                 if not full:                                     # feed down, or it missed the create / had a gap
@@ -704,16 +716,35 @@ def run():
                 tr = trades(s, pace, m)
             if not tr:
                 continue
-            if not M5:
+            if not M5 or m1path:
                 ok, why, det = checks(rpc, tr, c.get("dev"), sol["usd"])
             if M3 and copy and det.get("vol_usd", 0) < VOL_COPY and "volume" not in why:
                 ok, why = False, why + ["volume: copy coin < $3k"]
             if M4:
                 det["src"] = src
-            if not M5:
+            if ok and m1path:                                    # M9: M1's signal passed; same skips as the M5 side
+                try:
+                    fl9 = m6_funding.cluster_share(rows5, len(rows5) - 1)
+                    seen9 = serial.check(m6_funding, rows5[0][4], count=False)
+                except Exception as exc:  # noqa: BLE001 - lookup failed: no trade rather than an unchecked one
+                    fl9, seen9 = None, None
+                    why = why + [f"M9 skip: funding lookup failed ({type(exc).__name__})"]
+                det.update(m9_src="m1", m6_cluster=round(fl9["cluster_share"], 3) if fl9 else None, m7_serial=seen9)
+                if fl9 is not None and fl9["cluster_share"] >= M6_CLUSTER:
+                    why = why + [f"M9 skip: funding cluster {fl9['cluster_share']:.0%}"]
+                elif fl9 is not None and seen9 is None:
+                    why = why + ["M9 skip: creator funder lookup failed"]
+                elif fl9 is not None and seen9 >= 1:
+                    why = why + [f"M9 skip: creator's funder funded {seen9} earlier creator(s)"]
+                ok = not why
+            if not M5 or m1path:
                 jlog(CANDS, {"t": time.time(), "m": m, "stage": "checks", "mc": round(mc), "ok": ok, "why": why, **det})
             lastwhy[m] = {"t": time.time(), "why": why, "holders": det.get("holders"), "h_max": det.get("holders_max")}
             if not ok:
+                if m1path and not any(w.startswith("M9 skip") for w in why):
+                    if not any(w.startswith(("volume", "dead", "watch")) for w in why):
+                        m1_done.add(m)                           # M9: M1's checks said no; M5's model may still buy
+                    continue
                 if not any(w.startswith(("volume", "dead", "watch")) for w in why):   # these can change: re-check
                     done.add(m)
                 continue
@@ -725,6 +756,10 @@ def run():
             opened[m] = dict(m=m, name=c.get("name"), score=sc, t=time.time(), p0=price(fresh), q=q, peak=price(fresh),
                              stop=STOP, high=(sc or 0) >= SCORE_HIGH and not M5, bc=bc, rules=RULES, mc=round(mc),
                              sol_usd=sol["usd"], nkey=nkey)
+            if M9:
+                opened[m]["src9"] = "m1" if m1path else "m5"
+                if m1path:                                       # holder book from the feed, as on the M5 side
+                    tr = [(0, r[0], r[4], r[2], r[3], r[5]) for r in rows5]
             if (M4 and tr[0][2] == c.get("dev")) or M5:        # holder book for the holder exit
                 bal = defaultdict(float)
                 for x in tr:
@@ -778,14 +813,16 @@ class SerialFunders:
         src = self.path if self.path.exists() else SERIAL_SEED
         self.seen = defaultdict(int, json.loads(src.read_text()) if src.exists() else {})
 
-    def check(self, funding, creator):
-        """Times the creator's funder was seen before this coin (None if unknown); counts this coin."""
+    def check(self, funding, creator, count=True):
+        """Times the creator's funder was seen before this coin (None if unknown); counts this coin unless count=False."""
         f = (funding.cache.get(creator) or {}).get("funder")
         if not f:
             return None
         if f in self.nonsystem:
             return 0
         n = self.seen[f]
+        if not count:
+            return n
         self.seen[f] += 1
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(self.seen))
