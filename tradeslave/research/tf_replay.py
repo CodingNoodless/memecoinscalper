@@ -28,7 +28,7 @@ SIZE, TX = 0.1, 0.0005
 BASE = dict(tp=2.0, trend_arm=1.3, trend_give=0.8, stall_s=120, stall_act=0.5, max_hold=600,
             hi_arm=1.5, hi_give=0.6, hi_dead=0.2, hi_hold=7200, high=True,
             lock_arm=None, lock_give=None, fade=None, be_arm=None, half15=False, early=None, m1_stop=None,
-            actfade=None, hdecl=None, hflow=None, hgrace=0, nw=None)
+            actfade=None, hdecl=None, hflow=None, hgrace=0, nw=None, ff=None, half_tp=None)
 HORIZON = 900
 
 
@@ -173,10 +173,14 @@ def sim(x, pre, post, P):
             fade = run["sup"] < 0.40 * run["sup_max"] and run["flow"] < 1.0
             pending = ("FADE" if fade else "FLOOR" if r <= run["floor"] else "CRASH" if p <= peak * 0.5 else None)
             continue
+        if P["half_tp"] and not half_done and r >= P["half_tp"]:  # M5 v2: bank half at half_tp
+            cash, qq, half_done = cash + sell_curve(qq / 2, p) - TX, qq / 2, True
         if P["half15"] and not half_done and r >= 1.5:
             cash, qq, half_done = cash + sell_curve(qq / 2, p) - TX, qq / 2, True
         if r <= stop:
             pending = "STOP"
+        elif P["ff"] and held >= P["ff"][0] and r < P["ff"][1] and not half_done:
+            pending = "FAILFAST"                                # M5 v2: still under water after T s
         elif P["be_arm"] and peak >= p0 * P["be_arm"] and r <= 1.0:
             pending = "BE"
         elif P["lock_arm"] and peak >= p0 * P["lock_arm"] and p <= peak * (1 - P["lock_give"]):
