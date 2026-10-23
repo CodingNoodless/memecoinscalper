@@ -28,7 +28,7 @@ SIZE, TX = 0.1, 0.0005
 BASE = dict(tp=2.0, trend_arm=1.3, trend_give=0.8, stall_s=120, stall_act=0.5, max_hold=600,
             hi_arm=1.5, hi_give=0.6, hi_dead=0.2, hi_hold=7200, high=True,
             lock_arm=None, lock_give=None, fade=None, be_arm=None, half15=False, early=None, m1_stop=None,
-            actfade=None, hdecl=None, hflow=None, hgrace=0, nw=None, ff=None, half_tp=None, pstall=None, coord=None, coord_loss=False)
+            actfade=None, hdecl=None, hflow=None, hgrace=0, nw=None, ff=None, half_tp=None, pstall=None, coord=None, coord_loss=False, poll=None)
 HORIZON = 900
 
 
@@ -135,7 +135,7 @@ def coordinated(rows, pre_buyers, k):
 def sim(x, pre, post, P):
     """Replay one trade with exit parameters P. Returns (ret, why, t_exit, peak_x)."""
     v, t0, p0, q = x["v"], x["t"], x["p0"], x["q"]
-    poll = 2.0 if v == "m1" else 1.0
+    poll = P.get("poll") or (2.0 if v == "m1" else 1.0)          # XA: poll override (fill = next poll)
     stop = x.get("stop", 0.7 if v == "m1" else 0.9)
     if v == "m1" and P["m1_stop"]:
         stop = P["m1_stop"]
