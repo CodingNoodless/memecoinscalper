@@ -30,8 +30,8 @@ JOBS = [
      "M5 v1, but skips the buy when one funder controls >= 15% of the top-20 holders (Helius funding lookups); m6-v2 from 13:10"),
     ("M7 = m6-v3, M5 exits", "paper bot", "m7_bot.out", 15,
      "M6 + skip when the creator's funder funded an earlier creator; stop -30% (side by side with M8)"),
-    ("M8 = m6-v3, -10% stop", "paper bot", "m8_bot.out", 15,
-     "Same entries as M7; -10% stop instead of -30% (max-loss test, vault XA)"),
+    ("M8 = M7 twin book, -10% stop", "paper bot", "m7_bot.out", 15,
+     "Runs inside the M7 process (m8-v2): same fills and polls as M7, -10% stop instead of -30% (max-loss test, vault XA)"),
     ("Live trade feed", "data feed", "live_feed.log", 15,
      "Every pump.fun trade from a Helius websocket; real-time trades for the coins the bots watch (data/feed)"),
     ("C1 curve reach model", "forward recorder", "c1_curve.out", 15,
@@ -155,7 +155,8 @@ def m78_view() -> dict:
     """M7 vs M8 side by side: same m6-v3 entries, stop -30% vs -10% (vault "2026-10-23 M7 vs M8 forward test")."""
     def load(v):
         try:
-            return [r for r in jsonl(DATA_DIR / v / "trades.jsonl") if r["t"] >= M78_FROM]
+            rs = [r for r in jsonl(DATA_DIR / v / "trades.jsonl") if r["t"] >= M78_FROM]
+            return [r for r in rs if r.get("rules") == "m8-v2+1s"] if v == "m8" else rs   # m8-v2: twin book in M7
         except OSError:
             return []
 
@@ -202,7 +203,15 @@ def m78_view() -> dict:
             opened.append(dict(bot=v, name=o.get("name"), mc=o.get("mc"), t=o.get("t"), holders=o.get("holders"),
                                h_max=o.get("h_max"), stop=o.get("stop"),
                                ret_now=(o["last"] / o["p0"] - 1) if o.get("last") and o.get("p0") else None))
-    return dict(since=M78_FROM, m7=card("m7"), m8=card("m8"), m5=card("m5"), m6=card("m6"), checks=dict(
+    dec = {c["m"]: reason(c) for c in ev}                       # what the m6-v3 skip did to M5's own trades
+    took = {r["m"]: r for r in tr["m7"]}
+    skip_rows = [dict(t=r["t"], m=r["m"], name=r.get("name"), r5=r["ret"], x5=r["exit"],
+                      decision=dec.get(r["m"], "no signal seen"), r7=(took[r["m"]]["ret"] if r["m"] in took else None))
+                 for r in tr["m5"]][::-1]
+    kept5 = [x["r5"] for x in skip_rows if x["decision"] == "bought"]
+    skipped5 = [x["r5"] for x in skip_rows if x["decision"] in ("cluster", "serial", "lookup")]
+    return dict(since=M78_FROM, m7=card("m7"), m8=card("m8"), m5=card("m5"), m6=card("m6"), skip_rows=skip_rows,
+                kept5=stats(kept5), skipped5=stats(skipped5), checks=dict(
                 signals=len(ev), **why), decisions=decisions, pairs=pairs,
                 pair_diff=statistics.mean(p["r8"] - p["r7"] for p in pairs) if pairs else None, recent=recent, open=opened)
 

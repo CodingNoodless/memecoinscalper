@@ -64,6 +64,7 @@ a.coin{color:var(--ink)}a.coin:hover{color:var(--acc)}
 <div><div class="lbl">Side by side (same hours) &middot; verdict bars</div><div id="m78v"></div></div></div>
 <div class="grid"><div><div class="lbl">Same coin, both bots &middot; the cleanest stop comparison</div><div id="m78p" class="scroll"></div></div>
 <div><div class="lbl">Recent trades &middot; click a coin to replay it</div><div id="m78t" class="scroll"></div></div></div>
+<div class="lbl" style="margin-top:14px">What the m6-v3 skip did &middot; every M5 trade since 16:00 and M7's decision on that coin</div><div id="m78s" class="scroll"></div>
 <div class="lbl" style="margin-top:14px">Recent entry decisions (cluster = largest same-funder share of the top-20; serial = earlier creators this funder funded)</div><div id="m78d" class="scroll"></div></div></details>
 <section class="grid"><div class="card"><h2>Running jobs</h2><div id="jobs" class="scroll"></div></div>
 <div class="card"><h2>Kalshi paper bots</h2><div id="kal"></div><h2 style="margin-top:18px">C1 recorder</h2><div id="c1"></div></div></section>
@@ -95,7 +96,7 @@ async function tick(){let d;try{d=await (await fetch("/api/lab",{cache:"no-store
   bot("M5 <span class='pill done' style='margin-left:6px'>new</span>","Runner model: buys only coins whose post-band momentum says runner (backtest: held out -5%, all -1.6%; forward test)",m5,[["Narratives",m5.narratives.n],["Mean / narrative",m5.narratives.n?pct(m5.narratives.mean):DASH],["Since",esc("Oct 22 23:00")]])+
   (d.m6?bot("M6 <span class='pill done' style='margin-left:6px'>new</span>","M5 + funding-cluster skip: no buy when one funder holds &ge; 15% of the top-20 (forward test; FL backtest failed narrowly)",d.m6,[["Narratives",d.m6.narratives.n],["Mean / narrative",d.m6.narratives.n?pct(d.m6.narratives.mean):DASH],["Since",esc("Oct 23 17:00")]]):"")+
   (d.m7?bot("M7 <span class='pill done' style='margin-left:6px'>new</span>","m6-v3 entries (cluster + serial-funder skip), M5 exits (stop &minus;30%); side by side with M8",d.m7,[["Checked",(d.m7.m6||{}).checked??0],["Skipped",(d.m7.m6||{}).skipped??0],["Since",esc("Oct 23 16:00")]]):"")+
-  (d.m8?bot("M8 <span class='pill done' style='margin-left:6px'>new</span>","Same entries as M7, &minus;10% stop (max-loss test)",d.m8,[["Checked",(d.m8.m6||{}).checked??0],["Skipped",(d.m8.m6||{}).skipped??0],["Since",esc("Oct 23 16:00")]]):"");
+  (d.m8?bot("M8 <span class='pill done' style='margin-left:6px'>new</span>","Twin exit book inside M7: same fills, &minus;10% stop (max-loss test)",d.m8,[["Checked",((d.m7||{}).m6||{}).checked??0],["Skipped",((d.m7||{}).m6||{}).skipped??0],["Since",esc("Oct 23 16:00")]]):"");
  const sc=m.funnel.scores,mx=Math.max(1,...Object.values(sc));
  $("sc").innerHTML=[...Array(11).keys()].map(k=>`<div class="${k>=7?"hot":""}" style="height:${(sc[k]||0)/mx*100}%" title="score ${k}: ${sc[k]||0}"><span>${k}</span></div>`).join("");
  $("open").innerHTML=table(["Coin","Score","Entry","Now","Since"],m.open.map(o=>[esc(o.name),o.score,"$"+(o.mc||0).toLocaleString(),pct(o.ret_now),ago(o.t)]));
@@ -146,7 +147,7 @@ async function tick(){let d;try{d=await (await fetch("/api/lab",{cache:"no-store
  $("m78x").innerHTML=table(["Exit","M7","M8"],z_xk.map(k=>[esc(k),(z_q.m7.exits||{})[k]||0,(z_q.m8.exits||{})[k]||0]));
  const z_f=(s,k,fn)=>s&&s.n?fn(s[k]):DASH,z_P=x=>pct(x),z_S=x=>x==null?DASH:(x>=0?"+":"")+x.toFixed(3)+" SOL",z_N=x=>x==null?DASH:(100*x).toFixed(0)+"%";
  const z_M7=z_q.m7,z_M8=z_q.m8,z_M5=z_q.m5,z_M6=z_q.m6;
- $("m78v").innerHTML=table(["Measure","M7 (&minus;30%)","M8 (&minus;10%)","M5","M6","Bar"],[
+ $("m78v").innerHTML=table(["Measure","M7 (&minus;30%)","M8 (&minus;10%, same fills)","M5 (all its trades)","M6 (all its trades)","Bar"],[
   ["Trades",z_M7.n||0,z_M8.n||0,z_M5.n||0,z_M6.n||0,"&ge; 60 each (or Nov 1)"],
   ["Mean / trade",z_f(z_M7,"mean",z_P),z_f(z_M8,"mean",z_P),z_f(z_M5,"mean",z_P),z_f(z_M6,"mean",z_P),"M7: &gt; 0, &ge; M5 + 3 pts, &ge; M6"],
   ["Share &le; &minus;25%",z_f(z_M7,"deep",z_N),z_f(z_M8,"deep",z_N),z_f(z_M5,"deep",z_N),z_f(z_M6,"deep",z_N),"M8 adopted if lower than M7&hellip;"],
@@ -160,6 +161,9 @@ async function tick(){let d;try{d=await (await fetch("/api/lab",{cache:"no-store
  $("m78p").innerHTML=(z_q.pairs&&z_q.pairs.length?`<div class="small mute" style="padding:4px 0 8px">${z_q.pairs.length} coins in both &middot; mean M8 &minus; M7 ${pct(z_q.pair_diff)}</div>`:"")+
   table(["Time","Coin","M7 exit","M7","M8 exit","M8","M8 &minus; M7"],(z_q.pairs||[]).map(r=>[tm(r.t),`<a class="coin" href="/trades#m7|${esc(r.m)}">${esc(r.name)}</a>`,esc(r.x7),pct(r.r7),esc(r.x8),pct(r.r8),pct(r.r8-r.r7)]));
  $("m78t").innerHTML=table(["Bot","Time","Coin","Exit","Return","Held"],(z_q.recent||[]).map(r=>{const c=trow(r.bot,r);return [z_B[r.bot],c[0],c[1],c[3],c[4],c[5]]}));
+ const z_k5=z_q.kept5||{},z_s5=z_q.skipped5||{};
+ $("m78s").innerHTML=`<div class="small mute" style="padding:4px 0 8px">M5 on coins M7 took: ${z_k5.n?pct(z_k5.mean)+" ("+z_k5.n+")":DASH} &middot; M5 on coins M7 skipped: ${z_s5.n?pct(z_s5.mean)+" ("+z_s5.n+")":DASH} &middot; the skip helps if the skipped side is worse</div>`+
+  table(["Time","Coin","M5 exit","M5","M7 decision","M7"],(z_q.skip_rows||[]).map(r=>[tm(r.t),`<a class="coin" href="/trades#m5|${esc(r.m)}">${esc(r.name)}</a>`,esc(r.x5),pct(r.r5),z_DEC[r.decision]||esc(r.decision),r.r7!=null?pct(r.r7):DASH]));
  $("m78d").innerHTML=table(["Time","Coin","Market cap","Cluster","Serial","Decision"],(z_q.decisions||[]).map(r=>[tm(r.t),esc((r.name||r.m.slice(0,6)).slice(0,22)),r.mc?"$"+r.mc.toLocaleString():DASH,
   r.cluster!=null?`<b class="${r.cluster>=0.15?"neg":"mute"}">${(r.cluster*100).toFixed(0)}%</b>`:DASH,r.serial!=null?(r.serial>=1?`<b class="neg">${r.serial}</b>`:"0"):DASH,z_DEC[r.decision]||esc(r.decision)]));
  $("m4t").innerHTML=table(["Time","Coin","Score","Exit","Return","Held"],m4.recent.map(r=>trow("m4",r)));

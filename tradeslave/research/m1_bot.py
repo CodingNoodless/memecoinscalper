@@ -37,6 +37,7 @@ import sys
 import threading
 import time
 from collections import defaultdict
+from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
@@ -54,6 +55,7 @@ VARIANT = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] in ("m1", "m2", "m3",
 M6 = VARIANT in ("m6", "m7", "m8")               # M6 (2026-10-23 17:00): M5 v1 + bad-buy skip filters (see below)
 M7 = VARIANT in ("m7", "m8")                     # M7/M8 (2026-10-23 16:00): m6-v3 entries, side by side with two exit sets
 M8 = VARIANT == "m8"
+TWIN = VARIANT == "m7"                           # m8-v2 (16:15): M8 is a second exit book inside M7 on the same fills
 M5 = VARIANT in ("m5", "m6", "m7", "m8")                     # M5 (2026-10-22 23:00): trade only predicted runners (see below)
 M4 = VARIANT == "m4"                             # M4 (2026-10-22 15:10): M1 + the fixes accepted by the TF sweep (see below)
 M3 = VARIANT == "m3"                             # M3 (2026-10-21 16:00): M2 + Rohit's post-mortem changes (see below)
@@ -112,6 +114,11 @@ M6_CLUSTER = 0.15
 # start from data/m1/serial_seed.json (dataset entries + M5 live trades) and grow with every M5 buy signal. M7 keeps
 # M5's exits (stop -30%); M8 uses a -10% stop (XA L5). Forward test, judged once at >= 60 trades each.
 SERIAL_SEED = DATA_DIR / "m1" / "serial_seed.json"
+# m8-v2 (2026-10-23 16:15, Rohit: "the comparison data isn't accurate"): two separate processes buying the same coin fill
+# and poll at slightly different moments (M5 and M6 on the same coin at the same second: +18.6% vs +15.9%), so the M8 - M7
+# gap mixed timing noise into the stop effect. M8 now runs inside the M7 process as a twin book: same fill, same polls,
+# only the stop differs (-10%). It writes data/m8/trades.jsonl and data/m8/status.json; `run m8` alone is retired.
+TWIN_STOP, TWIN_DIR, TWIN_RULES = 0.90, DATA_DIR / "m8", "m8-v2+1s"
 # 1 s polls on every bot from 2026-10-23 16:00 (Rohit: simulate a 1 s delay, not 2-4 s): an exit decided on one poll
 # fills at the next, 1 s later; rules carry "+1s" so the dashboard splits results from before the change.
 RULES = ("m8-v1" if M8 else "m7-v1" if M7 else "m6-v2" if M6 else "m5-v1" if M5 else "m4-v3" if M4 else "m3-v3" if M3 else "m2-v1" if M2 else "exits-v2") + "+1s"                                # bump on every rule change; the dashboard splits results by it
@@ -535,6 +542,7 @@ def run():
     print(time.strftime("%H:%M"), f"{VARIANT.upper()} paper bot ({RULES}), narrative model {llm.name}", flush=True)
     sol = {"usd": 0.0, "t": 0.0}
     watch, scored, opened = {}, {}, {}           # mint -> create row; mint -> (score, narrative ok, key); mint -> pos
+    twins = {}                                   # M7 process only: mint -> M8 twin position (same fill, stop -10%)
     first = {}                                   # narrative key -> the first coin seen on it (Rohit: prefer the first)
     for r in (json.loads(x) for x in CANDS.open(encoding="utf-8")) if CANDS.exists() else ():
         for k in r.get("nkeys") or []:
@@ -619,7 +627,7 @@ def run():
                 if line.strip():
                     meta_pool.submit(intake, json.loads(line))
         with lock:
-            for m in [m for m, c in watch.items() if t_loop - c["t"] > WATCH_S and m not in opened]:
+            for m in [m for m, c in watch.items() if t_loop - c["t"] > WATCH_S and m not in opened and m not in twins]:
                 watch.pop(m)
             keys = {c["bc"]: m for m, c in watch.items() if c.get("bc")}
         states = rpc.curves(list(keys)) if keys and sol["usd"] else {}
@@ -631,8 +639,11 @@ def run():
             p = cs.price_sol if not cs.complete else None
             if p and sol["usd"]:
                 mc_now[m] = p * 1e9 * sol["usd"]
-            if m in opened:
-                manage(opened, m, p, cs, done, rpc)
+            if m in opened or m in twins:
+                if m in opened:
+                    manage(opened, m, p, cs, done, rpc)
+                if m in twins:                                   # M8 twin: same price read, its own stop
+                    manage(twins, m, p, cs, done, rpc, log=TWIN_DIR / "trades.jsonl", label="M8 ")
                 continue
             if p is None or m in done or len(opened) >= MAX_OPEN:
                 continue
@@ -723,7 +734,18 @@ def run():
                                  holders=h0, h_max=h0, t_h=0.0)
             if M3:                                               # exits by traction, not by score
                 opened[m].update(high=False, link=link, copy=copy, eng0=engagement(link))
+            if TWIN:
+                twins[m] = deepcopy(opened[m])
+                twins[m].update(stop=TWIN_STOP, rules=TWIN_RULES, twin_of="m7")
             print(time.strftime("%H:%M"), f"BUY  {c.get('name')!r} score {sc} mc ${mc:,.0f}", flush=True)
+        if TWIN:
+            try:
+                TWIN_DIR.mkdir(exist_ok=True)
+                (TWIN_DIR / "status.json").write_text(json.dumps({"t": time.time(), "sol_usd": sol["usd"], "twin_of": "m7",
+                    "open": [{k: o.get(k) for k in ("m", "name", "score", "t", "p0", "last", "peak", "stop", "mc",
+                                                    "holders", "h_max")} for o in twins.values()]}))
+            except OSError:
+                pass
         try:                                                     # for the dashboard (tradeslave.lab_view)
             OPEN.write_text(json.dumps({"t": time.time(), "sol_usd": sol["usd"], "llm": llm.name,
                                         "calls": {f"{d} {m}": n for (d, m), n in llm.calls.items()},
@@ -771,7 +793,7 @@ class SerialFunders:
         return n
 
 
-def manage(opened, m, p, cs, done, rpc=None):
+def manage(opened, m, p, cs, done, rpc=None, log=None, label=""):
     """Exit decided on one poll, filled at the curve state of the next poll (1 s later)."""
     o = opened[m]
     now = time.time()
@@ -828,10 +850,10 @@ def manage(opened, m, p, cs, done, rpc=None):
     ret = (out - 2 * TX_SOL) / SIZE_SOL - 1
     row = {**{k: v for k, v in o.items() if k not in ("bal", "seen")}, "exit": why, "t_exit": time.time(), "p_exit": p,
            "ret": ret}
-    jlog(TRADES_LOG, row)
+    jlog(log or TRADES_LOG, row)
     opened.pop(m)
     done.add(m)
-    print(time.strftime("%H:%M"), f"SELL {o['name']!r} {why} {ret:+.1%}", flush=True)
+    print(time.strftime("%H:%M"), f"{label}SELL {o['name']!r} {why} {ret:+.1%}", flush=True)
 
 
 def m5_decide(m, rows, state, model):
