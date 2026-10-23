@@ -26,6 +26,8 @@ JOBS = [
      "Watchlist until >= 20 holders and >= 90% of their max, sell when holders fall 10%, skip a top; live feed"),
     ("M5 runner model", "paper bot", "m5_bot.out", 15,
      "Any X-linked coin; buys only when the runner model (post-band momentum) says p >= 0.373; forward test"),
+    ("M6 = M5 + bad-buy skip", "paper bot", "m6_bot.out", 15,
+     "M5 v1, but skips the buy unless narrative score >= 5 and >= 60 holders; forward test from Oct 23 17:00"),
     ("Live trade feed", "data feed", "live_feed.log", 15,
      "Every pump.fun trade from a Helius websocket; real-time trades for the coins the bots watch (data/feed)"),
     ("C1 curve reach model", "forward recorder", "c1_curve.out", 15,
@@ -164,7 +166,7 @@ def m1(variant: str = "m1") -> dict:
         ex2=round(sum(sorted(r["ret"] for r in trades)[:-2]) * 0.1, 4) if len(trades) > 2 else None,
         fresh4=stats([r["ret"] for r in trades if r["t"] >= M4_FROM]),
         fresh5=stats([r["ret"] for r in trades if r["t"] >= M5_FROM]),
-        m5=m5_view(cands) if variant == "m5" else None,
+        m5=m5_view(cands) if variant in ("m5", "m6") else None,
         recent=[dict(t=r["t"], m=r["m"], name=r.get("name"), score=r.get("score"), exit=r["exit"], ret=r["ret"],
                      narr=(r.get("nkey") or key.get(r["m"], ""))[-6:],
                      mc=r.get("mc"), held=round((r["t_exit"] - r["t"]) / 60, 1)) for r in trades[-25:]][::-1],
@@ -227,6 +229,6 @@ def experiments() -> dict:
 
 
 def build_lab_snapshot() -> dict:
-    return dict(t=time.time(), jobs=jobs(), m1=m1(), m2=m1("m2"), m3=m1("m3"), m4=m1("m4"), m5=m1("m5"), c1=c1(), kalshi=kalshi(), experiments=experiments())
+    return dict(t=time.time(), jobs=jobs(), m1=m1(), m2=m1("m2"), m3=m1("m3"), m4=m1("m4"), m5=m1("m5"), m6=m1("m6"), c1=c1(), kalshi=kalshi(), experiments=experiments())
 
 

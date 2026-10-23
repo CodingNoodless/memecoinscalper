@@ -48,9 +48,11 @@ from .c1_curve import CREATES, CURVE_FEE, SOL_USDC, T0, V0, sell_curve
 from .chain import env_rpc
 from .full_trades import Pace, ts as iso_ts
 from .live_feed import feed_rows, feed_trades
+from .m6 import features as m6_features
 
-VARIANT = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] in ("m1", "m2", "m3", "m4", "m5") else "m1"
-M5 = VARIANT == "m5"                             # M5 (2026-10-22 23:00): trade only predicted runners (see below)
+VARIANT = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] in ("m1", "m2", "m3", "m4", "m5", "m6") else "m1"
+M6 = VARIANT == "m6"                             # M6 (2026-10-23 17:00): M5 v1 + bad-buy skip filters (see below)
+M5 = VARIANT in ("m5", "m6")                     # M5 (2026-10-22 23:00): trade only predicted runners (see below)
 M4 = VARIANT == "m4"                             # M4 (2026-10-22 15:10): M1 + the fixes accepted by the TF sweep (see below)
 M3 = VARIANT == "m3"                             # M3 (2026-10-21 16:00): M2 + Rohit's post-mortem changes (see below)
 M2 = VARIANT in ("m2", "m3")                     # M2 (2026-10-21 09:40): M1 + sniper-bag filter, -10% stop, 1 s polls
@@ -97,7 +99,11 @@ LAUNCH_X, LAUNCH_HIGH, FOLL = 1.15, 0.80, (100, 10_000)
 # M1's plus the holder exit (-10% from max) after a 15 s grace. The backtest FAILED held out (-5.0%/trade; all data
 # -1.6%, M4 replay -6.3%): this is a forward test.
 M5_GRACE, M5_MAX_S, M5_EVERY = 15.0, 180.0, 10.0
-RULES = "m5-v1" if M5 else "m4-v3" if M4 else "m3-v3" if M3 else "m2-v1" if M2 else "exits-v2"                                # bump on every rule change; the dashboard splits results by it
+# M6 (vault "2026-10-23 M6 bad-buy filters (M6)"): M5 v1 unchanged, but its buy is skipped unless the narrative score
+# is >= 5 and >= 60 wallets hold the coin (feed holders at the decision). The only two filters that pointed the same way
+# on the backtest train coins and on M5's 108 live trades; the pre-registered selection (F9) failed validation.
+M6_SCORE, M6_HOLDERS = 5, 60
+RULES = "m6-v1" if M6 else "m5-v1" if M5 else "m4-v3" if M4 else "m3-v3" if M3 else "m2-v1" if M2 else "exits-v2"                                # bump on every rule change; the dashboard splits results by it
 ACT_EVERY = 6.0
 WATCH_S, POLL_S, RECHECK_S = 20 * 60, (1.0 if M2 else 2.0), (5 if M4 else 30)
 SIZE_SOL, TX_SOL, MAX_OPEN = 0.1, 0.0005, 5
@@ -626,6 +632,12 @@ def run():
                 if not rows5 or not full5:
                     continue
                 go, det5 = m5_decide(m, rows5, m5_state, m5_model)
+                if go and M6:
+                    f6 = m6_features(rows5, len(rows5) - 1)
+                    det5.update(m6_holders=f6["holders"], m6_early=round(f6["early_share"], 3), m6_top10=round(f6["top10"], 3))
+                    if (sc or 0) < M6_SCORE or f6["holders"] < M6_HOLDERS:
+                        go = False
+                        det5.update(final=True, why=f"M6 skip: score {sc}, holders {f6['holders']}")
                 if det5:
                     jlog(CANDS, {"t": time.time(), "m": m, "stage": "m5", "mc": round(mc), "buy": go, **det5})
                 if not go:
