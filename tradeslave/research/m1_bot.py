@@ -48,7 +48,7 @@ from .c1_curve import CREATES, CURVE_FEE, SOL_USDC, T0, V0, sell_curve
 from .chain import env_rpc
 from .full_trades import Pace, ts as iso_ts
 from .live_feed import feed_rows, feed_trades
-from .m6 import features as m6_features
+from .fl_test import LiveFunding
 
 VARIANT = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] in ("m1", "m2", "m3", "m4", "m5", "m6") else "m1"
 M6 = VARIANT == "m6"                             # M6 (2026-10-23 17:00): M5 v1 + bad-buy skip filters (see below)
@@ -99,11 +99,12 @@ LAUNCH_X, LAUNCH_HIGH, FOLL = 1.15, 0.80, (100, 10_000)
 # M1's plus the holder exit (-10% from max) after a 15 s grace. The backtest FAILED held out (-5.0%/trade; all data
 # -1.6%, M4 replay -6.3%): this is a forward test.
 M5_GRACE, M5_MAX_S, M5_EVERY = 15.0, 180.0, 10.0
-# M6 (vault "2026-10-23 M6 bad-buy filters (M6)"): M5 v1 unchanged, but its buy is skipped unless the narrative score
-# is >= 5 and >= 60 wallets hold the coin (feed holders at the decision). The only two filters that pointed the same way
-# on the backtest train coins and on M5's 108 live trades; the pre-registered selection (F9) failed validation.
-M6_SCORE, M6_HOLDERS = 5, 60
-RULES = "m6-v1" if M6 else "m5-v1" if M5 else "m4-v3" if M4 else "m3-v3" if M3 else "m2-v1" if M2 else "exits-v2"                                # bump on every rule change; the dashboard splits results by it
+# M6 (vault "2026-10-23 M6 bad-buy filters (M6)"): M5 v1 unchanged, but its buy is skipped when one funder (Helius
+# funding lookups, vault "2026-10-23 funding links (FL)") controls >= 15% of the top-20 holders' tokens at the decision.
+# m6-v1 (12:05-13:10, score >= 5 and holders >= 60) took 1 trade; m6-v2 swaps in the funding-cluster skip, the only rug
+# signal that separated deep losses in the same direction on train, validation and live (post hoc; forward test).
+M6_CLUSTER = 0.15
+RULES = "m6-v2" if M6 else "m5-v1" if M5 else "m4-v3" if M4 else "m3-v3" if M3 else "m2-v1" if M2 else "exits-v2"                                # bump on every rule change; the dashboard splits results by it
 ACT_EVERY = 6.0
 WATCH_S, POLL_S, RECHECK_S = 20 * 60, (1.0 if M2 else 2.0), (5 if M4 else 30)
 SIZE_SOL, TX_SOL, MAX_OPEN = 0.1, 0.0005, 5
@@ -533,6 +534,7 @@ def run():
     follow, lastwhy, mc_now = {}, {}, {}         # M4 watchlist view: author followers, last check, market cap
     m5_state = {}                                # M5: mint -> {"bucket": last 10-s step evaluated}
     m5_model = json.loads((DATA_DIR / "m1" / "m5_model.json").read_text()) if M5 else None
+    m6_funding = LiveFunding() if M6 else None          # M6: Helius funding lookups for the cluster skip
     pool = ThreadPoolExecutor(1)                 # one LLM call at a time (local GPU)
 
     def narrate(c, link):
@@ -633,11 +635,18 @@ def run():
                     continue
                 go, det5 = m5_decide(m, rows5, m5_state, m5_model)
                 if go and M6:
-                    f6 = m6_features(rows5, len(rows5) - 1)
-                    det5.update(m6_holders=f6["holders"], m6_early=round(f6["early_share"], 3), m6_top10=round(f6["top10"], 3))
-                    if (sc or 0) < M6_SCORE or f6["holders"] < M6_HOLDERS:
+                    try:
+                        fl = m6_funding.cluster_share(rows5, len(rows5) - 1)
+                    except Exception as exc:  # noqa: BLE001 - lookup failed: no trade rather than an unchecked one
+                        fl = None
+                        det5.update(final=True, why=f"M6 skip: funding lookup failed ({type(exc).__name__})")
                         go = False
-                        det5.update(final=True, why=f"M6 skip: score {sc}, holders {f6['holders']}")
+                    if fl is not None:
+                        det5.update(m6_cluster=round(fl["cluster_share"], 3), m6_creator=round(fl["creator_linked"], 3),
+                                    m6_fresh=round(fl["fresh_share"], 3))
+                        if fl["cluster_share"] >= M6_CLUSTER:
+                            go = False
+                            det5.update(final=True, why=f"M6 skip: funding cluster {fl['cluster_share']:.0%}")
                 if det5:
                     jlog(CANDS, {"t": time.time(), "m": m, "stage": "m5", "mc": round(mc), "buy": go, **det5})
                 if not go:

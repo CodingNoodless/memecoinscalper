@@ -27,7 +27,7 @@ JOBS = [
     ("M5 runner model", "paper bot", "m5_bot.out", 15,
      "Any X-linked coin; buys only when the runner model (post-band momentum) says p >= 0.373; forward test"),
     ("M6 = M5 + bad-buy skip", "paper bot", "m6_bot.out", 15,
-     "M5 v1, but skips the buy unless narrative score >= 5 and >= 60 holders; forward test from Oct 23 17:00"),
+     "M5 v1, but skips the buy when one funder controls >= 15% of the top-20 holders (Helius funding lookups); m6-v2 from 13:10"),
     ("Live trade feed", "data feed", "live_feed.log", 15,
      "Every pump.fun trade from a Helius websocket; real-time trades for the coins the bots watch (data/feed)"),
     ("C1 curve reach model", "forward recorder", "c1_curve.out", 15,

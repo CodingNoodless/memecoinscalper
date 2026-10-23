@@ -26,6 +26,7 @@ from . import er_test
 from .chain import _wanted_version
 
 CACHE = DATA_DIR / "m1" / "funding.json"
+PUBLIC = DATA_DIR / "m1" / "funding_public.json"
 TOP, FRESH_S, PUBLIC_N, PUBLIC_GAP = 20, 6 * 3600, 25, 1800
 CLUSTER_MAX, CREATOR_MAX, FRESH_MAX = 0.15, 0.10, 0.50
 MIN_SOL = 0.005
@@ -204,6 +205,7 @@ def main() -> None:
             if f:
                 coins_by_funder[f].add(m)
     public = {f for f, ms in coins_by_funder.items() if len(ms) >= PUBLIC_N}
+    PUBLIC.write_text(json.dumps(sorted(public)))                  # the live M6 filter reuses this list
     rows = []
     for src, part, r, t, top, cr, m in S:
         f = features(top, cr, t, fund, public)
@@ -241,3 +243,25 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+class LiveFunding:
+    """M6 live: cluster_share for a coin at the decision row, looking up (and caching) wallet funders on Helius."""
+
+    def __init__(self):
+        self.url = helius_url()
+        self.cache = json.loads(CACHE.read_text()) if CACHE.exists() else {}
+        self.public = set(json.loads(PUBLIC.read_text())) if PUBLIC.exists() else set()
+        self.session = requests.Session()
+        self.lock = threading.Lock()
+
+    def cluster_share(self, rows, k):
+        top, cr = holders_at(rows, k)
+        need = [w for w in {cr} | {w for w, _ in top} if w not in self.cache]
+        with ThreadPoolExecutor(8) as ex:
+            for w, res in zip(need, ex.map(lambda w: funding(self.url, w, requests.Session()), need)):
+                if "err" not in res:
+                    self.cache[w] = res
+        with self.lock:
+            CACHE.write_text(json.dumps(self.cache))
+        return features(top, cr, rows[k][0], self.cache, self.public)
