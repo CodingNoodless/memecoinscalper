@@ -28,7 +28,7 @@ SIZE, TX = 0.1, 0.0005
 BASE = dict(tp=2.0, trend_arm=1.3, trend_give=0.8, stall_s=120, stall_act=0.5, max_hold=600,
             hi_arm=1.5, hi_give=0.6, hi_dead=0.2, hi_hold=7200, high=True,
             lock_arm=None, lock_give=None, fade=None, be_arm=None, half15=False, early=None, m1_stop=None,
-            actfade=None, hdecl=None, hflow=None)
+            actfade=None, hdecl=None, hflow=None, hgrace=0)
 HORIZON = 900
 
 
@@ -182,7 +182,8 @@ def sim(x, pre, post, P):
         elif P["actfade"] and len(post) and (lambda a30: a30 < P["actfade"] * a30max and p < 0.9 * peak)(
                 len({y[4] for y in w.since(tick_t - 30, tick_t)})):
             pending = "AFADE"
-        elif (P["hdecl"] and hmax and n and post[n - 1][6] is not None and post[n - 1][6] <= (1 - P["hdecl"]) * hmax
+        elif (P["hdecl"] and held >= P["hgrace"] and hmax and n and post[n - 1][6] is not None
+              and post[n - 1][6] <= (1 - P["hdecl"]) * hmax
               and (not P["hflow"] or sum(y[3] if y[2] else -y[3] for y in w.since(tick_t - P["hflow"], tick_t)) < 0)):
             pending = "HDECL"                                   # hflow (MV idea 2): only while net SOL flow is negative
         elif P["early"] and held >= P["early"] and peak < p0 * 1.05:

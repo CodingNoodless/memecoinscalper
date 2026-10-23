@@ -138,7 +138,7 @@ def trade(coin, k, over):
     q = K / v - K / (v + SIZE * (1 - 0.0125))
     x = dict(v="m1", t=rows[k][0], p0=p0, q=q, stop=0.7, high=(c.get("score") or 0) >= 9, score=c.get("score"))
     pre, post = rows[:k + 1], rows[k + 1:]
-    P = dict(BASE, hdecl=0.10, **over)
+    P = dict(BASE, **{"hdecl": 0.10, **over})
     return sim(x, pre, post, P)[0]
 
 
