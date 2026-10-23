@@ -12,6 +12,8 @@ from collections import defaultdict
 
 from . import er_test
 from .fl_test import CACHE, NONSYSTEM, PUBLIC
+from .fl_test import features as fl_features
+from .fl_test import samples as fl_samples
 from .m5_bt import EXITS, ret
 
 E2 = EXITS["E2 M4 exits, 15 s holder grace"]
@@ -70,6 +72,39 @@ def main() -> None:
     n_skip = sum(1 for s in ent if s["part"] in er_test.TRAIN and flag[id(s)][1] >= 1 and flag[id(s)][0] is not None)
     ok2 &= n_skip >= 30
     print(f"   CX2 verdict: {'PASS' if ok2 else 'FAIL'} (train trades skipped: {n_skip})")
+
+    # Amendment 1
+    ex = dict(stop=E2["stop"], P=dict(E2["P"], coord=2, coord_loss=True))
+    rb = {id(s): ret(byid[s["m"]], s["k"], ex) for s in ent}
+    print("\nCX1b, coordinated exit (k = 2) only while below entry:")
+    ok1b = True
+    for p, ps in parts.items():
+        b = [res[None][id(s)] for s in ent if s["part"] in ps]
+        v = [rb[id(s)] for s in ent if s["part"] in ps]
+        print(f"   {p:5s} base {summ(b)}\n         CX1b {summ(v)}")
+        ok1b &= deep(v) < deep(b) and statistics.mean(v) >= statistics.mean(b)
+    print(f"   CX1b verdict: {'PASS' if ok1b else 'FAIL'}")
+
+    print("\nCombined report (time order by entry; live = M5 paper trades):")
+    rows = []
+    for src, part, r, t, top, cr, m in fl_samples():
+        if src in ("bt", "m5"):
+            rows.append((t, part, r, fl_features(top, cr, t, fund, public)["cluster_share"], cr))
+    seen = defaultdict(int)
+    tagged = []
+    for t, part, r, cl, cr in sorted(rows, key=lambda x: x[0]):
+        f = (fund.get(cr) or {}).get("funder")
+        serial = bool(f) and f not in NONSYSTEM and seen[f] >= 1
+        if f:
+            seen[f] += 1
+        tagged.append((part, r, cl >= 0.15, serial, serial and f not in public))
+    rules = {"base": lambda c, s, sp: True, "keep: cluster < 15% (m6-v2)": lambda c, s, sp: not c,
+             "keep: no serial funder (CX2)": lambda c, s, sp: not s,
+             "keep: both (m6-v3 candidate)": lambda c, s, sp: not c and not s,
+             "keep: cluster + private-only CX2": lambda c, s, sp: not c and not sp}
+    for p in ("train", "valid", "live"):
+        for lab, keep in rules.items():
+            print(f"   {p:5s} {lab:32s} {summ([r for q, r, c, s, sp in tagged if q == p and keep(c, s, sp)])}")
 
 
 if __name__ == "__main__":

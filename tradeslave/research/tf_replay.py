@@ -28,7 +28,7 @@ SIZE, TX = 0.1, 0.0005
 BASE = dict(tp=2.0, trend_arm=1.3, trend_give=0.8, stall_s=120, stall_act=0.5, max_hold=600,
             hi_arm=1.5, hi_give=0.6, hi_dead=0.2, hi_hold=7200, high=True,
             lock_arm=None, lock_give=None, fade=None, be_arm=None, half15=False, early=None, m1_stop=None,
-            actfade=None, hdecl=None, hflow=None, hgrace=0, nw=None, ff=None, half_tp=None, pstall=None, coord=None)
+            actfade=None, hdecl=None, hflow=None, hgrace=0, nw=None, ff=None, half_tp=None, pstall=None, coord=None, coord_loss=False)
 HORIZON = 900
 
 
@@ -215,8 +215,9 @@ def sim(x, pre, post, P):
             pending = "NWSTOP"                                  # (window s, min new wallets, grace s)
         elif P["pstall"] and peak >= p0 * P["pstall"][0] and tick_t - t_peak >= P["pstall"][1]:
             pending = "PSTALL"                                  # ER B3: up >= x, no new high for s seconds
-        elif P["coord"] and coordinated(w.since(tick_t - poll, tick_t), pre_buyers, P["coord"]):
-            pending = "COORD"                                   # CX1: >= k pre-entry buyers sell at one block time
+        elif (P["coord"] and (not P["coord_loss"] or r < 1.0)
+              and coordinated(w.since(tick_t - poll, tick_t), pre_buyers, P["coord"])):
+            pending = "COORD"                                   # CX1: >= k pre-entry buyers sell at one block time (CX1b: only below entry)
         elif P["early"] and held >= P["early"] and peak < p0 * 1.05:
             last = w.since(tick_t - 15, tick_t)
             if sum(y[3] if y[2] else -y[3] for y in last) < 0:
