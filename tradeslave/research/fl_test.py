@@ -27,6 +27,8 @@ from .chain import _wanted_version
 
 CACHE = DATA_DIR / "m1" / "funding.json"
 PUBLIC = DATA_DIR / "m1" / "funding_public.json"
+_NS = DATA_DIR / "m1" / "funding_nonsystem.json"
+NONSYSTEM = set(json.loads(_NS.read_text())) if _NS.exists() else set()   # funders owned by programs, not wallets
 TOP, FRESH_S, PUBLIC_N, PUBLIC_GAP = 20, 6 * 3600, 25, 1800
 CLUSTER_MAX, CREATOR_MAX, FRESH_MAX = 0.15, 0.10, 0.50
 MIN_SOL = 0.005
@@ -163,7 +165,7 @@ def features(top, cr, t_entry, fund, public):
     groups = defaultdict(list)
     for w in set(wal) | {cr}:
         f = fund.get(w) or {}
-        if f.get("funder"):
+        if f.get("funder") and f["funder"] not in NONSYSTEM:            # program accounts (pools, curves) aren't funders
             groups[f["funder"]].append((w, f.get("t_fund") or 0))
     best = 0.0
     for fu, ws in groups.items():
