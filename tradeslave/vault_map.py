@@ -18,6 +18,15 @@ from pathlib import Path
 VAULT = Path(r"D:\vault\tradeslave")
 START, END = "<!-- map:start -->", "<!-- map:end -->"
 SKIP_DIRS = {".obsidian", "Templates", "Sources", "Map", ".trash", "Trades"}
+SRC_DIR = VAULT / "Research" / "Runner research" / "Sources"
+# trade data-point notes (Trades/Data points) -> words that place them in a topic
+DP_TOPIC = {"Data - Narrative score": "narrative", "Data - X author followers": "KOL narrative",
+            "Data - Holders at entry": "holders entry", "Data - Holder trend before entry": "holders entry",
+            "Data - Run-up before entry": "entry dip", "Data - Market cap at entry": "entry bonding curve",
+            "Data - Hour of entry": "regime hour of day", "Data - First buyers out before entry": "sniper holders",
+            "Data - Create-slot buyers": "sniper bundle", "Data - Biggest seller while held": "dev creator exits",
+            "Data - Sell vs buy flow while held": "volume net flow exits", "Data - First 10 s after entry": "entry exits",
+            "Data - M5 model probability": "runner logistic", "Data - Exit reason": "exits stop"}
 
 # topic: (description, keyword regex, research themes it maps to)
 TOPICS = {
@@ -199,6 +208,31 @@ def main() -> None:
                 sc[m_] = s
         return [m_ for m_, _ in sorted(sc.items(), key=lambda x: -x[1])[:k]]
 
+    # research sources (Research/Runner research/Sources): topics from their text and their theme links
+    srcs = {p.stem: p for p in SRC_DIR.glob("S*.md")}
+    stext = {s: body(p.read_text(encoding="utf-8", errors="ignore")) for s, p in srcs.items()}
+    stops = {}
+    for s, t in stext.items():
+        words = max(80, len(t.split()))
+        dens = {k: (len(re.findall(rx, t, re.I)) + 3 * len(re.findall(rx, s, re.I))) / words * 1000
+                for k, (_, rx, _) in TOPICS.items()}
+        by_theme = {k for k, v in TOPICS.items() if any(th in links(t) for th in v[2])}
+        stops[s] = sorted(by_theme | {k for k, d in sorted(dens.items(), key=lambda x: -x[1])[:3] if d > 0})
+    sfreq = Counter(k for v in list(tops.values()) + list(stops.values()) for k in v)
+    total = len(notes) + len(srcs)
+    idf = lambda ks: sum(math.log(total / sfreq[k]) for k in ks)                                         # noqa: E731
+    dpts = {p.stem: p for p in (VAULT / "Trades" / "Data points").glob("Data - *.md")}
+    dtops = {d: [k for k, (_, rx, _) in TOPICS.items() if re.search(rx, d + " " + DP_TOPIC.get(d, ""), re.I)]
+             for d in dpts}
+
+    def best(n_tops, pool, k, need=1):
+        sc = {m_: idf(set(n_tops) & set(ts)) for m_, ts in pool.items()}
+        return [m_ for m_, v in sorted(sc.items(), key=lambda x: (-x[1], x[0]))
+                if v > 0 and len(set(n_tops) & set(pool[m_])) >= need][:k]
+
+    note_src = {n: best(tops[n], stops, 8, need=2 if len(tops[n]) > 2 else 1) for n in notes
+                if kind(n) in ("Experiments", "Strategies", "issue", "Sessions", "note")}
+
     vd = verdicts()
     md = VAULT / "Map"
     md.mkdir(exist_ok=True)
@@ -224,6 +258,11 @@ def main() -> None:
             lines.append(f"## {label.get(g, g)}")
             for n in sorted(groups[g]):
                 lines.append(f"- [[{n}]]" + (f": {vd[n]}" if n in vd else ""))
+            lines.append("")
+        ss = sorted(s for s, ts in stops.items() if k in ts)
+        if ss:
+            lines.append(f"## Research sources ({len(ss)})")
+            lines += [f"- [[{s}|{s[:4]}]] {s[5:]}" for s in ss]
             lines.append("")
         (md / f"Map - {k}.md").write_text("\n".join(lines), encoding="utf-8")
     master = ["---\ntags: [map, moc]\n---\n# Memecoin bot knowledge map\n",
@@ -262,6 +301,8 @@ def main() -> None:
                   if kind(m_) == "Experiments"]
             if ex:
                 blk.append("- **Our experiments on this theme:** " + ", ".join(f"[[{m_}]]" for m_ in sorted(ex)))
+        if note_src.get(n):
+            blk.append("- **Research sources:** " + ", ".join(f"[[{s}|{s[:4]}]]" for s in note_src[n]))
         blk.append(END)
         block = "\n".join(blk)
         if START in raw:
@@ -269,7 +310,41 @@ def main() -> None:
         else:
             raw = raw.rstrip("\n") + "\n\n" + block + "\n"
         p.write_text(raw, encoding="utf-8")
-    print(f"{len(notes)} notes, {len(issues)} issue notes, {len(TOPICS)} topics; topic sizes:",
+
+    back = defaultdict(list)                                    # source -> notes that list it
+    for n, ss in note_src.items():
+        for s in ss:
+            back[s].append(n)
+    for s, p in srcs.items():
+        ex = best(stops[s], {n: tops[n] for n in notes if kind(n) == "Experiments"}, 6)
+        ex = sorted(set(ex) | {n for n in back[s] if kind(n) == "Experiments"})
+        iss = sorted(set(best(stops[s], {n: tops[n] for n in notes if kind(n) == "issue"}, 3))
+                     | {n for n in back[s] if kind(n) == "issue"})
+        other = sorted({n for n in back[s] if kind(n) not in ("Experiments", "issue")})
+        dp = best(stops[s], dtops, 4)
+        sib = best(stops[s], {x: ts for x, ts in stops.items() if x != s}, 6, need=2 if len(stops[s]) > 1 else 1)
+        blk = [START, "## Connections (auto map)",
+               "- **Topics:** " + (", ".join(f"[[Map - {k}]]" for k in stops[s]) or "none")
+               + " · [[Memecoin bot knowledge map]] · [[Runner research hub]]"]
+        if ex:
+            blk.append("- **Experiments:** " + ", ".join(f"[[{n}]]" for n in ex))
+        if iss:
+            blk.append("- **Known issues:** " + ", ".join(f"[[{n}]]" for n in iss))
+        if dp:
+            blk.append("- **Trade data points:** " + ", ".join(f"[[{d}]]" for d in dp) + " · [[Trades index]]")
+        if other:
+            blk.append("- **Notes that cite this topic:** " + ", ".join(f"[[{n}]]" for n in other))
+        if sib:
+            blk.append("- **Related sources:** " + ", ".join(f"[[{x}|{x[:4]}]]" for x in sib))
+        blk.append(END)
+        block = "\n".join(blk)
+        raw = p.read_text(encoding="utf-8", errors="ignore")
+        if START in raw:
+            raw = re.sub(re.escape(START) + r".*?" + re.escape(END), lambda _: block, raw, flags=re.S)
+        else:
+            raw = raw.rstrip("\n") + "\n\n" + block + "\n"
+        p.write_text(raw, encoding="utf-8")
+    print(f"{len(notes)} notes, {len(srcs)} sources, {len(issues)} issue notes, {len(TOPICS)} topics; topic sizes:",
           {k: len(v) for k, v in by_topic.items()})
 
 
