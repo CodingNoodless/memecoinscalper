@@ -50,7 +50,7 @@ from .full_trades import Pace, ts as iso_ts
 from .live_feed import feed_rows, feed_trades
 
 VARIANT = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] in ("m1", "m2", "m3", "m4", "m5") else "m1"
-M5 = VARIANT == "m5"                             # M5 (2026-10-22 23:05): trade only predicted runners (see below)
+M5 = VARIANT == "m5"                             # M5 (2026-10-22 23:00): trade only predicted runners (see below)
 M4 = VARIANT == "m4"                             # M4 (2026-10-22 15:10): M1 + the fixes accepted by the TF sweep (see below)
 M3 = VARIANT == "m3"                             # M3 (2026-10-21 16:00): M2 + Rohit's post-mortem changes (see below)
 M2 = VARIANT in ("m2", "m3")                     # M2 (2026-10-21 09:40): M1 + sniper-bag filter, -10% stop, 1 s polls
