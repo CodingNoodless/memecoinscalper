@@ -272,9 +272,198 @@ def rohit_lines():
     return out
 
 
+LEDGER = DATA_DIR / "research" / "ledger.jsonl"
+CRED = {"high": 3.0, "medium-high": 2.5, "medium": 2.0, "low-medium": 1.5, "medium-low": 1.5, "low": 1.0}
+
+
+def b_score(v):
+    return None if v is None else "0–2" if v <= 2 else "3–4" if v <= 4 else "5–6" if v <= 6 else "7+"
+
+
+def b_foll(v):
+    return None if v is None else "<100" if v < 100 else "100–1k" if v < 1000 else "1k–10k" if v < 10000 else "10k+"
+
+
+def b_hold(v):
+    return None if v is None else "<15" if v < 15 else "15–29" if v < 30 else "30–59" if v < 60 else "60+"
+
+
+def b_mc(v):
+    return None if not v else "<$5k" if v < 5000 else "$5–8k" if v < 8000 else "$8–12k" if v < 12000 else "≥$12k"
+
+
+def b_hour(t):
+    h = dt.datetime.fromtimestamp(t).hour
+    return "17–24 (Rohit's hours)" if h >= 17 else "00–06" if h < 6 else "06–12" if h < 12 else "12–17"
+
+
+def _holder_trend(a, r):
+    if not a.get("h_max_pre"):
+        return None, None
+    return (f"{a['h_entry']}/{a['h_max_pre']}",
+            "falling (<80% of its peak)" if a["h_entry"] < 0.8 * a["h_max_pre"] else "at or near its peak")
+
+
+def _runup(a, r):
+    if a.get("pre_lo") is None:
+        return None, None
+    v = a["pre_lo"]
+    return f"{v:.2f}×", ("big run-up (low ≤ 0.6×)" if v <= 0.6 else "moderate (0.6–0.85×)" if v <= 0.85 else
+                         "flat (> 0.85×)")
+
+
+def _top5(a, r):
+    v = a.get("top5_out")
+    return (None, None) if v is None else (v, "0–1" if v <= 1 else "2" if v == 2 else "3+")
+
+
+def _slot(a, r):
+    v = r.get("create_slot_buyers")
+    return (None, None) if v is None else (v, "0" if v == 0 else "1–3" if v <= 3 else "4+")
+
+
+def _seller(a, r):
+    if not a.get("data"):
+        return None, None
+    if not a.get("big_sol"):
+        return None, "no sells"
+    w = a["big_who"]
+    return f"{a['big_sol']:.2f} SOL", ("creator" if w.startswith("the c") else "early wallet" if w.startswith("an e")
+                                       else "other wallet")
+
+
+def _flow(a, r):
+    if not a.get("data") or a.get("buy_sol") is None:
+        return None, None
+    s_, b_ = a["sell_sol"], a["buy_sol"]
+    return f"{s_:.1f}/{b_:.1f} SOL", ("sells > 2× buys" if s_ > 2 * b_ else "sells 1–2× buys" if s_ > b_ else
+                                      "buys ≥ sells")
+
+
+def _first10(a, r):
+    if not a.get("data") or a.get("at10") is None:
+        return None, None
+    v = a["at10"]
+    return f"{v:.2f}×", "down > 10%" if v < 0.9 else "flat (0.90–1.05×)" if v <= 1.05 else "up > 5%"
+
+
+def _prob(a, r):
+    v = r.get("p")
+    return (None, None) if v is None else (v, "<0.4" if v < 0.4 else "0.4–0.5" if v < 0.5 else "≥0.5")
+
+
+# data point: (description, value(a, decision record) -> (value, range), research keyword regex, experiments)
+DIMS = {
+    "Narrative score": ("The LLM scorer's 0–10 narrative score for the coin's X link.",
+                        lambda a, r: (a.get("score"), b_score(a.get("score"))),
+                        r"narrative|catalyst|\bmeta\b|story|meme quality",
+                        ["2026-10-22 narrative coins and blind labels (NC, LB)", "2026-10-22 score-snipe (SN)",
+                         "2026-10-23 M5 entry redesign (ER)"]),
+    "X author followers": ("Followers of the account behind the coin's X post (from the scorer).",
+                           lambda a, r: (r.get("followers"), b_foll(r.get("followers"))),
+                           r"follower|influencer|\bKOL|tweet", ["2026-10-22 narrative coins and blind labels (NC, LB)"]),
+    "Holders at entry": ("Wallets holding more than 1 token when we bought.",
+                         lambda a, r: (a.get("h_entry", r.get("holders")), b_hold(a.get("h_entry", r.get("holders")))),
+                         r"holders?\b", ["2026-10-22 what separates runners (RN)", "2026-10-22 Rohit M4 notes (TF3)"]),
+    "Holder trend before entry": ("Holders at entry vs the most the coin had before entry.", _holder_trend,
+                                  r"dying|holders.{0,30}(drop|fall|leav|sell)|exit liquidity",
+                                  ["2026-10-22 Rohit M4 notes (TF3)", "2026-10-22 M4 variants backtest (MV)"]),
+    "Run-up before entry": ("Lowest price in the 10 min before entry, as a fraction of our entry price.", _runup,
+                            r"\bdip|pullback|top.?blast|chas|fomo|vertical|exit liquidity",
+                            ["2026-10-23 M5 entry redesign (ER)", "2026-10-21 entry timing and evening review"]),
+    "Market cap at entry": ("Market cap in USD when we bought.", lambda a, r: (a.get("mc"), b_mc(a.get("mc"))),
+                            r"market cap|\bmc\b|migration", ["2026-10-22 trade patterns (TF2)"]),
+    "Hour of entry": ("Pacific time of the buy.",
+                      lambda a, r: (dt.datetime.fromtimestamp(a["t"]).strftime("%H:%M"), b_hour(a["t"])),
+                      r"hour|time of day|\bEU\b|\bUS\b|overnight",
+                      ["2026-10-21 entry timing and evening review", "2026-10-22 evening missed runners (MR)"]),
+    "First buyers out before entry": ("How many of the first 5 buyers (creator excluded) had sold out before our "
+                                      "entry.", _top5, r"early buyers|first buyers|sniper|insider",
+                                      ["2026-10-23 sniper overhang test (OH)", "2026-10-22 Rohit M4 notes (TF3)"]),
+    "Create-slot buyers": ("Wallets that bought in the coin's create slot (bundle sign; M1–M4 checks).", _slot,
+                           r"bundl|same block|create.?slot|jito",
+                           ["2026-10-21 M2 rug-filtered M1", "2026-10-23 sniper overhang test (OH)"]),
+    "Biggest seller while held": ("Who made the largest single sell while we held.", _seller,
+                                  r"dev.?sell|creator|dump|bundl|rug",
+                                  ["2026-10-23 creator dump veto (CV)", "2026-10-23 buy quality and big-holder dumps (BQ)"]),
+    "Sell vs buy flow while held": ("SOL sold vs SOL bought by everyone else while we held.", _flow,
+                                    r"sell pressure|buy.?sell|net flow|volume",
+                                    ["2026-10-23 buy quality and big-holder dumps (BQ)", "2026-10-22 fade exits (FX)"]),
+    "First 10 s after entry": ("Price 10 s after entry vs entry.", _first10, r"momentum|first minute|spike|instant",
+                               ["2026-10-22 what separates runners (RN)",
+                                "2026-10-22 trade forensics and fix sweep (TF)"]),
+    "M5 model probability": ("M5's runner-model probability at the buy (threshold = train p90).", _prob,
+                             r"runner|predict|graduat", ["2026-10-22 M5 runner bot (M5)"]),
+    "Exit reason": ("The exit rule that closed the trade.", lambda a, r: (a.get("exit"), a.get("exit")),
+                    r"take.?profit|stop.?loss|sell half|trail|\bexit",
+                    ["2026-10-22 fade exits (FX)", "2026-10-22 M4 variants backtest (MV)"]),
+}
+CAT_RX = {"win_big": r"take.?profit|sell half|scale out|runner", "win": r"take.?profit|scale out|sell half",
+          "gave_back": r"round.?trip|take.?profit|trail|sell half|lock", "rug_gap": r"rug|dump|dev.?sell|bundl|nuke",
+          "shaken_out": r"stop.?loss|shaken|wick|swing low", "cut_winner": r"too early|let.{0,10}run|moon bag|hold",
+          "instant_dump": r"top.?blast|exit liquidity|chas|fomo|\bdip|pullback",
+          "slow_bleed": r"volume.{0,20}(die|drop|fall|slow)|dying|stall|flatline"}
+
+
+def sources_for(rx, ledger, names, k=6):
+    sc = []
+    for r in ledger:
+        txt = " ".join(r.get("claims", []) + r.get("tests", []) + [r["title"]])
+        h = len(re.findall(rx, txt, re.I))
+        if h:
+            sc.append((h * CRED.get(r.get("cred", "low"), 1.0), r["id"]))
+    return [names[i] for _, i in sorted(sc, reverse=True) if i in names][:k]
+
+
+def records(bot):
+    """Per mint: scorer records and decision records (passed checks / M5 buy), in file (time) order."""
+    sc, dec = defaultdict(list), defaultdict(list)
+    p = DATA_DIR / bot / "cands.jsonl"
+    if not p.exists():
+        return sc, dec
+    for line in p.open(encoding="utf-8"):
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        st = r.get("stage")
+        if st is None and "score" in r:
+            sc[r["m"]].append(r)
+        elif (st == "checks" and r.get("ok")) or (st == "m5" and r.get("buy")):
+            dec[r["m"]].append(r)
+    return sc, dec
+
+
+def last_before(rs, t, slack=5.0):
+    c = [r for r in rs if float(r["t"]) <= t + slack]
+    return c[-1] if c else (rs[0] if rs else None)
+
+
+def dp_name(k):
+    return f"Data - {k}"
+
+
+def head(x, a, cat, label, t):
+    title, meaning = CATS[cat][0], CATS[cat][1]
+    return [f"---\ntype: trade\nbot: {label}\nrules: {x.get('rules')}\ncategory: {cat}\nret: {x['ret']:.4f}\n"
+            f"date: {t:%Y-%m-%d}\nmint: {x['m']}\n---",
+            f"# {label} · {x.get('name')} · {x['ret']:+.1%}\n",
+            f"- **Bot:** [[Trades - {label}|{label}]] ({x.get('rules')}) · entered {t:%Y-%m-%d %H:%M:%S} PT · "
+            f"mc ${x.get('mc') or 0:,.0f} · narrative score {x.get('score')}",
+            f"- **Outcome:** [[Trades - {title}|{title}]]: {meaning}",
+            f"- **Coin:** `{x['m']}` · [pump.fun](https://pump.fun/coin/{x['m']})"
+            + (f" · [X post](https://x.com/i/status/{x['nkey']})" if x.get("nkey") else ""),
+            "- **Data used:** " + {"ticks": "Helius curve ticks", "feed": "live-feed curve trades",
+                                   None: "bot record only"}[a["data"]] + "\n"]
+
+
 def main() -> None:
     db = sqlite3.connect(f"file:{FEED_DB}?mode=ro", uri=True)
     notes_r = rohit_lines()
+    ledger = [json.loads(l) for l in LEDGER.open(encoding="utf-8")] if LEDGER.exists() else []
+    src_dir = VAULT / "Research" / "Runner research" / "Sources"
+    snames = {int(p.stem[1:4]): p.stem for p in src_dir.glob("S*.md") if p.stem[1:4].isdigit()}
+    issue_files = sorted(p.stem for p in (VAULT / "Codebase" / "Issues").glob("*.md"))
     all_tr = []
     for bot in BOTS:
         for line in (DATA_DIR / bot / "trades.jsonl").open(encoding="utf-8"):
@@ -285,36 +474,70 @@ def main() -> None:
     by_mint = defaultdict(list)
     for bot, x in all_tr:
         by_mint[x["m"]].append(name_of(bot, x))
-    index = defaultdict(list)
+    recs = {bot: records(bot) for bot in BOTS}
+    items = []
     for bot, x in all_tr:
         pp, src = ticks_rows(x), "ticks"
         if not pp:
             pp, src = feed_rows(db, x), "feed"
         a = analyse(x, pp, src)
         a["t"] = x["t"]
-        cat = category(a)
+        sc_r = last_before(recs[bot][0].get(x["m"], []), x["t"]) or {}
+        de_r = last_before(recs[bot][1].get(x["m"], []), x["t"]) or {}
+        merged = dict(de_r, followers=sc_r.get("followers"))
+        dims = {}
+        for k, d in DIMS.items():
+            try:
+                v, b = d[1](a, merged)
+            except (KeyError, TypeError, ZeroDivisionError):
+                v, b = None, None
+            if b is not None:
+                dims[k] = (v, b)
+        items.append(dict(bot=bot, x=x, a=a, cat=category(a), sc=sc_r, de=de_r, dims=dims, nm=name_of(bot, x)))
+    stats = defaultdict(lambda: defaultdict(list))
+    for it in items:
+        for k, (v, b) in it["dims"].items():
+            stats[k][b].append(it)
+    bin_mean = {(k, b): sum(i["x"]["ret"] for i in v) / len(v) for k, bs in stats.items() for b, v in bs.items()}
+    dim_src = {k: sources_for(d[2], ledger, snames) for k, d in DIMS.items()}
+    cat_src = {c: sources_for(rx, ledger, snames, 5) for c, rx in CAT_RX.items()}
+    index = defaultdict(list)
+    for it in items:
+        bot, x, a, cat, nm = it["bot"], it["x"], it["a"], it["cat"], it["nm"]
         title, meaning, exps, themes, issues = CATS[cat]
         label, bot_exps, bot_note = BOTS[bot]
-        nm = name_of(bot, x)
         t = dt.datetime.fromtimestamp(x["t"])
         bet, mlinks = better(a, cat, label)
         rnotes = [f for f, txt in notes_r.items() if x.get("name") and len(x["name"]) > 3
                   and x["name"].lower() in txt.lower()]
-        issue_files = {p.stem for p in (VAULT / "Codebase" / "Issues").glob("*.md")}
-        ilinks = [n for n in sorted(issue_files) if any(n.startswith(i + " ") for i in issues)]
-        md = [f"---\ntype: trade\nbot: {label}\nrules: {x.get('rules')}\ncategory: {cat}\nret: {x['ret']:.4f}\n"
-              f"date: {t:%Y-%m-%d}\nmint: {x['m']}\n---",
-              f"# {label} · {x.get('name')} · {x['ret']:+.1%}\n",
-              f"- **Bot:** [[Trades - {label}|{label}]] ({x.get('rules')}) · entered {t:%Y-%m-%d %H:%M:%S} PT · "
-              f"mc ${x.get('mc') or 0:,.0f} · narrative score {x.get('score')}",
-              f"- **Outcome:** [[Trades - {title}|{title}]]: {meaning}",
-              f"- **Coin:** `{x['m']}` · [pump.fun](https://pump.fun/coin/{x['m']})"
-              + (f" · [X post](https://x.com/i/status/{x['nkey']})" if x.get("nkey") else ""),
-              f"- **Data used:** " + {"ticks": "Helius curve ticks", "feed": "live-feed curve trades",
-                                      None: "bot record only"}[a["data"]] + "\n",
-              "## Why it " + ("won" if x["ret"] > 0 else "lost")]
+        ilinks = [n for n in issue_files if any(n.startswith(i + " ") for i in issues)]
+        md = head(x, a, cat, label, t) + ["## Why it " + ("won" if x["ret"] > 0 else "lost")]
         md += [f"- {s}" for s in why(a, cat)]
         md += ["", "## What could have been better"] + [f"- {s}" for s in bet]
+        md += ["", "## Data points",
+               "Each links to a data-point note with the P/L of every trade sharing that range (all bots, *measured*, "
+               "descriptive only).", "", "| Data point | This trade | Range | Mean P/L in range (n) |",
+               "| --- | --- | --- | --- |"]
+        for k, (v, b) in it["dims"].items():
+            md.append(f"| [[{dp_name(k)}]] | {v} | {b} | {bin_mean[(k, b)]:+.1%} ({len(stats[k][b])}) |")
+        md += ["", "## Decision record (what the bot saw)"]
+        if it["sc"]:
+            s_ = it["sc"]
+            md.append(f"- **Scorer** ({s_.get('model', 'model not logged')}): score {s_.get('score')}"
+                      + (f", author followers {s_['followers']:,}" if isinstance(s_.get("followers"), int) else "")
+                      + f": “{(s_.get('why') or '').strip()}”" + (f" · [X link]({s_['link']})" if s_.get("link") else ""))
+        if it["de"]:
+            d_ = {k: v for k, v in it["de"].items() if k not in ("t", "m", "stage", "name", "buy", "ok", "why")}
+            md.append("- **Buy check** (" + ("M5 model" if it["de"].get("stage") == "m5" else "M1–M4 checks") + "): "
+                      + ", ".join(f"{k} {v}" for k, v in d_.items()))
+        if not it["sc"] and not it["de"]:
+            md.append("- No scorer or check record on file for this trade.")
+        res = list(dict.fromkeys(cat_src.get(cat, []) + [s for k, (v, b) in it["dims"].items()
+                                                        if bin_mean[(k, b)] < -0.05 for s in dim_src[k][:2]]))[:10]
+        if res:
+            md += ["", "## Research behind this trade",
+                   "Sources whose claims match this outcome or this trade's weak data points (source claims, not "
+                   "verified by us):"] + [f"- [[{s}]]" for s in res]
         if rnotes:
             md += ["", "## Rohit's notes on this coin"]
             for f in rnotes:
@@ -322,11 +545,12 @@ def main() -> None:
                 i = txt.lower().find(x["name"].lower())
                 md.append(f"- In [[{f}]]: “{txt[i:i + 450].strip()}…”")
         others = [o for o in by_mint[x["m"]] if o != nm]
+        dexps = list(dict.fromkeys(e for k in it["dims"] for e in DIMS[k][3]))
         md += ["", "## Links",
                "- **Bot experiments:** " + ", ".join(f"[[{e}]]" for e in bot_exps) + f" · Rohit: [[{bot_note}]]",
                "- **Why-category experiments:** " + ", ".join(f"[[{e}]]" for e in exps),
-               "- **Research themes:** " + ", ".join(f"[[{th}]]" for th in themes)
-               + " · [[Runner research hub]]",
+               "- **Data-point experiments:** " + ", ".join(f"[[{e}]]" for e in dexps),
+               "- **Research themes:** " + ", ".join(f"[[{th}]]" for th in themes) + " · [[Runner research hub]]",
                "- **Map:** " + ", ".join(f"[[{m_}]]" for m_ in sorted(mlinks | {"Map - Paper bots M1-M5"}))]
         if ilinks:
             md.append("- **Known issues:** " + ", ".join(f"[[{i}]]" for i in ilinks))
@@ -336,6 +560,30 @@ def main() -> None:
         d.mkdir(parents=True, exist_ok=True)
         (d / f"{nm}.md").write_text("\n".join(md) + "\n", encoding="utf-8")
         index[label].append((x["t"], nm, x.get("name"), x["ret"], cat, title))
+    dd = OUT / "Data points"
+    dd.mkdir(parents=True, exist_ok=True)
+    for k, (desc, _, rx, exps) in DIMS.items():
+        bs = stats[k]
+        n_all = sum(len(v) for v in bs.values())
+        lines = [f"---\ntags: [trades, data-point]\n---\n# {dp_name(k)}\n", f"{desc}\n",
+                 f"{n_all} of {len(items)} trades have this data point. *Measured*, all bots pooled, descriptive only: "
+                 f"a range that looks good here is a hypothesis to pre-register, not a rule. Part of [[Trades index]].\n",
+                 "| Range | Trades | Mean P/L | Median | Win | By bot (n, mean) |",
+                 "| --- | --- | --- | --- | --- | --- |"]
+        for b, v in sorted(bs.items(), key=lambda kv: str(kv[0])):
+            r_ = sorted(i["x"]["ret"] for i in v)
+            byb = defaultdict(list)
+            for i in v:
+                byb[BOTS[i["bot"]][0]].append(i["x"]["ret"])
+            lines.append(f"| {b} | {len(v)} | {sum(r_) / len(r_):+.1%} | {r_[len(r_) // 2]:+.1%} | "
+                         f"{sum(z > 0 for z in r_) / len(r_):.0%} | "
+                         + ", ".join(f"{bb} {len(z)}, {sum(z) / len(z):+.0%}" for bb, z in sorted(byb.items())) + " |")
+        lines += ["", "**Experiments:** " + ", ".join(f"[[{e}]]" for e in exps),
+                  "**Research sources (claims about this data point):** " + ", ".join(f"[[{s}]]" for s in dim_src[k])]
+        for b, v in sorted(bs.items(), key=lambda kv: str(kv[0])):
+            lines += ["", f"## {b}"] + [f"- [[{i['nm']}]] {i['x']['ret']:+.1%}"
+                                        for i in sorted(v, key=lambda i: i["x"]["t"])]
+        (dd / f"{dp_name(k)}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     cats_all = Counter()
     by_cat = defaultdict(list)
     for label, rows in index.items():
@@ -345,11 +593,10 @@ def main() -> None:
         for r in rows:
             by_cat[r[5]].append((label,) + r)
         n = len(rows)
-        mean = sum(r[3] for r in rows) / n
         lines = [f"---\ntags: [trades]\n---\n# Trades - {label}\n",
-                 f"{n} closed paper trades, mean **{mean:+.1%}** per trade, total {sum(r[3] for r in rows) * SIZE:+.3f} SOL "
-                 f"at 0.1 SOL. Part of [[Trades index]] · [[{BOTS[label.lower()][2]}]] · "
-                 + ", ".join(f"[[{e}]]" for e in BOTS[label.lower()][1]) + "\n",
+                 f"{n} closed paper trades, mean **{sum(r[3] for r in rows) / n:+.1%}** per trade, total "
+                 f"{sum(r[3] for r in rows) * SIZE:+.3f} SOL at 0.1 SOL. Part of [[Trades index]] · "
+                 f"[[{BOTS[label.lower()][2]}]] · " + ", ".join(f"[[{e}]]" for e in BOTS[label.lower()][1]) + "\n",
                  "| Category | Trades | Mean |", "| --- | --- | --- |"]
         for k, v in c.most_common():
             rr = [r[3] for r in rows if r[4] == k]
@@ -362,22 +609,25 @@ def main() -> None:
         rows = sorted(by_cat[title], key=lambda r: r[1])
         lines = [f"---\ntags: [trades]\n---\n# Trades - {title}\n", f"{meaning}\n",
                  f"{len(rows)} trades across M1–M5. Experiments: " + ", ".join(f"[[{e}]]" for e in exps)
-                 + ". Themes: " + ", ".join(f"[[{t}]]" for t in themes) + ". Part of [[Trades index]].\n",
+                 + ". Themes: " + ", ".join(f"[[{t}]]" for t in themes) + ". Research: "
+                 + ", ".join(f"[[{s}]]" for s in cat_src.get(k, [])) + ". Part of [[Trades index]].\n",
                  "| Bot | Entered | Trade | P/L |", "| --- | --- | --- | --- |"]
         lines += [f"| {lb} | {dt.datetime.fromtimestamp(tt):%m-%d %H:%M} | [[{nm}]] | {r:+.1%} |"
                   for lb, tt, nm, cn, r, kk, tl in rows]
         (OUT / f"Trades - {title}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     top = ["---\ntags: [trades, moc]\n---\n# Trades index\n",
-           "Every closed M1–M5 paper trade has its own note (why it won or lost, what could have been better, links "
-           "to the experiments, research themes, known issues and Rohit's notes). Generated by "
-           "`uv run python -m tradeslave.trade_notes` from our own records; part of [[Memecoin bot knowledge map]].\n",
-           "## By bot"]
+           "Every closed M1–M5 paper trade has its own note: why it won or lost, what could have been better, its data "
+           "points (each linked to a data-point note with the P/L of every trade sharing that range), the bot's "
+           "decision record, the research sources behind it, and links to experiments, known issues and Rohit's notes. "
+           "Generated by `uv run python -m tradeslave.trade_notes` from our own records; part of "
+           "[[Memecoin bot knowledge map]].\n", "## By bot"]
     for label, rows in sorted(index.items()):
         top.append(f"- [[Trades - {label}]]: {len(rows)} trades, mean {sum(r[3] for r in rows) / len(rows):+.1%}")
     top += ["", "## By why", "| Category | Trades | Share |", "| --- | --- | --- |"]
     tot = sum(cats_all.values())
     for k, v in cats_all.most_common():
         top.append(f"| [[Trades - {CATS[k][0]}]] | {v} | {v / tot:.0%} |")
+    top += ["", "## Data points"] + [f"- [[{dp_name(k)}]]: {d[0]}" for k, d in DIMS.items()]
     (OUT / "Trades index.md").write_text("\n".join(top) + "\n", encoding="utf-8")
     print(f"{tot} trade notes:", {k: len(v) for k, v in index.items()}, dict(cats_all))
 
