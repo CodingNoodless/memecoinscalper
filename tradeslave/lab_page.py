@@ -49,6 +49,11 @@ a.coin{color:var(--ink)}a.coin:hover{color:var(--acc)}
 <div class="grid"><div><div class="lbl">Open positions (holders now / max since buy)</div><div id="m4o"></div><div class="lbl" style="margin-top:14px">Exit reasons</div><div id="m4x"></div></div>
 <div><div class="lbl">Verdict bar</div><div id="m4v"></div></div></div>
 <div class="grid"><div><div class="lbl">Recent trades &middot; click a coin to replay it</div><div id="m4t" class="scroll"></div></div><div><div class="lbl">Funnel, last 24 h (watch = waiting for 20 holders)</div><div id="m4f" class="scroll"></div></div></div></div></details>
+<details class="card" open><summary><span class="chev">&#9654;</span><b>M5 details</b><span class="mute small">runner model on post-band momentum, any X-linked coin &middot; forward paper test from Oct 22 23:00 (backtest held out &minus;5%, so it must prove itself here)</span></summary><div class="body">
+<div class="grid"><div><div class="lbl">Runner model decisions</div><div id="m5s"></div><div class="lbl" style="margin-top:14px">Open positions (holders now / max since buy)</div><div id="m5o"></div><div class="lbl" style="margin-top:14px">Exit reasons</div><div id="m5x"></div></div>
+<div><div class="lbl">Verdict bar</div><div id="m5v"></div></div></div>
+<div class="grid"><div><div class="lbl">Recent trades &middot; click a coin to replay it</div><div id="m5t" class="scroll"></div></div>
+<div><div class="lbl">Coins the model evaluated (best runner probability so far)</div><div id="m5e" class="scroll"></div></div></div></div></details>
 <section class="grid"><div class="card"><h2>Running jobs</h2><div id="jobs" class="scroll"></div></div>
 <div class="card"><h2>Kalshi paper bots</h2><div id="kal"></div><h2 style="margin-top:18px">C1 recorder</h2><div id="c1"></div></div></section>
 <section class="card"><h2>Experiments <span class="mute small" id="exn" style="text-transform:none;letter-spacing:0"></span></h2><div id="exp" class="scroll" style="max-height:560px"></div></section>
@@ -95,6 +100,19 @@ async function tick(){let d;try{d=await (await fetch("/api/lab",{cache:"no-store
  $("m2t").innerHTML=table(["Time","Coin","Score","Exit","Return","Held"],m2.recent.map(r=>trow("m2",r)));
  $("m3t").innerHTML=table(["Time","Coin","Score","Exit","Return","Held"],m3.recent.map(r=>trow("m3",r)));
  $("m2f").innerHTML=funnel(m2.funnel);$("m3f").innerHTML=funnel(m3.funnel);$("m4f").innerHTML=funnel(m4.funnel);
+ const v5=m5.m5||{},P5=v5.P;
+ $("m5s").innerHTML=table(["Measure","Value"],[["Buy threshold (runner probability)",P5!=null?P5.toFixed(3):DASH],["Coins evaluated",v5.coins??0],["Evaluations (every 10 s for 3 min after the band touch)",v5.evals??0],
+  ["Coins within 80% of the threshold",v5.near??0],["Bought",v5.buys??0]]);
+ $("m5e").innerHTML=table(["Time","Coin","Best p","","Holders","mc"],(v5.recent||[]).map(r=>[tm(r.t),`<a class="coin" href="/watch">${esc((r.name||r.m.slice(0,6)).slice(0,22))}</a>`,
+  `<b class="${r.buy?"pos":P5&&r.p>=0.8*P5?"":"mute"}">${r.p.toFixed(3)}</b>`,
+  `<div style="background:#252d38;border-radius:4px;height:8px;width:90px;position:relative"><div style="position:absolute;left:0;top:0;bottom:0;border-radius:4px;width:${Math.min(100,P5?r.p/P5*100:0)}%;background:${r.buy?"var(--good)":r.p>=0.8*(P5||1)?"var(--warn)":"#475569"}"></div></div>`,
+  r.holders??DASH,r.mc?"$"+(r.mc/1000).toFixed(1)+"k":DASH]));
+ $("m5t").innerHTML=table(["Time","Coin","Score","Exit","Return","Held"],m5.recent.map(r=>trow("m5",r)));
+ $("m5o").innerHTML=table(["Coin","Entry","Now","Holders","Since"],m5.open.map(o=>[esc(o.name),"$"+(o.mc||0).toLocaleString(),pct(o.ret_now),o.holders!=null?o.holders+" / "+o.h_max:DASH,ago(o.t)]));
+ $("m5x").innerHTML=table(["Exit","Trades"],Object.entries(m5.exits).sort((a,b)=>b[1]-a[1]).map(([k,v])=>[esc(k)+(k=="HDECL"?' <span class="mute small">holders fell 10% (after 15 s)</span>':""),v]));
+ const s5=m5.stats,vs5=(m.fresh5||{});
+ $("m5v").innerHTML=table(["Test","Now","Bar"],[["Trades",s5.n||0,"60 (or Nov 1)"],["Mean / trade",s5.n?pct(s5.mean):DASH,"&ge; +5%"],["t-stat",s5.n>1?s5.t.toFixed(2):DASH,"&ge; 3"],
+  ["P&amp;L without best 2",m5.ex2!=null?(m5.ex2>=0?"+":"")+m5.ex2.toFixed(3)+" SOL":DASH,"&gt; 0"],["M1 over the same hours",vs5.n?pct(vs5.mean)+` (${vs5.n})`:DASH,"M5 must beat M1&ndash;M4"]]);
  $("m4t").innerHTML=table(["Time","Coin","Score","Exit","Return","Held"],m4.recent.map(r=>trow("m4",r)));
  $("m4o").innerHTML=table(["Coin","Score","Entry","Now","Holders","Since"],m4.open.map(o=>[esc(o.name),o.score,"$"+(o.mc||0).toLocaleString(),pct(o.ret_now),o.holders!=null?o.holders+" / "+o.h_max:DASH,ago(o.t)]));
  $("m4x").innerHTML=table(["Exit","Trades"],Object.entries(m4.exits).sort((a,b)=>b[1]-a[1]).map(([k,v])=>[esc(k)+(k=="HDECL"?' <span class="mute small">holders fell 10%</span>':""),v]));

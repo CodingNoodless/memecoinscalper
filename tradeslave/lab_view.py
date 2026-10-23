@@ -97,8 +97,28 @@ def stats(v: list[float]) -> dict:
                 t=m / sd * math.sqrt(len(v)) if sd else 0.0, best=max(v), worst=min(v))
 
 
+M5_FROM = time.mktime(time.strptime("2026-10-22 23:00", "%Y-%m-%d %H:%M"))   # M5 start: M1 over the same hours
 M4_FROM = time.mktime(time.strptime("2026-10-22 15:01", "%Y-%m-%d %H:%M"))   # M4 start: M1 over the same hours
 FRESH_FROM = time.mktime(time.strptime("2026-10-21 09:20", "%Y-%m-%d %H:%M"))   # = M2 start, so M1 vs M2 compare   # fresh daytime count (Rohit)
+
+
+def m5_view(cands: list[dict]) -> dict:
+    """M5's runner-model decisions: one row per coin (its best p so far), newest first."""
+    names = {c["m"]: c.get("name") for c in cands if "score" in c}
+    ev = [c for c in cands if c.get("stage") == "m5" and "p" in c]
+    best: dict = {}
+    for c in ev:
+        b = best.get(c["m"])
+        if b is None or c["p"] > b["p"] or c.get("buy"):
+            best[c["m"]] = dict(t=c["t"], m=c["m"], name=names.get(c["m"]), p=c["p"], holders=c.get("holders"),
+                                mc=c.get("mc"), buy=bool(c.get("buy")) or bool(b and b.get("buy")), steps=c.get("step"))
+    rows = sorted(best.values(), key=lambda r: -r["t"])
+    try:
+        P = json.loads((DATA_DIR / "m1" / "m5_model.json").read_text())["P"]
+    except (OSError, ValueError, KeyError):
+        P = None
+    return dict(P=P, evals=len(ev), coins=len(best), buys=sum(r["buy"] for r in rows),
+                near=sum(1 for r in rows if P and r["p"] >= 0.8 * P), recent=rows[:40])
 
 
 def m1(variant: str = "m1") -> dict:
@@ -143,6 +163,8 @@ def m1(variant: str = "m1") -> dict:
         rides=sum(1 for r in trades if r.get("half_at")),
         ex2=round(sum(sorted(r["ret"] for r in trades)[:-2]) * 0.1, 4) if len(trades) > 2 else None,
         fresh4=stats([r["ret"] for r in trades if r["t"] >= M4_FROM]),
+        fresh5=stats([r["ret"] for r in trades if r["t"] >= M5_FROM]),
+        m5=m5_view(cands) if variant == "m5" else None,
         recent=[dict(t=r["t"], m=r["m"], name=r.get("name"), score=r.get("score"), exit=r["exit"], ret=r["ret"],
                      narr=(r.get("nkey") or key.get(r["m"], ""))[-6:],
                      mc=r.get("mc"), held=round((r["t_exit"] - r["t"]) / 60, 1)) for r in trades[-25:]][::-1],
