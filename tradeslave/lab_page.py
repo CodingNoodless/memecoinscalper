@@ -71,11 +71,12 @@ const trow=(v,r)=>[tm(r.t),`<a class="coin" href="/trades#${v}|${esc(r.m)}">${es
 const funnel=ff=>table(["Stage","Count"],[["Narrative &ge; 7",ff.passed],["Reached $4&ndash;7k + checks",ff.checked],["Passed checks (bought)",ff.checks_ok],
  ...Object.entries(ff.blocked).sort((a,b)=>b[1]-a[1]).map(([k,v])=>[`<span class="mute">blocked: ${esc(k)}</span>`,v])]);
 async function tick(){let d;try{d=await (await fetch("/api/lab",{cache:"no-store"})).json()}catch(e){$("navnote").textContent="dashboard server unreachable";return}
- $("navnote").textContent="Paper only · updated "+new Date().toLocaleTimeString();const m=d.m1,m2=d.m2,m3=d.m3,m4=d.m4;
+ $("navnote").textContent="Paper only · updated "+new Date().toLocaleTimeString();const m=d.m1,m2=d.m2,m3=d.m3,m4=d.m4,m5=d.m5;
  $("bots").innerHTML=bot("M1","Rohit's process automated: narrative score, $4&ndash;7k entry, bundle checks",m,[["Watching",m.status.watching??DASH],["Narratives",m.narratives.n],["Model",`<span class="small">${esc((m.status.llm||DASH).replace(/gemini-/g,""))}</span>`]])+
   bot("M2","M1 + sniper-bag rug filter, &minus;10% stop, 1 s checks",m2,[["Narratives",m2.narratives.n],["Mean / narrative",m2.narratives.n?pct(m2.narratives.mean):DASH],["M1 since 09:20",m.fresh.n?pct(m.fresh.mean):DASH]])+
   bot("M3","M2 + dead-coin and dev filters, real-cause scoring, rides runners",m3,[["Half-sold, rode",m3.rides||0],["Narratives",m3.narratives.n],["Mean / narrative",m3.narratives.n?pct(m3.narratives.mean):DASH]])+
-  bot("M4 <span class='pill done' style='margin-left:6px'>new</span>","M1 + TF fixes: wait for 20 holders, sell when holders fall 10%, skip buying a top",m4,[["Narratives",m4.narratives.n],["Mean / narrative",m4.narratives.n?pct(m4.narratives.mean):DASH],["Rules",esc(Object.keys(m4.by_rules||{}).join(", ")||"m4-v1")]]);
+  bot("M4 <span class='pill done' style='margin-left:6px'>new</span>","M1 + TF fixes: wait for 20 holders, sell when holders fall 10%, skip buying a top",m4,[["Narratives",m4.narratives.n],["Mean / narrative",m4.narratives.n?pct(m4.narratives.mean):DASH],["Rules",esc(Object.keys(m4.by_rules||{}).join(", ")||"m4-v1")]])+
+  bot("M5 <span class='pill done' style='margin-left:6px'>new</span>","Runner model: buys only coins whose post-band momentum says runner (backtest: held out -5%, all -1.6%; forward test)",m5,[["Narratives",m5.narratives.n],["Mean / narrative",m5.narratives.n?pct(m5.narratives.mean):DASH],["Since",esc("Oct 22 23:05")]]);
  const sc=m.funnel.scores,mx=Math.max(1,...Object.values(sc));
  $("sc").innerHTML=[...Array(11).keys()].map(k=>`<div class="${k>=7?"hot":""}" style="height:${(sc[k]||0)/mx*100}%" title="score ${k}: ${sc[k]||0}"><span>${k}</span></div>`).join("");
  $("open").innerHTML=table(["Coin","Score","Entry","Now","Since"],m.open.map(o=>[esc(o.name),o.score,"$"+(o.mc||0).toLocaleString(),pct(o.ret_now),ago(o.t)]));

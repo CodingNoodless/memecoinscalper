@@ -47,9 +47,10 @@ from ..scalper.curve import decode_bonding_curve
 from .c1_curve import CREATES, CURVE_FEE, SOL_USDC, T0, V0, sell_curve
 from .chain import env_rpc
 from .full_trades import Pace, ts as iso_ts
-from .live_feed import feed_trades
+from .live_feed import feed_rows, feed_trades
 
-VARIANT = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] in ("m1", "m2", "m3", "m4") else "m1"
+VARIANT = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] in ("m1", "m2", "m3", "m4", "m5") else "m1"
+M5 = VARIANT == "m5"                             # M5 (2026-10-22 23:05): trade only predicted runners (see below)
 M4 = VARIANT == "m4"                             # M4 (2026-10-22 15:10): M1 + the fixes accepted by the TF sweep (see below)
 M3 = VARIANT == "m3"                             # M3 (2026-10-21 16:00): M2 + Rohit's post-mortem changes (see below)
 M2 = VARIANT in ("m2", "m3")                     # M2 (2026-10-21 09:40): M1 + sniper-bag filter, -10% stop, 1 s polls
@@ -89,7 +90,14 @@ RIDE_MIN, SUP_EVERY, SUP_FADE = 1.3, 10.0, 0.40
 # followers (found while testing his deleted-posts idea: -18% vs -7%/-9% in both halves; forward test decides).
 H_MIN, H_DROP, H_EVERY, TOP_UP = 20, 0.10, 2.0, 1.3
 LAUNCH_X, LAUNCH_HIGH, FOLL = 1.15, 0.80, (100, 10_000)
-RULES = "m4-v3" if M4 else "m3-v3" if M3 else "m2-v1" if M2 else "exits-v2"                                # bump on every rule change; the dashboard splits results by it
+# M5 (vault "2026-10-22 M5 runner bot (M5)"): no narrative gate (any X-linked coin; the score is still fetched from
+# the shared cache only so the coin is watched). From a coin's first trade in the $4-7k band >= 5 s after create, every
+# 10 s up to +180 s, a logistic runner model on post-band momentum (data/m1/m5_model.json, trained on Oct 21 + Oct 22
+# evening, frozen) gives p; buy at the first p >= its threshold (0.373). Trades come from the real-time feed. Exits:
+# M1's plus the holder exit (-10% from max) after a 15 s grace. The backtest FAILED held out (-5.0%/trade; all data
+# -1.6%, M4 replay -6.3%): this is a forward test.
+M5_GRACE, M5_MAX_S, M5_EVERY = 15.0, 180.0, 10.0
+RULES = "m5-v1" if M5 else "m4-v3" if M4 else "m3-v3" if M3 else "m2-v1" if M2 else "exits-v2"                                # bump on every rule change; the dashboard splits results by it
 ACT_EVERY = 6.0
 WATCH_S, POLL_S, RECHECK_S = 20 * 60, (1.0 if M2 else 2.0), (5 if M4 else 30)
 SIZE_SOL, TX_SOL, MAX_OPEN = 0.1, 0.0005, 5
@@ -517,6 +525,8 @@ def run():
                 first.setdefault(k, r)
     done, lock = set(), threading.Lock()
     follow, lastwhy, mc_now = {}, {}, {}         # M4 watchlist view: author followers, last check, market cap
+    m5_state = {}                                # M5: mint -> {"bucket": last 10-s step evaluated}
+    m5_model = json.loads((DATA_DIR / "m1" / "m5_model.json").read_text()) if M5 else None
     pool = ThreadPoolExecutor(1)                 # one LLM call at a time (local GPU)
 
     def narrate(c, link):
@@ -609,13 +619,30 @@ def run():
                 continue
             mc = p * 1e9 * sol["usd"]
             sc, narr_ok, nkey, copy, link = scored.get(m, (None, False, None, False, None))
+            if M5:
+                if m not in scored:
+                    continue
+                rows5, full5 = feed_rows(m)
+                if not rows5 or not full5:
+                    continue
+                go, det5 = m5_decide(m, rows5, m5_state, m5_model)
+                if det5:
+                    jlog(CANDS, {"t": time.time(), "m": m, "stage": "m5", "mc": round(mc), "buy": go, **det5})
+                if not go:
+                    if det5 and det5.get("final"):
+                        done.add(m)
+                    continue
+                tr = [(0, r[0], r[4], r[2], r[3], r[5]) for r in rows5]
             top = MC_HIGH if (sc or 0) >= SCORE_HIGH else MC_BUY[1]
-            if sc is None or sc < SCORE_MIN or not narr_ok or not (MC_MIN <= mc and MC_BUY[0] <= mc <= top):
+            if not M5 and (sc is None or sc < SCORE_MIN or not narr_ok or not (MC_MIN <= mc and MC_BUY[0] <= mc <= top)):
                 continue
-            if t_loop - last_check[m] < RECHECK_S:
+            if not M5 and t_loop - last_check[m] < RECHECK_S:
                 continue
             last_check[m] = t_loop
-            tr, src = None, "swap-api"
+            ok, why, det = True, [], {}
+            if not M5:
+                tr = None
+            src = "feed" if M5 else "swap-api"
             if M4:                                               # real-time feed; the swap-api list lags
                 tr, full = feed_trades(m)
                 if not full:                                     # feed down, or it missed the create / had a gap
@@ -625,12 +652,14 @@ def run():
                 tr = trades(s, pace, m)
             if not tr:
                 continue
-            ok, why, det = checks(rpc, tr, c.get("dev"), sol["usd"])
+            if not M5:
+                ok, why, det = checks(rpc, tr, c.get("dev"), sol["usd"])
             if M3 and copy and det.get("vol_usd", 0) < VOL_COPY and "volume" not in why:
                 ok, why = False, why + ["volume: copy coin < $3k"]
             if M4:
                 det["src"] = src
-            jlog(CANDS, {"t": time.time(), "m": m, "stage": "checks", "mc": round(mc), "ok": ok, "why": why, **det})
+            if not M5:
+                jlog(CANDS, {"t": time.time(), "m": m, "stage": "checks", "mc": round(mc), "ok": ok, "why": why, **det})
             lastwhy[m] = {"t": time.time(), "why": why, "holders": det.get("holders"), "h_max": det.get("holders_max")}
             if not ok:
                 if not any(w.startswith(("volume", "dead", "watch")) for w in why):   # these can change: re-check
@@ -642,9 +671,9 @@ def run():
             v = fresh.virtual_sol
             q = V0 * T0 / v - V0 * T0 / (v + SIZE_SOL * (1 - CURVE_FEE))
             opened[m] = dict(m=m, name=c.get("name"), score=sc, t=time.time(), p0=price(fresh), q=q, peak=price(fresh),
-                             stop=STOP, high=sc >= SCORE_HIGH, bc=bc, rules=RULES, mc=round(mc), sol_usd=sol["usd"],
-                             nkey=nkey)
-            if M4 and tr[0][2] == c.get("dev"):                # holder book for the holder exit
+                             stop=STOP, high=(sc or 0) >= SCORE_HIGH and not M5, bc=bc, rules=RULES, mc=round(mc),
+                             sol_usd=sol["usd"], nkey=nkey)
+            if (M4 and tr[0][2] == c.get("dev")) or M5:        # holder book for the holder exit
                 bal = defaultdict(float)
                 for x in tr:
                     bal[x[2]] += x[5] if x[3] else -x[5]
@@ -699,9 +728,10 @@ def manage(opened, m, p, cs, done, rpc=None):
             o["act_max"], o["t_act"] = max(o.get("act_max", 0), o["act"]), now
         act, amax = o.get("act"), o.get("act_max") or 0
         r, held = p / o["p0"], now - o["t"]
-        if M4 and o.get("bal") is not None and now - o["t_h"] >= H_EVERY:
+        if (M4 or M5) and o.get("bal") is not None and now - o["t_h"] >= H_EVERY:
             holders_update(o, now)
-        if M4 and r > o["stop"] and o.get("bal") is not None and o["holders"] <= (1 - H_DROP) * o["h_max"]:
+        if ((M4 or M5) and r > o["stop"] and o.get("bal") is not None and o["holders"] <= (1 - H_DROP) * o["h_max"]
+                and (not M5 or now - o["t"] >= M5_GRACE)):
             o["pending"] = "HDECL"
             return
         if o.get("run"):                                        # M3 ride: hold the other half until support fades
@@ -736,6 +766,29 @@ def manage(opened, m, p, cs, done, rpc=None):
     opened.pop(m)
     done.add(m)
     print(time.strftime("%H:%M"), f"SELL {o['name']!r} {why} {ret:+.1%}", flush=True)
+
+
+def m5_decide(m, rows, state, model):
+    """M5: (buy?, details) for one coin now. Evaluated once per 10-s step after its first band trade, up to +180 s."""
+    from .m5_bt import Coin, identical_top5
+    from .runners import decision
+    t0 = rows[0][0]
+    i = decision(rows, t0)
+    if i is None:
+        return False, None
+    since = time.time() - rows[i][0]
+    if since > M5_MAX_S:
+        return False, {"final": True, "why": "no runner signal within 180 s"}
+    step = int(since // M5_EVERY)
+    if step <= state.get(m, -1):
+        return False, None
+    state[m] = step
+    f, k = Coin({"rows": rows, "t0": t0}).feats(min(time.time(), rows[-1][0] + 60), i)
+    x = [(math.log1p(max(0.0, f[n])) if n not in ("vs_band", "vs_high") else f[n]) for n in model["feats"]]
+    z = model["intercept"] + sum(w * (v - mu) / sd for w, v, mu, sd in zip(model["coef"], x, model["mu"], model["sd"]))
+    p = 1 / (1 + math.exp(-z))
+    go = p >= model["P"] and f["mc_k"] <= 20 and not identical_top5(rows, k)
+    return go, {"p": round(p, 3), "step": step, **{n: round(f[n], 3) for n in ("holders", "buy30", "mc_k", "vs_band")}}
 
 
 def watch_row(m, c, sc, foll, last, mc, dropped):

@@ -24,6 +24,8 @@ JOBS = [
      "Rohit's new-pairs process: X-linked launches, Gemini narrative score, bundle/chart checks, 2x / -5%"),
     ("M4 = M1 + TF fixes", "paper bot", "m4_bot.out", 15,
      "Watchlist until >= 20 holders and >= 90% of their max, sell when holders fall 10%, skip a top; live feed"),
+    ("M5 runner model", "paper bot", "m5_bot.out", 15,
+     "Any X-linked coin; buys only when the runner model (post-band momentum) says p >= 0.373; forward test"),
     ("Live trade feed", "data feed", "live_feed.log", 15,
      "Every pump.fun trade from a Helius websocket; real-time trades for the coins the bots watch (data/feed)"),
     ("C1 curve reach model", "forward recorder", "c1_curve.out", 15,
@@ -203,6 +205,6 @@ def experiments() -> dict:
 
 
 def build_lab_snapshot() -> dict:
-    return dict(t=time.time(), jobs=jobs(), m1=m1(), m2=m1("m2"), m3=m1("m3"), m4=m1("m4"), c1=c1(), kalshi=kalshi(), experiments=experiments())
+    return dict(t=time.time(), jobs=jobs(), m1=m1(), m2=m1("m2"), m3=m1("m3"), m4=m1("m4"), m5=m1("m5"), c1=c1(), kalshi=kalshi(), experiments=experiments())
 
 

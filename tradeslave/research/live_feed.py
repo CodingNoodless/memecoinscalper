@@ -191,3 +191,30 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def feed_rows(m: str, db: sqlite3.Connection | None = None, max_age: float = 5.0):
+    """(rows, complete) for M5: rows = [t, spot SOL/token, is_buy, sol, wallet, tokens, holders] oldest first (holders =
+    wallets holding > 1 token, dev included, counted from create); (None, False) when the feed is down or lacks it."""
+    own = db is None
+    db = db or sqlite3.connect(DB, timeout=5)
+    try:
+        beat = db.execute("SELECT t FROM beat WHERE k='feed'").fetchone()
+        c = db.execute("SELECT complete FROM coin WHERE m=?", (m,)).fetchone()
+        if not beat or time.time() - beat[0] > max_age or not c:
+            return None, False
+        rows = db.execute("SELECT t, w, b, sol, tok, vs, vt FROM tr WHERE m=? ORDER BY slot, seq", (m,)).fetchall()
+    except sqlite3.Error:
+        return None, False
+    finally:
+        if own:
+            db.close()
+    bal, h, out = {}, 0, []
+    for t, w, b, sol, tok, vs, vt in rows:
+        b0 = bal.get(w, 0.0)
+        b1 = b0 + (tok if b else -tok)
+        bal[w] = b1
+        h += (b0 <= 1 < b1) - (b1 <= 1 < b0)
+        if vt:
+            out.append([t, vs / vt, bool(b), sol, w, tok, h])
+    return out, bool(c[0])
