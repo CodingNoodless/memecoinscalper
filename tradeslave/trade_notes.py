@@ -34,6 +34,10 @@ BOTS = {
     "m4": ("M4", ["2026-10-22 M4 variants backtest (MV)", "2026-10-22 Rohit M4 notes (TF3)"], "Notes on M4 trades"),
     "m5": ("M5", ["2026-10-22 M5 runner bot (M5)", "2026-10-23 M5 entry redesign (ER)"], "notes on m5 trades"),
     "m6": ("M6", ["2026-10-23 M6 bad-buy filters (M6)", "2026-10-22 M5 runner bot (M5)"], "The path to profitability"),
+    "m7": ("M7", ["2026-10-23 M7 vs M8 forward test (m6-v3 entries, two exit sets)", "M6 proposals (m6-v3)"],
+           "Max profit and max 25% loss - what the vault says"),
+    "m8": ("M8", ["2026-10-23 M7 vs M8 forward test (m6-v3 entries, two exit sets)", "M6 proposals (m6-v3)"],
+           "Max profit and max 25% loss - what the vault says"),
 }
 # Rohit's idea / brainstorm notes and research write-ups each outcome category speaks to
 IDEAS = {"rug_gap": ["The path to profitability", "The path to profitability - evidence", "Rug avoidance research (R4-R5)"],

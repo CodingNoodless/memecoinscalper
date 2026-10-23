@@ -50,9 +50,11 @@ from .full_trades import Pace, ts as iso_ts
 from .live_feed import feed_rows, feed_trades
 from .fl_test import LiveFunding
 
-VARIANT = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] in ("m1", "m2", "m3", "m4", "m5", "m6") else "m1"
-M6 = VARIANT == "m6"                             # M6 (2026-10-23 17:00): M5 v1 + bad-buy skip filters (see below)
-M5 = VARIANT in ("m5", "m6")                     # M5 (2026-10-22 23:00): trade only predicted runners (see below)
+VARIANT = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] in ("m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8") else "m1"
+M6 = VARIANT in ("m6", "m7", "m8")               # M6 (2026-10-23 17:00): M5 v1 + bad-buy skip filters (see below)
+M7 = VARIANT in ("m7", "m8")                     # M7/M8 (2026-10-23 16:00): m6-v3 entries, side by side with two exit sets
+M8 = VARIANT == "m8"
+M5 = VARIANT in ("m5", "m6", "m7", "m8")                     # M5 (2026-10-22 23:00): trade only predicted runners (see below)
 M4 = VARIANT == "m4"                             # M4 (2026-10-22 15:10): M1 + the fixes accepted by the TF sweep (see below)
 M3 = VARIANT == "m3"                             # M3 (2026-10-21 16:00): M2 + Rohit's post-mortem changes (see below)
 M2 = VARIANT in ("m2", "m3")                     # M2 (2026-10-21 09:40): M1 + sniper-bag filter, -10% stop, 1 s polls
@@ -69,7 +71,7 @@ DAY_CAP, EVENING = 1500, 17                     # infra v3: before 17:00 PT each
                                                  # 10k / 150k (Rohit's AI Studio limits, 2026-10-21); resets at midnight PT
 TP, STOP, TREND_ARM, TREND_GIVE, STALL_S, STALL_ACT, MAX_HOLD = 2.0, 0.70, 1.30, 0.80, 120, 0.50, 600
 HI_ARM, HI_GIVE, HI_DEAD, HI_HOLD = 1.50, 0.60, 0.20, 7200
-if M2:
+if M2 or M8:
     STOP = 0.90                                  # Rohit: losses ~15-20% even when rugged (a -10% stop fills ~-17..-20%)
 SNIP_SLOTS, SNIP_MAX = 2, 8.0                    # M2: wallets buying within 2 slots of the create, % of supply still held
 # M3 (assumptions, not fitted): dead coin = < 15 holders and < 8 new buyers in 2 min; rug = dev holds > 10% or
@@ -104,9 +106,17 @@ M5_GRACE, M5_MAX_S, M5_EVERY = 15.0, 180.0, 10.0
 # m6-v1 (12:05-13:10, score >= 5 and holders >= 60) took 1 trade; m6-v2 swaps in the funding-cluster skip, the only rug
 # signal that separated deep losses in the same direction on train, validation and live (post hoc; forward test).
 M6_CLUSTER = 0.15
-RULES = "m6-v2" if M6 else "m5-v1" if M5 else "m4-v3" if M4 else "m3-v3" if M3 else "m2-v1" if M2 else "exits-v2"                                # bump on every rule change; the dashboard splits results by it
+# M7 / M8 (vault "M6 proposals (m6-v3)", "2026-10-23 coordinated-exit and serial-funder tests (CX)", "Max profit and max
+# 25% loss - what the vault says"): m6-v2 plus the serial-funder skip (CX2): skip when the creator's funder already funded
+# the creator of an earlier M5-signalled coin (program-owned funders don't count; a failed lookup skips). Seen funders
+# start from data/m1/serial_seed.json (dataset entries + M5 live trades) and grow with every M5 buy signal. M7 keeps
+# M5's exits (stop -30%); M8 uses a -10% stop (XA L5). Forward test, judged once at >= 60 trades each.
+SERIAL_SEED = DATA_DIR / "m1" / "serial_seed.json"
+# 1 s polls on every bot from 2026-10-23 16:00 (Rohit: simulate a 1 s delay, not 2-4 s): an exit decided on one poll
+# fills at the next, 1 s later; rules carry "+1s" so the dashboard splits results from before the change.
+RULES = ("m8-v1" if M8 else "m7-v1" if M7 else "m6-v2" if M6 else "m5-v1" if M5 else "m4-v3" if M4 else "m3-v3" if M3 else "m2-v1" if M2 else "exits-v2") + "+1s"                                # bump on every rule change; the dashboard splits results by it
 ACT_EVERY = 6.0
-WATCH_S, POLL_S, RECHECK_S = 20 * 60, (1.0 if M2 else 2.0), (5 if M4 else 30)
+WATCH_S, POLL_S, RECHECK_S = 20 * 60, 1.0, (5 if M4 else 30)
 SIZE_SOL, TX_SOL, MAX_OPEN = 0.1, 0.0005, 5
 LINK = re.compile(r"https?://(?:www\.)?(?:x|twitter)\.com/\S+", re.I)
 
@@ -535,6 +545,7 @@ def run():
     m5_state = {}                                # M5: mint -> {"bucket": last 10-s step evaluated}
     m5_model = json.loads((DATA_DIR / "m1" / "m5_model.json").read_text()) if M5 else None
     m6_funding = LiveFunding() if M6 else None          # M6: Helius funding lookups for the cluster skip
+    serial = SerialFunders() if M7 else None            # M7/M8: creator funders already seen
     pool = ThreadPoolExecutor(1)                 # one LLM call at a time (local GPU)
 
     def narrate(c, link):
@@ -644,9 +655,18 @@ def run():
                     if fl is not None:
                         det5.update(m6_cluster=round(fl["cluster_share"], 3), m6_creator=round(fl["creator_linked"], 3),
                                     m6_fresh=round(fl["fresh_share"], 3))
+                        seen_before = serial.check(m6_funding, rows5[0][4]) if M7 else 0
+                        if M7:
+                            det5.update(m7_serial=seen_before)
                         if fl["cluster_share"] >= M6_CLUSTER:
                             go = False
                             det5.update(final=True, why=f"M6 skip: funding cluster {fl['cluster_share']:.0%}")
+                        elif M7 and seen_before is None:
+                            go = False
+                            det5.update(final=True, why="M7 skip: creator funder lookup failed")
+                        elif M7 and seen_before >= 1:
+                            go = False
+                            det5.update(final=True, why=f"M7 skip: creator's funder funded {seen_before} earlier creator(s)")
                 if det5:
                     jlog(CANDS, {"t": time.time(), "m": m, "stage": "m5", "mc": round(mc), "buy": go, **det5})
                 if not go:
@@ -726,8 +746,33 @@ def run():
         time.sleep(max(0.0, POLL_S - (time.time() - t_loop)))
 
 
+class SerialFunders:
+    """M7/M8: how many earlier M5-signalled creators each funder funded (program-owned funders excluded)."""
+
+    def __init__(self):
+        from .fl_test import NONSYSTEM
+        self.nonsystem = NONSYSTEM
+        self.path = OUT / "serial_seen.json"
+        src = self.path if self.path.exists() else SERIAL_SEED
+        self.seen = defaultdict(int, json.loads(src.read_text()) if src.exists() else {})
+
+    def check(self, funding, creator):
+        """Times the creator's funder was seen before this coin (None if unknown); counts this coin."""
+        f = (funding.cache.get(creator) or {}).get("funder")
+        if not f:
+            return None
+        if f in self.nonsystem:
+            return 0
+        n = self.seen[f]
+        self.seen[f] += 1
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self.seen))
+        os.replace(tmp, self.path)
+        return n
+
+
 def manage(opened, m, p, cs, done, rpc=None):
-    """Exit decided on one poll, filled at the curve state of the next poll (~2 s later)."""
+    """Exit decided on one poll, filled at the curve state of the next poll (1 s later)."""
     o = opened[m]
     now = time.time()
     if p is None:                                               # graduated: sell at the last price seen

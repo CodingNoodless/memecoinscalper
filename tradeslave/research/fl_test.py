@@ -10,6 +10,7 @@ fell the most. Uses Helius getTransactionsForAddress (oldest first) on the HISTO
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import statistics
 import sys
@@ -257,13 +258,34 @@ class LiveFunding:
         self.session = requests.Session()
         self.lock = threading.Lock()
 
+    def _merge_disk(self):
+        """M6/M7/M8 share the cache file: pick up wallets another bot looked up."""
+        try:
+            disk = json.loads(CACHE.read_text())
+        except (OSError, ValueError):
+            return
+        for w, v in disk.items():
+            self.cache.setdefault(w, v)
+
     def cluster_share(self, rows, k):
         top, cr = holders_at(rows, k)
-        need = [w for w in {cr} | {w for w, _ in top} if w not in self.cache]
+        wanted = {cr} | {w for w, _ in top}
+        if any(w not in self.cache for w in wanted):
+            self._merge_disk()
+        need = [w for w in wanted if w not in self.cache]
         with ThreadPoolExecutor(8) as ex:
             for w, res in zip(need, ex.map(lambda w: funding(self.url, w, requests.Session()), need)):
                 if "err" not in res:
                     self.cache[w] = res
-        with self.lock:
-            CACHE.write_text(json.dumps(self.cache))
+        if need:
+            with self.lock:
+                self._merge_disk()
+                tmp = CACHE.with_name(f"funding.{os.getpid()}.tmp")
+                tmp.write_text(json.dumps(self.cache))
+                for i in range(5):                         # atomic: a reader never sees a half-written file
+                    try:
+                        os.replace(tmp, CACHE)
+                        break
+                    except PermissionError:                # Windows: another bot has the file open
+                        time.sleep(0.05 * (i + 1))
         return features(top, cr, rows[k][0], self.cache, self.public)
