@@ -516,6 +516,7 @@ def run():
             if k.isdigit():                      # post ids only (older rows also keyed profiles)
                 first.setdefault(k, r)
     done, lock = set(), threading.Lock()
+    follow, lastwhy, mc_now = {}, {}, {}         # M4 watchlist view: author followers, last check, market cap
     pool = ThreadPoolExecutor(1)                 # one LLM call at a time (local GPU)
 
     def narrate(c, link):
@@ -541,6 +542,7 @@ def run():
                      "model": llm.used, "nkeys": keys, "first": prev is None,
                      "improves": better if prev else None, "after": prev.get("name") if prev else None,
                      "followers": foll})
+        follow[c["m"]] = foll
         if M4 and foll is not None and not FOLL[0] <= foll < FOLL[1]:
             with lock:
                 done.add(c["m"])                         # m4-v3: author outside 100-10k followers
@@ -598,6 +600,8 @@ def run():
             if cs is None:
                 continue
             p = cs.price_sol if not cs.complete else None
+            if p and sol["usd"]:
+                mc_now[m] = p * 1e9 * sol["usd"]
             if m in opened:
                 manage(opened, m, p, cs, done, rpc)
                 continue
@@ -627,6 +631,7 @@ def run():
             if M4:
                 det["src"] = src
             jlog(CANDS, {"t": time.time(), "m": m, "stage": "checks", "mc": round(mc), "ok": ok, "why": why, **det})
+            lastwhy[m] = {"t": time.time(), "why": why, "holders": det.get("holders"), "h_max": det.get("holders_max")}
             if not ok:
                 if not any(w.startswith(("volume", "dead", "watch")) for w in why):   # these can change: re-check
                     done.add(m)
@@ -656,7 +661,11 @@ def run():
                                         "watching": len(watch), "scored": len(scored),
                                         "open": [{k: o.get(k) for k in ("m", "name", "score", "t", "p0", "last", "peak",
                                                                         "stop", "mc", "holders", "h_max")}
-                                                 for o in opened.values()]}))
+                                                 for o in opened.values()],
+                                        "watch": [watch_row(m, watch[m], scored[m], follow.get(m), lastwhy.get(m),
+                                                            mc_now.get(m), m in done)
+                                                  for m in list(watch) if m in scored and m not in opened
+                                                  and (scored[m][0] or 0) >= SCORE_MIN] if M4 else []}))
         except OSError:
             pass
         if time.time() - last_note > 600:
@@ -727,6 +736,28 @@ def manage(opened, m, p, cs, done, rpc=None):
     opened.pop(m)
     done.add(m)
     print(time.strftime("%H:%M"), f"SELL {o['name']!r} {why} {ret:+.1%}", flush=True)
+
+
+def watch_row(m, c, sc, foll, last, mc, dropped):
+    """One M4 watchlist entry for the dashboard: what the coin still needs before M4 would buy it."""
+    score, narr_ok = sc[0], sc[1]
+    if not narr_ok:
+        need = "copy coin (no buy)"
+    elif dropped and foll is not None and not FOLL[0] <= foll < FOLL[1]:
+        need = "author followers outside 100-10k (no buy)"
+    elif dropped:
+        need = "ruled out: " + ", ".join((last or {}).get("why") or ["checks"])
+    elif mc is None or mc < MC_BUY[0]:
+        need = "market cap below $4k"
+    elif mc > (MC_HIGH if (score or 0) >= SCORE_HIGH else MC_BUY[1]):
+        need = "market cap above the buy band"
+    elif last and last.get("why"):
+        need = "; ".join(last["why"])
+    else:
+        need = "in the buy band, checking"
+    return {"m": m, "name": c.get("name"), "sym": c.get("sym"), "score": score, "followers": foll, "mc": mc,
+            "t0": c.get("t"), "holders": (last or {}).get("holders"), "h_max": (last or {}).get("h_max"),
+            "need": need, "active": not dropped and narr_ok, "link": sc[4]}
 
 
 def holders_update(o, now):

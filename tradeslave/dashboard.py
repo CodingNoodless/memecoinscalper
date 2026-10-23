@@ -19,6 +19,7 @@ from .lab_view import build_lab_snapshot
 from .label_page import LABEL_HTML
 from .label_view import label_next, label_save
 from .paper_view import paper_next, paper_save
+from .watch_view import WATCH_HTML, live, watch_list
 from .trade_view import TRADES_HTML, chart, trade_list
 from .scalper.dashboard_view import build_scalper_snapshot, scalper_html
 
@@ -322,6 +323,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
         elif path == "/label":
             body = LABEL_HTML.encode("utf-8")
             content_type = "text/html; charset=utf-8"
+        elif path == "/watch":
+            body = WATCH_HTML.encode("utf-8")
+            content_type = "text/html; charset=utf-8"
+        elif path in ("/api/watch", "/api/live"):
+            try:
+                data = watch_list() if path == "/api/watch" else live(parse_qs(urlsplit(self.path).query).get("m", [""])[0])
+                body = json.dumps(data, allow_nan=False, default=str).encode("utf-8")
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                logger.exception("Watch view failed")
+                body = json.dumps({"error": f"Could not read the watchlist: {exc}"}).encode("utf-8")
+            content_type = "application/json; charset=utf-8"
         elif path == "/api/paper/next":
             try:
                 body = json.dumps(paper_next(), allow_nan=False, default=str).encode("utf-8")
