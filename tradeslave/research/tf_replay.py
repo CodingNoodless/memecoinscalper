@@ -28,7 +28,7 @@ SIZE, TX = 0.1, 0.0005
 BASE = dict(tp=2.0, trend_arm=1.3, trend_give=0.8, stall_s=120, stall_act=0.5, max_hold=600,
             hi_arm=1.5, hi_give=0.6, hi_dead=0.2, hi_hold=7200, high=True,
             lock_arm=None, lock_give=None, fade=None, be_arm=None, half15=False, early=None, m1_stop=None,
-            actfade=None, hdecl=None, hflow=None, hgrace=0, nw=None, ff=None, half_tp=None, pstall=None)
+            actfade=None, hdecl=None, hflow=None, hgrace=0, nw=None, ff=None, half_tp=None, pstall=None, coord=None)
 HORIZON = 900
 
 
@@ -123,6 +123,15 @@ class Win:
         return out
 
 
+def coordinated(rows, pre_buyers, k):
+    """CX1: True when >= k distinct wallets that bought before our entry sell at the same block time."""
+    by = defaultdict(set)
+    for r in rows:
+        if not r[2] and r[4] in pre_buyers:
+            by[r[0]].add(r[4])
+    return any(len(v) >= k for v in by.values())
+
+
 def sim(x, pre, post, P):
     """Replay one trade with exit parameters P. Returns (ret, why, t_exit, peak_x)."""
     v, t0, p0, q = x["v"], x["t"], x["p0"], x["q"]
@@ -142,6 +151,7 @@ def sim(x, pre, post, P):
             seen.add(r_[4])
             firsts.append(r_[0])
     pre_t = [r for r in pre if r[0] > t0 - 60]
+    pre_buyers = {r[4] for r in pre if r[2]}
     act_pre = len(pre_t)
     tick_t = t0
     while tick_t < t_end:
@@ -205,6 +215,8 @@ def sim(x, pre, post, P):
             pending = "NWSTOP"                                  # (window s, min new wallets, grace s)
         elif P["pstall"] and peak >= p0 * P["pstall"][0] and tick_t - t_peak >= P["pstall"][1]:
             pending = "PSTALL"                                  # ER B3: up >= x, no new high for s seconds
+        elif P["coord"] and coordinated(w.since(tick_t - poll, tick_t), pre_buyers, P["coord"]):
+            pending = "COORD"                                   # CX1: >= k pre-entry buyers sell at one block time
         elif P["early"] and held >= P["early"] and peak < p0 * 1.05:
             last = w.since(tick_t - 15, tick_t)
             if sum(y[3] if y[2] else -y[3] for y in last) < 0:
