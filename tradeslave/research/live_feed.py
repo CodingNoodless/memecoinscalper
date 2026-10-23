@@ -143,7 +143,9 @@ def run() -> None:
                                     "params": [{"mentions": [PUMP]}, {"commitment": "processed"}]}))
                 with lock:
                     state["up_since"] = time.time()
-                    db.execute("UPDATE coin SET complete=0")     # anything seen before this connection has a gap
+                    # only coins still trading when the gap began have a gap; ones that went quiet before keep their flag
+                    db.execute("UPDATE coin SET complete=0 WHERE m IN (SELECT DISTINCT m FROM tr WHERE t > ?)",
+                               (time.time() - KEEP_S,))
                     db.commit()
                 log.info("live feed up on %s (logsSubscribe on the pump.fun program)", ws_url.split("//")[1].split("/")[0])
                 while True:
