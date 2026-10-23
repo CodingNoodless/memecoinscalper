@@ -138,7 +138,20 @@ def combos(out, ent, tr):
     out[f"COMBO {bd} x {be} x {ba}"] = {i: (a[i] if d[i] is not None and e[i] is not None else None) for i in d}
 
 
+def resplit():
+    """ER2 (pre-registered 10:15): train = t0 before Oct 23 00:00 PDT, validation = B coins after it."""
+    global TRAIN, HELD, CACHE
+    from . import cv_test, m5_bt
+    cut = time.mktime(time.strptime("2026-10-23 00:00", "%Y-%m-%d %H:%M"))
+    m5_bt.part = lambda co: "T-" + co["set"] if co["t0"] < cut else "V-" + co["set"]       # noqa: E731
+    TRAIN, HELD = ("T-A", "T-B"), ("V-A", "V-B")
+    cv_test.TRAIN = TRAIN
+    CACHE = DATA_DIR / "m1" / "er2_entries.pkl"
+
+
 def main() -> None:
+    if "er2" in sys.argv:
+        resplit()
     coins, byid, ent = load()
     out, tr = evaluate(coins, byid, ent)
     combos(out, ent, tr)
@@ -155,11 +168,11 @@ def main() -> None:
             elig.append((m, k))
     pick = max(elig)[1] if elig else None
     print(f"\nPick for validation: {pick or 'none (no setting reaches >= 100 trades and >= +20% on train)'}")
-    (DATA_DIR / "m1" / "er_pick.json").write_text(json.dumps({"pick": pick}))
-    if sys.argv[1:2] == ["held"] and pick:
+    (DATA_DIR / "m1" / ("er2_pick.json" if "er2" in sys.argv else "er_pick.json")).write_text(json.dumps({"pick": pick}))
+    if "held" in sys.argv and pick:
         print("\nVALIDATION (A-check + B-test), judged once:")
         res = out[pick]
-        for p in ("A-check", "B-test"):
+        for p in sorted({s["part"] for s in held}):
             print(f"   {p:9s} {summ([res[id(s)] for s in held if s['part'] == p and res[id(s)] is not None])}")
         print(f"   {'all':9s} {summ([res[id(s)] for s in held if res[id(s)] is not None])}")
         print(f"   base     {summ([s['r'] for s in held])}")

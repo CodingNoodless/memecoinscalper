@@ -17,7 +17,7 @@ from pathlib import Path
 
 VAULT = Path(r"D:\vault\tradeslave")
 START, END = "<!-- map:start -->", "<!-- map:end -->"
-SKIP_DIRS = {".obsidian", "Templates", "Sources", "Map", ".trash"}
+SKIP_DIRS = {".obsidian", "Templates", "Sources", "Map", ".trash", "Trades"}
 
 # topic: (description, keyword regex, research themes it maps to)
 TOPICS = {
@@ -230,7 +230,8 @@ def main() -> None:
               "One map of everything: each topic note lists the experiments (with verdicts), strategies, known issues, "
               "sessions, research themes and Rohit's notes that touch it. Every note also carries a **Connections** "
               "block with its topics and its closest related notes. Rebuilt by `uv run python -m tradeslave.vault_map`.\n",
-              "Start points: [[Home]] · [[Experiments]] · [[Known issues]] · [[Runner research hub]] · [[Roadmap]]\n",
+              "Start points: [[Home]] · [[Experiments]] · [[Known issues]] · [[Runner research hub]] · [[Roadmap]]"
+              " · [[Trades index]] (every M1–M5 trade, why it won or lost)\n",
               "## Topics", ""]
     for k, (desc, _, _) in TOPICS.items():
         ex = sum(1 for n in by_topic[k] if kind(n) == "Experiments")
