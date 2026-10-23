@@ -1,4 +1,4 @@
-"""M5: trade only predicted runners (vault "2026-10-22 M5 runner bot (M5)", protocol pre-registered 23:05 PDT).
+"""M5: trade only predicted runners (vault "2026-10-22 M5 runner bot (M5)", protocol pre-registered 22:55 PDT).
 
     uv run python -m tradeslave.research.m5_bt          # design on train, judge once on held out, write data/m1/m5_model.json
 

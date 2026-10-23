@@ -1,4 +1,4 @@
-"""CF: confirm-first entry (vault "2026-10-22 what separates runners (RN)", pre-registered 23:00 PDT).
+"""CF: confirm-first entry (vault "2026-10-22 what separates runners (RN)", pre-registered 22:46 PDT).
 
     uv run python -m tradeslave.research.confirm_bt
 

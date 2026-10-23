@@ -1,4 +1,4 @@
-"""PB / NW (vault "2026-10-22 what separates runners (RN)", pre-registered 22:55 PDT): on CF-confirmed coins, a
+"""PB / NW (vault "2026-10-22 what separates runners (RN)", pre-registered 22:50 PDT): on CF-confirmed coins, a
 pullback entry and a new-wallet stop.
 
     uv run python -m tradeslave.research.pb_nw
