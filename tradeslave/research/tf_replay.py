@@ -28,7 +28,7 @@ SIZE, TX = 0.1, 0.0005
 BASE = dict(tp=2.0, trend_arm=1.3, trend_give=0.8, stall_s=120, stall_act=0.5, max_hold=600,
             hi_arm=1.5, hi_give=0.6, hi_dead=0.2, hi_hold=7200, high=True,
             lock_arm=None, lock_give=None, fade=None, be_arm=None, half15=False, early=None, m1_stop=None,
-            actfade=None, hdecl=None, hflow=None, hgrace=0)
+            actfade=None, hdecl=None, hflow=None, hgrace=0, nw=None)
 HORIZON = 900
 
 
@@ -136,6 +136,11 @@ def sim(x, pre, post, P):
     pending, cash, qq, run, half_done = None, 0.0, q, None, False
     t_end = t0 + HORIZON
     a30max, hmax = 0, (pre[-1][6] if pre and pre[-1][6] is not None else None)
+    seen, firsts, fi = set(), [], 0                          # nw (RN): time of each wallet's first buy
+    for r_ in pre:
+        if r_[2] and r_[4] not in seen:
+            seen.add(r_[4])
+            firsts.append(r_[0])
     pre_t = [r for r in pre if r[0] > t0 - 60]
     act_pre = len(pre_t)
     tick_t = t0
@@ -152,6 +157,12 @@ def sim(x, pre, post, P):
             act = len(w.since(tick_t - 60, tick_t)) + (act_pre if tick_t - t0 < 60 else 0)
             amax, t_act = max(amax, act), tick_t
         r, held = p / p0, tick_t - t0
+        if P["nw"]:
+            while fi < n:
+                if post[fi][2] and post[fi][4] not in seen:
+                    seen.add(post[fi][4])
+                    firsts.append(post[fi][0])
+                fi += 1
         a30max = max(a30max, len({y[4] for y in w.since(tick_t - 30, tick_t)}))
         if hmax is not None and n and post[n - 1][6] is not None:
             hmax = max(hmax, post[n - 1][6])
@@ -186,6 +197,8 @@ def sim(x, pre, post, P):
               and post[n - 1][6] <= (1 - P["hdecl"]) * hmax
               and (not P["hflow"] or sum(y[3] if y[2] else -y[3] for y in w.since(tick_t - P["hflow"], tick_t)) < 0)):
             pending = "HDECL"                                   # hflow (MV idea 2): only while net SOL flow is negative
+        elif P["nw"] and held >= P["nw"][2] and sum(1 for ft in firsts if ft > tick_t - P["nw"][0]) < P["nw"][1]:
+            pending = "NWSTOP"                                  # (window s, min new wallets, grace s)
         elif P["early"] and held >= P["early"] and peak < p0 * 1.05:
             last = w.since(tick_t - 15, tick_t)
             if sum(y[3] if y[2] else -y[3] for y in last) < 0:
