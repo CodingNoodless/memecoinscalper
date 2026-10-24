@@ -22,7 +22,7 @@ DECU = "4vw54BmAogeRV3vPKWyFet5yf8DTLcREzdSzx4rw9Ud9"
 OUT = DATA_DIR / "m11"
 RULES = "m11-v1+1s"
 FEE, TXR = 0.0125, 2 * 0.0005 / 0.1
-TP, SL, DELAY, TIMEOUT = 1.5, 0.8, 1.0, 900
+TP, SL, DELAY, TIMEOUT, SILENT_S = 1.5, 0.8, 1.0, 900, 120
 log = logging.getLogger("m11_bot")
 
 
@@ -60,13 +60,17 @@ def run() -> None:
                     ws.send(json.dumps({"jsonrpc": "2.0", "id": req, "method": "logsSubscribe",
                                         "params": [{"mentions": [a]}, {"commitment": "processed"}]}))
                 log.info("m11_bot up on %s, %d open", url.split("//")[1].split("/")[0], len(pos))
-                last_status = 0.0
+                last_status, last_msg = 0.0, time.time()
                 while True:
                     try:
                         msg = json.loads(ws.recv(timeout=5))
                     except TimeoutError:
                         msg = {}
                     now = time.time()
+                    if msg.get("params"):
+                        last_msg = now
+                    elif now - last_msg > SILENT_S:     # copy bots mention his wallet ~45/s: silence = a dead subscription
+                        raise ConnectionError(f"no notifications for {SILENT_S} s")
                     if now - last_status > 5:
                         last_status = now
                         st = dict(t=now, watching=len(pos), leaders=[DECU], open=[dict(m=m, name=m[:6], t=x.get("t_entry") or x["t_detect"],
