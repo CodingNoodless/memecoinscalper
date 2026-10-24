@@ -937,6 +937,9 @@ def m10_decide(m, rows, state):
     if step < 1 or step <= state.get(m, -1):
         return False, None
     state[m] = step
+    rows = [r for r in rows if r[1] and r[1] > 0]          # a few feed rows carry no curve state (price 0)
+    if len(rows) < 5:
+        return False, {"step": step, "why": "fewer than 5 priced trades"}
     k = len(rows) - 1
     t = rows[k][0]
     w60 = [r for r in rows if r[0] > t - 60]
