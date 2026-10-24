@@ -27,6 +27,15 @@ from ..scalper.trade_events import parse_trade_events
 PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
 DB = DATA_DIR / "feed" / "trades.sqlite"
 KEEP_S, WANT_S = 1800, 1800
+LEADERS = DATA_DIR / "feed" / "leaders.json"            # wallets whose trades go to leader_trades.jsonl (M11)
+LEADER_TRADES = DATA_DIR / "feed" / "leader_trades.jsonl"
+
+
+def leaders() -> set[str]:
+    try:
+        return set(json.loads(LEADERS.read_text()))
+    except (OSError, ValueError):
+        return set()
 log = logging.getLogger("live_feed")
 
 
@@ -71,7 +80,7 @@ class Wanted:
 
     def scan(self) -> set[str]:
         now = time.time()
-        for p in DATA_DIR.glob("m[0-9]/cands.jsonl"):
+        for p in DATA_DIR.glob("m*/cands.jsonl"):                 # every bot folder (m10, m11 too)
             try:
                 with p.open(encoding="utf-8") as fh:
                     fh.seek(self.pos.get(p, max(0, p.stat().st_size - 2_000_000)))
@@ -109,10 +118,13 @@ def run() -> None:
     written: set[str] = set()
     wanted = Wanted()
     state = {"up_since": 0.0, "n": 0, "seq": int(time.time() * 1e6)}   # seq keeps rising across restarts
+    lead = {"w": leaders(), "t": time.time()}
 
     def beat():
         while True:
             want = wanted.scan()
+            if time.time() - lead["t"] > 30:
+                lead["w"], lead["t"] = leaders(), time.time()
             now = time.time()
             with lock:
                 for m in want - written:
@@ -173,6 +185,10 @@ def run() -> None:
                                    e["tok"] / 1e6, e["vs"] / 1e9, e["vt"] / 1e6, state["seq"])
                             hist[m].append(row)
                             last[m] = now
+                            if e["user"] in lead["w"]:
+                                with LEADER_TRADES.open("a") as fh:
+                                    fh.write(json.dumps(dict(recv=now, ts=e["ts"], slot=slot, sig=sig, w=e["user"], m=m, buy=e["buy"],
+                                                             sol=e["sol"] / 1e9, tok=e["tok"] / 1e6, vs=e["vs"] / 1e9, vt=e["vt"] / 1e6)) + "\n")
                             if m in written:
                                 db.execute("INSERT OR IGNORE INTO tr VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (m, *row))
                     if now - last_note > 600:
