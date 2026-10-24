@@ -194,5 +194,49 @@ def v2() -> None:
             print(f"M10 v2 VERDICT: {'PASS' if len(tr) >= 60 and m > 0 and statistics.mean(h1) > 0 and statistics.mean(h2) > 0 else 'FAIL'}")
 
 
+
+
+def v3() -> None:
+    """M10 v3: v2 entries, six exit sets; pick the best on design, judge once on holdout."""
+    from .m5_bt import EXITS
+    E2 = EXITS["E2 M4 exits, 15 s holder grace"]
+    sets = {
+        "1 L5": dict(stop=0.90, P=dict(E2["P"], poll=1.0)),
+        "2 E2 (-30%)": dict(stop=0.70, P=dict(E2["P"], poll=1.0)),
+        "3 -10%, no TP": dict(stop=0.90, P=dict(E2["P"], poll=1.0, tp=99.0)),
+        "4 -10%, TP 3x": dict(stop=0.90, P=dict(E2["P"], poll=1.0, tp=3.0)),
+        "5 -10%, half at 2x": dict(stop=0.90, P=dict(E2["P"], poll=1.0, tp=99.0, half_tp=2.0)),
+        "6 -20%, trend only": dict(stop=0.80, P=dict(E2["P"], poll=1.0, tp=99.0, hdecl=None, stall_s=99999, max_hold=1800)),
+    }
+    S = json.loads(OUT.read_text())
+    rule = (("avg_buy_60", "<=", 0.511), ("top10", "<=", 0.233), ("t_to_n", ">=", 30.25), ("buy_ratio_60", "<=", 1.593))
+    first = {}
+    for s in sorted(S, key=lambda z: z["t"]):
+        if s["m"] not in first and all((s["f"][k] >= c) if op == ">=" else (s["f"][k] <= c) for k, op, c in rule):
+            first[s["m"]] = s
+    rows_of = {m: rows for m, rows in coins() if m in first}
+    res = defaultdict(lambda: defaultdict(list))
+    for m, s in first.items():
+        rows = rows_of.get(m)
+        if not rows:
+            continue
+        ts = [r[0] for r in rows]
+        k1 = bisect.bisect_right(ts, s["t"] + 1) - 1
+        for name, ex in sets.items():
+            res[name][s["part"]].append((s["t"], ret(dict(m=m, rows=rows), k1, ex)))
+    best = max(sets, key=lambda n: statistics.mean(r for _, r in res[n]["design"]))
+    for n in sets:
+        d, h = [r for _, r in res[n]["design"]], sorted(res[n]["holdout"])
+        mid = len(h) // 2
+        print(f"{n:22s} design {statistics.mean(d):+6.1%} (n {len(d)}) | holdout {statistics.mean(r for _, r in h):+6.1%} (n {len(h)}) "
+              f"halves {statistics.mean(r for _, r in h[:mid]):+.1%} / {statistics.mean(r for _, r in h[mid:]):+.1%} "
+              f"<=-25% {sum(r <= -0.25 for _, r in h) / len(h):.0%} >=+50% {sum(r >= 0.5 for _, r in h) / len(h):.1%}")
+    h = sorted(res[best]["holdout"])
+    mid = len(h) // 2
+    m = statistics.mean(r for _, r in h)
+    ok = len(h) >= 60 and m > 0 and statistics.mean(r for _, r in h[:mid]) > 0 and statistics.mean(r for _, r in h[mid:]) > 0
+    print(f"chosen on design: {best} -> holdout {m:+.1%}\nM10 v3 VERDICT: {'PASS' if ok else 'FAIL'}")
+
+
 if __name__ == "__main__":
-    build() if "build" in sys.argv else v2() if "v2" in sys.argv else main()
+    build() if "build" in sys.argv else v2() if "v2" in sys.argv else v3() if "v3" in sys.argv else main()
