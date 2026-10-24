@@ -78,6 +78,11 @@ TOPICS = {
 
 # curated lineage (both directions are added)
 LINEAGE = [
+    ("2026-10-24 profitable wallets study (WL)", "2026-10-24 M11 - leader wave rider (M11)"),
+    ("2026-10-24 learning decu's style (DC)", "2026-10-24 M11 - leader wave rider (M11)"),
+    ("2026-10-24 learning decu's style (DC)", "2026-10-24 copying Twitch streamers (ST)"),
+    ("2026-10-24 reverse-engineering profitable bots (BR)", "2026-10-24 profitable wallets study (WL)"),
+    ("2026-10-23 M10 flagship model - backtest (M10)", "2026-10-24 M11 - leader wave rider (M11)"),
     ("2026-10-23 copy-trading the best wallets (CP)", "2026-10-24 reverse-engineering profitable bots (BR)"),
     ("2026-10-18 imitation policy (N5)", "2026-10-24 reverse-engineering profitable bots (BR)"),
     ("2026-10-24 copying Twitch streamers (ST)", "2026-10-24 reverse-engineering profitable bots (BR)"),
@@ -349,7 +354,8 @@ def main() -> None:
 
     GROUPS = [("Experiments", {"Experiments"}, 5), ("Strategies and ideas", {"Strategies", "note"}, 4),
               ("Known issues", {"issue"}, 3), ("Research notes and themes", {"Runner research", "theme"}, 3),
-              ("Sessions, project and reviews", {"Sessions", "Project", "Reviews", "Codebase", "Data & Infra"}, 3)]
+              ("Sessions, project and reviews", {"Sessions", "Project", "Reviews", "Codebase", "Data & Infra"}, 3),
+              ("Wallets and trade patterns", {"Wallets", "Patterns"}, 4)]
 
     def pick(n, kinds, k):
         sc = {}
