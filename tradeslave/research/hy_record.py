@@ -89,6 +89,9 @@ def record() -> None:
 
 def score() -> None:
     sig = [json.loads(x) for x in (DIR / "signals.jsonl").open()]
+    if sig:                                         # the first poll lists coins already live/boosted before we watched: not new events
+        t_first = min(x["t"] for x in sig)
+        sig = [x for x in sig if x["t"] > t_first + 90]
     path = {}
     for x in (DIR / "paths.jsonl").open():
         j = json.loads(x)
