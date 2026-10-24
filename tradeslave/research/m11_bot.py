@@ -39,7 +39,7 @@ def run() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     seen = {json.loads(x)["m"] for x in (OUT / "trades.jsonl").open()} if (OUT / "trades.jsonl").exists() else set()
     pos: dict[str, dict] = {}                     # mint -> position
-    k, req = 0, 10
+    k, req, wait = 0, 10, 3.0
 
     def close(m, p, now, why):
         x = pos.pop(m)
@@ -61,6 +61,7 @@ def run() -> None:
                     ws.send(json.dumps({"jsonrpc": "2.0", "id": req, "method": "logsSubscribe",
                                         "params": [{"mentions": [a]}, {"commitment": "processed"}]}))
                 log.info("m11_bot up on %s, %d open", url.split("//")[1].split("/")[0], len(pos))
+                wait = 3.0                                   # connected: reset the backoff
                 last_status, last_msg = 0.0, time.time()
                 while True:
                     try:
@@ -118,8 +119,9 @@ def run() -> None:
                         if x["trig"] and now >= x["trig"][0] + DELAY:
                             close(m, price, now, x["trig"][1])
         except Exception as exc:  # noqa: BLE001 - reconnect and resubscribe
-            log.warning("m11_bot: %s %s; reconnecting in 3 s", type(exc).__name__, str(exc)[:80])
-            time.sleep(3)
+            log.warning("m11_bot: %s %s; reconnecting in %.0f s", type(exc).__name__, str(exc)[:80], wait)
+            time.sleep(wait)
+            wait = min(120.0, wait * 2)                      # back off: rapid retries keep the public RPC answering 429
 
 
 def main() -> None:
