@@ -51,13 +51,14 @@ from .full_trades import Pace, ts as iso_ts
 from .live_feed import feed_rows, feed_trades
 from .fl_test import LiveFunding
 
-VARIANT = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] in ("m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9") else "m1"
+VARIANT = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] in ("m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10") else "m1"
 M6 = VARIANT in ("m6", "m7", "m8", "m9")             # M6 (2026-10-23 17:00): M5 v1 + bad-buy skip filters (see below)
 M7 = VARIANT in ("m7", "m8", "m9")                   # M7/M8 (2026-10-23 16:00): m6-v3 entries, side by side with two exit sets
 M8 = VARIANT == "m8"
+M10 = VARIANT == "m10"                           # M10 (2026-10-23 23:45): calm-entry rule from the M10 backtest
 M9 = VARIANT == "m9"                             # M9 (2026-10-23 16:53): M5 or M1 entries, loss controls (below)
 TWIN = VARIANT in ("m7", "m9")                   # twin exit book on the same fills: M7 -> M8 (16:15), M9 -> M9e (17:20)
-M5 = VARIANT in ("m5", "m6", "m7", "m8", "m9")                     # M5 (2026-10-22 23:00): trade only predicted runners (see below)
+M5 = VARIANT in ("m5", "m6", "m7", "m8", "m9", "m10")                     # M5 (2026-10-22 23:00): trade only predicted runners (see below)
 M4 = VARIANT == "m4"                             # M4 (2026-10-22 15:10): M1 + the fixes accepted by the TF sweep (see below)
 M3 = VARIANT == "m3"                             # M3 (2026-10-21 16:00): M2 + Rohit's post-mortem changes (see below)
 M2 = VARIANT in ("m2", "m3")                     # M2 (2026-10-21 09:40): M1 + sniper-bag filter, -10% stop, 1 s polls
@@ -74,7 +75,7 @@ DAY_CAP, EVENING = 1500, 17                     # infra v3: before 17:00 PT each
                                                  # 10k / 150k (Rohit's AI Studio limits, 2026-10-21); resets at midnight PT
 TP, STOP, TREND_ARM, TREND_GIVE, STALL_S, STALL_ACT, MAX_HOLD = 2.0, 0.70, 1.30, 0.80, 120, 0.50, 600
 HI_ARM, HI_GIVE, HI_DEAD, HI_HOLD = 1.50, 0.60, 0.20, 7200
-if M2 or M8 or M9:
+if M2 or M8 or M9 or M10:
     STOP = 0.90                                  # Rohit: losses ~15-20% even when rugged (a -10% stop fills ~-17..-20%)
 SNIP_SLOTS, SNIP_MAX = 2, 8.0                    # M2: wallets buying within 2 slots of the create, % of supply still held
 # M3 (assumptions, not fitted): dead coin = < 15 holders and < 8 new buyers in 2 min; rug = dev holds > 10% or
@@ -127,13 +128,18 @@ TWIN_LABEL = "M9e " if VARIANT == "m9" else "M8 "
 # funded no earlier creator (counts continue from the PX table; a program-owned or unknown funder skips). Main book L5
 # (-10% stop), twin book M9e E2 (-30% stop) on the same fills.
 M9_FLOW, SERIAL_SEED_PX = 12.2787, DATA_DIR / "m1" / "serial_seed_px.json"
+# M10 v2 (vault "2026-10-23 M10 flagship model - backtest (M10)"): a forward test, NOT a passed model (backtest -4.6% a trade on
+# both halves, deep losses 3-4%, 1 s delay ~0.5 pt). Every 15 s from 15 to 180 s after a coin's first trade (with >= 5 trades
+# in the last 60 s), buy if: average buy (60 s) <= 0.511 SOL, top-10 share <= 23.3%, >= 30.25 s since the first trade, and
+# buy/sell SOL ratio (60 s) <= 1.593 (thresholds from design data only). Exits: E2 with a -10% stop, 1 s polls (L5).
+M10_RULE = (("avg_buy_60", "<=", 0.511), ("top10", "<=", 0.233), ("t_to_n", ">=", 30.25), ("buy_ratio_60", "<=", 1.593))
 # M9 (vault "2026-10-23 M9 design test - M1 + M5 entries with loss controls (M9)", passed 16:52 on 21 kept M1 coins):
 # buy on M5 v1's runner signal OR, when the model doesn't buy, on M1's signal (score >= 7, $4-7k band, M1's checks).
 # Both sources then need the M6 cluster skip and the serial-funder skip (as M7; M1-path checks don't add to the counts,
 # as in the test). Every position uses M5's exits with a -10% stop on 1 s polls (XA L5). Forward test.
 # 1 s polls on every bot from 2026-10-23 16:00 (Rohit: simulate a 1 s delay, not 2-4 s): an exit decided on one poll
 # fills at the next, 1 s later; rules carry "+1s" so the dashboard splits results from before the change.
-RULES = ("m9-v2" if M9 else "m8-v1" if M8 else "m7-v1" if M7 else "m6-v2" if M6 else "m5-v1" if M5 else "m4-v3" if M4 else "m3-v3" if M3 else "m2-v1" if M2 else "exits-v2") + "+1s"                                # bump on every rule change; the dashboard splits results by it
+RULES = ("m10-v2" if M10 else "m9-v2" if M9 else "m8-v1" if M8 else "m7-v1" if M7 else "m6-v2" if M6 else "m5-v1" if M5 else "m4-v3" if M4 else "m3-v3" if M3 else "m2-v1" if M2 else "exits-v2") + "+1s"                                # bump on every rule change; the dashboard splits results by it
 ACT_EVERY = 6.0
 WATCH_S, POLL_S, RECHECK_S = 20 * 60, 1.0, (5 if M4 else 30)
 SIZE_SOL, TX_SOL, MAX_OPEN = 0.1, 0.0005, 5
@@ -670,7 +676,7 @@ def run():
                 rows5, full5 = feed_rows(m)
                 if not rows5 or not full5:
                     continue
-                go, det5 = m5_decide(m, rows5, m5_state, m5_model)
+                go, det5 = m10_decide(m, rows5, m5_state) if M10 else m5_decide(m, rows5, m5_state, m5_model)
                 if M9 and m in m9_m5_done:
                     go, det5 = False, None                       # M9: the M5 signal is checked once per coin
                 if go and M9:
@@ -918,6 +924,28 @@ def manage(opened, m, p, cs, done, rpc=None, log=None, label=""):
     opened.pop(m)
     done.add(m)
     print(time.strftime("%H:%M"), f"{label}SELL {o['name']!r} {why} {ret:+.1%}", flush=True)
+
+
+def m10_decide(m, rows, state):
+    """M10 v2: (buy?, details), evaluated once per 15-s step from 15 s to 180 s after the coin's first trade."""
+    from .lw_test import feats
+    t0 = rows[0][0]
+    age = time.time() - t0
+    if age > 180:
+        return False, {"final": True, "why": "no M10 signal within 180 s"}
+    step = int(age // 15)
+    if step < 1 or step <= state.get(m, -1):
+        return False, None
+    state[m] = step
+    k = len(rows) - 1
+    t = rows[k][0]
+    w60 = [r for r in rows if r[0] > t - 60]
+    if len(w60) < 5:
+        return False, {"step": step, "why": "fewer than 5 trades in 60 s"}
+    f = feats(rows, k, [], defaultdict(lambda: [0, 0]))
+    f["avg_buy_60"] = statistics.mean([r[3] for r in w60 if r[2]] or [0.0])
+    go = all((f[n] >= c) if op == ">=" else (f[n] <= c) for n, op, c in M10_RULE)
+    return go, {"step": step, **{n: round(f[n], 3) for n, _, _ in M10_RULE}}
 
 
 def m5_decide(m, rows, state, model):

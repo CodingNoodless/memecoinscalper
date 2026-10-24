@@ -30,6 +30,8 @@ JOBS = [
      "M5 v1, but skips the buy when one funder controls >= 15% of the top-20 holders (Helius funding lookups); m6-v2 from 13:10"),
     ("M7 = m6-v3, M5 exits", "paper bot", "m7_bot.out", 15,
      "M6 + skip when the creator's funder funded an earlier creator; stop -30% (side by side with M8)"),
+    ("M10 = calm-entry rule (flagship forward test)", "paper bot", "m10_bot.out", 15,
+     "m10-v2: every 15 s from 15-180 s, buy if avg buy <= 0.51 SOL, top-10 <= 23%, >= 30 s old, buy/sell <= 1.6; -10% stop, 1 s polls"),
     ("M9 = M5 or M1 entries + PX rule", "paper bot", "m9_bot.out", 15,
      "m9-v2: M5's or M1's signal, then 30 s net flow >= 12.3 SOL and a creator funder new to us; -10% stop (twin M9e: -30%)"),
     ("M8 = M7 twin book, -10% stop", "paper bot", "m7_bot.out", 15,
@@ -148,6 +150,32 @@ def m6_view(cands: list[dict]) -> dict:
                 recent=sorted(rows, key=lambda r: -r["t"])[:40], m5_same=stats(same),
                 m5_deep=(sum(x <= -0.25 for x in same) / len(same)) if same else None)
 
+
+
+M10_FROM = time.mktime(time.strptime("2026-10-23 23:45", "%Y-%m-%d %H:%M"))   # M10 v2 forward paper start
+
+
+def m10_view() -> dict:
+    """M10: rule decisions (every 15-s step), trades, and M5 over the same hours."""
+    def load(v, name):
+        try:
+            return [r for r in jsonl(DATA_DIR / v / name) if r["t"] >= M10_FROM]
+        except OSError:
+            return []
+
+    cands = [c for c in load("m10", "cands.jsonl") if c.get("stage") == "m5" and "avg_buy_60" in c]
+    names = {c["m"]: c.get("name") for c in load("m10", "cands.jsonl") if c.get("name")}
+    tr = load("m10", "trades.jsonl")
+    names.update({r["m"]: r.get("name") for r in tr})
+    m5 = load("m5", "trades.jsonl")
+    rs = [r["ret"] for r in tr]
+    r5 = [r["ret"] for r in m5]
+    keys = ("avg_buy_60", "top10", "t_to_n", "buy_ratio_60")
+    return dict(since=M10_FROM, checked=len(cands), bought=sum(bool(c.get("buy")) for c in cands),
+                decisions=[dict(t=c["t"], m=c["m"], name=names.get(c["m"]), step=c.get("step"), buy=bool(c.get("buy")),
+                                **{k: c.get(k) for k in keys}) for c in cands[-40:]][::-1],
+                stats=stats(rs), deep=(sum(x <= -0.25 for x in rs) / len(rs)) if rs else None,
+                m5=stats(r5), m5_deep=(sum(x <= -0.25 for x in r5) / len(r5)) if r5 else None)
 
 
 M78_FROM = time.mktime(time.strptime("2026-10-23 16:00", "%Y-%m-%d %H:%M"))   # M7 / M8 start (m6-v3 entries, 1 s polls)
@@ -329,6 +357,6 @@ def experiments() -> dict:
 
 
 def build_lab_snapshot() -> dict:
-    return dict(t=time.time(), jobs=jobs(), m1=m1(), m2=m1("m2"), m3=m1("m3"), m4=m1("m4"), m5=m1("m5"), m6=m1("m6"), m7=m1("m7"), m8=m1("m8"), m9=m1("m9"), m9e=m1("m9e"), m78=m78_view(), c1=c1(), kalshi=kalshi(), experiments=experiments())
+    return dict(t=time.time(), jobs=jobs(), m1=m1(), m2=m1("m2"), m3=m1("m3"), m4=m1("m4"), m5=m1("m5"), m6=m1("m6"), m7=m1("m7"), m8=m1("m8"), m9=m1("m9"), m9e=m1("m9e"), m10=m1("m10"), m10x=m10_view(), m78=m78_view(), c1=c1(), kalshi=kalshi(), experiments=experiments())
 
 
