@@ -30,6 +30,8 @@ JOBS = [
      "M5 v1, but skips the buy when one funder controls >= 15% of the top-20 holders (Helius funding lookups); m6-v2 from 13:10"),
     ("M7 = m6-v3, M5 exits", "paper bot", "m7_bot.out", 15,
      "M6 + skip when the creator's funder funded an earlier creator; stop -30% (side by side with M8)"),
+    ("M11 = leader wave rider (decu copy, fast exit)", "paper bot", "m11_bot.log", 600,
+     "m11-v1: watch decu's wallet live; on his first buy in a coin, paper-buy 1 s after detection; TP +50% / stop -20% (+1 s fills)"),
     ("M10 = calm-entry rule (flagship forward test)", "paper bot", "m10_bot.out", 15,
      "m10-v2: every 15 s from 15-180 s, buy if avg buy <= 0.51 SOL, top-10 <= 23%, >= 30 s old, buy/sell <= 1.6; -10% stop, 1 s polls"),
     ("M9 = M5 or M1 entries + PX rule", "paper bot", "m9_bot.out", 15,
@@ -150,6 +152,21 @@ def m6_view(cands: list[dict]) -> dict:
                 recent=sorted(rows, key=lambda r: -r["t"])[:40], m5_same=stats(same),
                 m5_deep=(sum(x <= -0.25 for x in same) / len(same)) if same else None)
 
+
+
+def m11_view() -> dict:
+    """M11: live copy trades of decu with detection lag, his own sells, and the backtest record."""
+    try:
+        tr = jsonl(DATA_DIR / "m11" / "trades.jsonl")
+    except OSError:
+        tr = []
+    lags = [r["lag"] for r in tr if r.get("lag") is not None]
+    rs = [r["ret"] for r in tr]
+    return dict(stats=stats(rs), lag_median=statistics.median(lags) if lags else None, lag_max=max(lags) if lags else None,
+                tp=sum(r["exit"] == "TP" for r in tr), sl=sum(r["exit"] == "SL" for r in tr), timeout=sum(r["exit"] == "timeout" for r in tr),
+                deep=(sum(x <= -0.25 for x in rs) / len(rs)) if rs else None,
+                trades=[dict(t=r["t"], m=r["m"], exit=r["exit"], ret=r["ret"], lag=r.get("lag"), peak=r.get("peak_ret"),
+                             held=round((r["t_exit"] - r["t"]) / 60, 1)) for r in tr[-30:]][::-1])
 
 
 M10_FROM = time.mktime(time.strptime("2026-10-23 23:45", "%Y-%m-%d %H:%M"))   # M10 v2 forward paper start
@@ -357,6 +374,6 @@ def experiments() -> dict:
 
 
 def build_lab_snapshot() -> dict:
-    return dict(t=time.time(), jobs=jobs(), m1=m1(), m2=m1("m2"), m3=m1("m3"), m4=m1("m4"), m5=m1("m5"), m6=m1("m6"), m7=m1("m7"), m8=m1("m8"), m9=m1("m9"), m9e=m1("m9e"), m10=m1("m10"), m10x=m10_view(), m78=m78_view(), c1=c1(), kalshi=kalshi(), experiments=experiments())
+    return dict(t=time.time(), jobs=jobs(), m1=m1(), m2=m1("m2"), m3=m1("m3"), m4=m1("m4"), m5=m1("m5"), m6=m1("m6"), m7=m1("m7"), m8=m1("m8"), m9=m1("m9"), m9e=m1("m9e"), m10=m1("m10"), m10x=m10_view(), m11=m1("m11"), m11x=m11_view(), m78=m78_view(), c1=c1(), kalshi=kalshi(), experiments=experiments())
 
 

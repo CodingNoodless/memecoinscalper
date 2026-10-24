@@ -38,6 +38,7 @@ BOTS = {
            "Max profit and max 25% loss - what the vault says"),
     "m9": ("M9", ["2026-10-23 pattern search for M9 (PX)", "2026-10-23 M9 design test - M1 + M5 entries with loss controls (M9)", "2026-10-21 M1 automated manual process",
                   "2026-10-22 M5 runner bot (M5)"], "Max profit and max 25% loss - what the vault says"),
+    "m11": ("M11", ["2026-10-24 M11 - leader wave rider (M11)", "2026-10-24 learning decu's style (DC)"], "Max profit and max 25% loss - what the vault says"),
     "m10": ("M10", ["2026-10-23 M10 flagship model - backtest (M10)"], "Max profit and max 25% loss - what the vault says"),
     "m9e": ("M9e", ["2026-10-23 pattern search for M9 (PX)"], "Max profit and max 25% loss - what the vault says"),
     "m8": ("M8", ["2026-10-23 M7 vs M8 forward test (m6-v3 entries, two exit sets)", "M6 proposals (m6-v3)"],
