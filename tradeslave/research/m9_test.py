@@ -56,11 +56,16 @@ def m1_coins():
 
 
 def fetch() -> None:
-    cache = json.loads(CACHE.read_text())
     want = set()
     for _, co, k in m1_coins():
         top, cr = holders_at(co["rows"], k)
         want |= {cr} | {w for w, _ in top}
+    lookup(want)
+
+
+def lookup(want) -> None:
+    """Helius funder lookups for the wallets not cached yet; merged into funding.json."""
+    cache = json.loads(CACHE.read_text())
     need = sorted(w for w in want if w not in cache or "err" in cache[w])
     print(f"{len(want)} wallets wanted, {len(need)} to look up (~{10 * len(need)} Helius credits)", flush=True)
     if "--dry" in sys.argv:

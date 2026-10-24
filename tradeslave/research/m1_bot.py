@@ -56,7 +56,7 @@ M6 = VARIANT in ("m6", "m7", "m8", "m9")             # M6 (2026-10-23 17:00): M5
 M7 = VARIANT in ("m7", "m8", "m9")                   # M7/M8 (2026-10-23 16:00): m6-v3 entries, side by side with two exit sets
 M8 = VARIANT == "m8"
 M9 = VARIANT == "m9"                             # M9 (2026-10-23 16:53): M5 or M1 entries, loss controls (below)
-TWIN = VARIANT == "m7"                           # m8-v2 (16:15): M8 is a second exit book inside M7 on the same fills
+TWIN = VARIANT in ("m7", "m9")                   # twin exit book on the same fills: M7 -> M8 (16:15), M9 -> M9e (17:20)
 M5 = VARIANT in ("m5", "m6", "m7", "m8", "m9")                     # M5 (2026-10-22 23:00): trade only predicted runners (see below)
 M4 = VARIANT == "m4"                             # M4 (2026-10-22 15:10): M1 + the fixes accepted by the TF sweep (see below)
 M3 = VARIANT == "m3"                             # M3 (2026-10-21 16:00): M2 + Rohit's post-mortem changes (see below)
@@ -119,14 +119,21 @@ SERIAL_SEED = DATA_DIR / "m1" / "serial_seed.json"
 # and poll at slightly different moments (M5 and M6 on the same coin at the same second: +18.6% vs +15.9%), so the M8 - M7
 # gap mixed timing noise into the stop effect. M8 now runs inside the M7 process as a twin book: same fill, same polls,
 # only the stop differs (-10%). It writes data/m8/trades.jsonl and data/m8/status.json; `run m8` alone is retired.
-TWIN_STOP, TWIN_DIR, TWIN_RULES = 0.90, DATA_DIR / "m8", "m8-v2+1s"
+TWIN_STOP, TWIN_DIR, TWIN_RULES = ((0.70, DATA_DIR / "m9e", "m9e-v2+1s") if VARIANT == "m9"
+                                   else (0.90, DATA_DIR / "m8", "m8-v2+1s"))
+TWIN_LABEL = "M9e " if VARIANT == "m9" else "M8 "
+# M9 v2 (vault "2026-10-23 pattern search for M9 (PX)", 17:20): the one PX rule that held on holdout replaces M9 v1's
+# skips on both entry sources: net SOL flow over the 30 s before the last feed trade >= M9_FLOW, and the creator's funder
+# funded no earlier creator (counts continue from the PX table; a program-owned or unknown funder skips). Main book L5
+# (-10% stop), twin book M9e E2 (-30% stop) on the same fills.
+M9_FLOW, SERIAL_SEED_PX = 12.2787, DATA_DIR / "m1" / "serial_seed_px.json"
 # M9 (vault "2026-10-23 M9 design test - M1 + M5 entries with loss controls (M9)", passed 16:52 on 21 kept M1 coins):
 # buy on M5 v1's runner signal OR, when the model doesn't buy, on M1's signal (score >= 7, $4-7k band, M1's checks).
 # Both sources then need the M6 cluster skip and the serial-funder skip (as M7; M1-path checks don't add to the counts,
 # as in the test). Every position uses M5's exits with a -10% stop on 1 s polls (XA L5). Forward test.
 # 1 s polls on every bot from 2026-10-23 16:00 (Rohit: simulate a 1 s delay, not 2-4 s): an exit decided on one poll
 # fills at the next, 1 s later; rules carry "+1s" so the dashboard splits results from before the change.
-RULES = ("m9-v1" if M9 else "m8-v1" if M8 else "m7-v1" if M7 else "m6-v2" if M6 else "m5-v1" if M5 else "m4-v3" if M4 else "m3-v3" if M3 else "m2-v1" if M2 else "exits-v2") + "+1s"                                # bump on every rule change; the dashboard splits results by it
+RULES = ("m9-v2" if M9 else "m8-v1" if M8 else "m7-v1" if M7 else "m6-v2" if M6 else "m5-v1" if M5 else "m4-v3" if M4 else "m3-v3" if M3 else "m2-v1" if M2 else "exits-v2") + "+1s"                                # bump on every rule change; the dashboard splits results by it
 ACT_EVERY = 6.0
 WATCH_S, POLL_S, RECHECK_S = 20 * 60, 1.0, (5 if M4 else 30)
 SIZE_SOL, TX_SOL, MAX_OPEN = 0.1, 0.0005, 5
@@ -549,6 +556,7 @@ def run():
     watch, scored, opened = {}, {}, {}           # mint -> create row; mint -> (score, narrative ok, key); mint -> pos
     twins = {}                                   # M7 process only: mint -> M8 twin position (same fill, stop -10%)
     m1_done = set()                              # M9: coins M1's checks rejected (M5's model can still buy them)
+    m9_m5_done = set()                           # M9 v2: coins whose M5 signal already met the PX rule check
     first = {}                                   # narrative key -> the first coin seen on it (Rohit: prefer the first)
     for r in (json.loads(x) for x in CANDS.open(encoding="utf-8")) if CANDS.exists() else ():
         for k in r.get("nkeys") or []:
@@ -649,7 +657,7 @@ def run():
                 if m in opened:
                     manage(opened, m, p, cs, done, rpc)
                 if m in twins:                                   # M8 twin: same price read, its own stop
-                    manage(twins, m, p, cs, done, rpc, log=TWIN_DIR / "trades.jsonl", label="M8 ")
+                    manage(twins, m, p, cs, done, rpc, log=TWIN_DIR / "trades.jsonl", label=TWIN_LABEL)
                 continue
             if p is None or m in done or len(opened) >= MAX_OPEN:
                 continue
@@ -663,7 +671,14 @@ def run():
                 if not rows5 or not full5:
                     continue
                 go, det5 = m5_decide(m, rows5, m5_state, m5_model)
-                if go and M6:
+                if M9 and m in m9_m5_done:
+                    go, det5 = False, None                       # M9: the M5 signal is checked once per coin
+                if go and M9:
+                    m9_m5_done.add(m)
+                    ok9, d9 = m9_check(m6_funding, serial, rows5)
+                    det5.update(m9_src="m5", **d9)
+                    go = ok9
+                elif go and M6:
                     try:
                         fl = m6_funding.cluster_share(rows5, len(rows5) - 1)
                     except Exception as exc:  # noqa: BLE001 - lookup failed: no trade rather than an unchecked one
@@ -687,7 +702,7 @@ def run():
                             det5.update(final=True, why=f"M7 skip: creator's funder funded {seen_before} earlier creator(s)")
                 if det5:
                     jlog(CANDS, {"t": time.time(), "m": m, "stage": "m5", "mc": round(mc), "buy": go, **det5})
-                skipped9 = bool(det5) and str(det5.get("why", "")).startswith(("M6 skip", "M7 skip"))
+                skipped9 = bool(det5) and str(det5.get("why", "")).startswith(("M6 skip", "M7 skip")) and not M9
                 if not go and not (M9 and not skipped9):
                     if det5 and det5.get("final"):
                         done.add(m)
@@ -722,21 +737,12 @@ def run():
                 ok, why = False, why + ["volume: copy coin < $3k"]
             if M4:
                 det["src"] = src
-            if ok and m1path:                                    # M9: M1's signal passed; same skips as the M5 side
-                try:
-                    fl9 = m6_funding.cluster_share(rows5, len(rows5) - 1)
-                    seen9 = serial.check(m6_funding, rows5[0][4], count=False)
-                except Exception as exc:  # noqa: BLE001 - lookup failed: no trade rather than an unchecked one
-                    fl9, seen9 = None, None
-                    why = why + [f"M9 skip: funding lookup failed ({type(exc).__name__})"]
-                det.update(m9_src="m1", m6_cluster=round(fl9["cluster_share"], 3) if fl9 else None, m7_serial=seen9)
-                if fl9 is not None and fl9["cluster_share"] >= M6_CLUSTER:
-                    why = why + [f"M9 skip: funding cluster {fl9['cluster_share']:.0%}"]
-                elif fl9 is not None and seen9 is None:
-                    why = why + ["M9 skip: creator funder lookup failed"]
-                elif fl9 is not None and seen9 >= 1:
-                    why = why + [f"M9 skip: creator's funder funded {seen9} earlier creator(s)"]
-                ok = not why
+            if ok and m1path:                                    # M9 v2: M1's signal passed; the PX rule decides
+                ok9, d9 = m9_check(m6_funding, serial, rows5)
+                det.update(m9_src="m1", **{k: v for k, v in d9.items() if k != "why"})
+                if not ok9:
+                    why = why + [d9["why"]]
+                ok = ok9
             if not M5 or m1path:
                 jlog(CANDS, {"t": time.time(), "m": m, "stage": "checks", "mc": round(mc), "ok": ok, "why": why, **det})
             lastwhy[m] = {"t": time.time(), "why": why, "holders": det.get("holders"), "h_max": det.get("holders_max")}
@@ -771,12 +777,12 @@ def run():
                 opened[m].update(high=False, link=link, copy=copy, eng0=engagement(link))
             if TWIN:
                 twins[m] = deepcopy(opened[m])
-                twins[m].update(stop=TWIN_STOP, rules=TWIN_RULES, twin_of="m7")
+                twins[m].update(stop=TWIN_STOP, rules=TWIN_RULES, twin_of=VARIANT)
             print(time.strftime("%H:%M"), f"BUY  {c.get('name')!r} score {sc} mc ${mc:,.0f}", flush=True)
         if TWIN:
             try:
                 TWIN_DIR.mkdir(exist_ok=True)
-                (TWIN_DIR / "status.json").write_text(json.dumps({"t": time.time(), "sol_usd": sol["usd"], "twin_of": "m7",
+                (TWIN_DIR / "status.json").write_text(json.dumps({"t": time.time(), "sol_usd": sol["usd"], "twin_of": VARIANT,
                     "open": [{k: o.get(k) for k in ("m", "name", "score", "t", "p0", "last", "peak", "stop", "mc",
                                                     "holders", "h_max")} for o in twins.values()]}))
             except OSError:
@@ -803,6 +809,25 @@ def run():
         time.sleep(max(0.0, POLL_S - (time.time() - t_loop)))
 
 
+def m9_check(funding, serial, rows):
+    """M9 v2 (PX rule): (ok, details) at the last feed trade."""
+    t = rows[-1][0]
+    flow = sum(r[3] if r[2] else -r[3] for r in rows if r[0] > t - 30)
+    try:
+        funding.cluster_share(rows, len(rows) - 1)              # looks up (and caches) the creator's funder
+        n = serial.check(funding, rows[0][4], strict=True)
+    except Exception as exc:  # noqa: BLE001 - lookup failed: no trade rather than an unchecked one
+        return False, {"m9_flow": round(flow, 2), "why": f"M9 skip: funding lookup failed ({type(exc).__name__})"}
+    det = {"m9_flow": round(flow, 2), "m7_serial": n}
+    if n is None:
+        return False, {**det, "why": "M9 skip: creator funder unknown or program-owned"}
+    if n >= 1:
+        return False, {**det, "why": f"M9 skip: creator's funder funded {n} earlier creator(s)"}
+    if flow < M9_FLOW:
+        return False, {**det, "why": f"M9 skip: 30 s net flow {flow:.1f} SOL < {M9_FLOW:.1f}"}
+    return True, det
+
+
 class SerialFunders:
     """M7/M8: how many earlier M5-signalled creators each funder funded (program-owned funders excluded)."""
 
@@ -810,16 +835,18 @@ class SerialFunders:
         from .fl_test import NONSYSTEM
         self.nonsystem = NONSYSTEM
         self.path = OUT / "serial_seen.json"
-        src = self.path if self.path.exists() else SERIAL_SEED
+        seed = SERIAL_SEED_PX if M9 else SERIAL_SEED
+        src = self.path if self.path.exists() else seed
         self.seen = defaultdict(int, json.loads(src.read_text()) if src.exists() else {})
 
-    def check(self, funding, creator, count=True):
-        """Times the creator's funder was seen before this coin (None if unknown); counts this coin unless count=False."""
+    def check(self, funding, creator, count=True, strict=False):
+        """Times the creator's funder was seen before this coin (None if unknown); counts this coin unless count=False.
+        strict (M9 v2, as the PX table): a program-owned funder is unknown too."""
         f = (funding.cache.get(creator) or {}).get("funder")
         if not f:
             return None
         if f in self.nonsystem:
-            return 0
+            return None if strict else 0
         n = self.seen[f]
         if not count:
             return n

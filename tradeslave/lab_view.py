@@ -30,8 +30,8 @@ JOBS = [
      "M5 v1, but skips the buy when one funder controls >= 15% of the top-20 holders (Helius funding lookups); m6-v2 from 13:10"),
     ("M7 = m6-v3, M5 exits", "paper bot", "m7_bot.out", 15,
      "M6 + skip when the creator's funder funded an earlier creator; stop -30% (side by side with M8)"),
-    ("M9 = M5 or M1 entries, loss controls", "paper bot", "m9_bot.out", 15,
-     "M5's runner signal or M1's narrative signal; cluster + serial-funder skips; M5 exits with a -10% stop, 1 s polls"),
+    ("M9 = M5 or M1 entries + PX rule", "paper bot", "m9_bot.out", 15,
+     "m9-v2: M5's or M1's signal, then 30 s net flow >= 12.3 SOL and a creator funder new to us; -10% stop (twin M9e: -30%)"),
     ("M8 = M7 twin book, -10% stop", "paper bot", "m7_bot.out", 15,
      "Runs inside the M7 process (m8-v2): same fills and polls as M7, -10% stop instead of -30% (max-loss test, vault XA)"),
     ("Live trade feed", "data feed", "live_feed.log", 15,
@@ -329,6 +329,6 @@ def experiments() -> dict:
 
 
 def build_lab_snapshot() -> dict:
-    return dict(t=time.time(), jobs=jobs(), m1=m1(), m2=m1("m2"), m3=m1("m3"), m4=m1("m4"), m5=m1("m5"), m6=m1("m6"), m7=m1("m7"), m8=m1("m8"), m9=m1("m9"), m78=m78_view(), c1=c1(), kalshi=kalshi(), experiments=experiments())
+    return dict(t=time.time(), jobs=jobs(), m1=m1(), m2=m1("m2"), m3=m1("m3"), m4=m1("m4"), m5=m1("m5"), m6=m1("m6"), m7=m1("m7"), m8=m1("m8"), m9=m1("m9"), m9e=m1("m9e"), m78=m78_view(), c1=c1(), kalshi=kalshi(), experiments=experiments())
 
 

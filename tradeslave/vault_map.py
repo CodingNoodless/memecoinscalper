@@ -141,6 +141,8 @@ LINEAGE = [
     ("2026-10-21 M1 automated manual process", "2026-10-23 M9 design test - M1 + M5 entries with loss controls (M9)"),
     ("2026-10-23 coordinated-exit and serial-funder tests (CX)", "2026-10-23 M9 design test - M1 + M5 entries with loss controls (M9)"),
     ("2026-10-23 M7 vs M8 forward test (m6-v3 entries, two exit sets)", "2026-10-23 M9 design test - M1 + M5 entries with loss controls (M9)"),
+    ("2026-10-23 M9 design test - M1 + M5 entries with loss controls (M9)", "2026-10-23 pattern search for M9 (PX)"),
+    ("2026-10-23 coordinated-exit and serial-funder tests (CX)", "2026-10-23 pattern search for M9 (PX)"),
     ("Rug avoidance research (R4-R5)", "Research synthesis R7 - avoiding the deep losses"),
     ("Research synthesis R7 - avoiding the deep losses", "Research R7 - source digest (S468-S789)"),
     ("Research synthesis R7 - avoiding the deep losses", "2026-10-23 coordinated-exit and serial-funder tests (CX)"),
