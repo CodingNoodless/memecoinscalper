@@ -35,6 +35,7 @@ def run() -> None:
     from .history_miner import endpoints
     wss = [u.replace("https://", "wss://", 1) for u, _ in endpoints(3.0) if "helius" not in u and "quiknode" not in u
            and "alchemy" not in u and "shyft" not in u]
+    wss = [u for u in wss if "rpcfast" not in u] or wss         # RPCFast sends nothing for a wallet mention (2026-10-24)
     OUT.mkdir(parents=True, exist_ok=True)
     seen = {json.loads(x)["m"] for x in (OUT / "trades.jsonl").open()} if (OUT / "trades.jsonl").exists() else set()
     pos: dict[str, dict] = {}                     # mint -> position
