@@ -91,10 +91,10 @@ def run() -> None:
                         continue
                     for e in parse_trade_events(v.get("logs") or []):
                         m = e["mint"]
-                        if not e["vt"]:
+                        if not e["vt"] or not e["vs"]:                  # no curve state (0-SOL events): no price
                             continue
                         price = e["vs"] / e["vt"]
-                        if e["user"] == DECU and e["buy"] and m not in seen:
+                        if e["user"] == DECU and e["buy"] and e["sol"] >= 1e7 and m not in seen:   # >= 0.01 SOL: his real buys
                             seen.add(m)
                             pos[m] = dict(t_detect=now, t_his=float(e["ts"]), his_fill=e["sol"] / max(1, e["tok"]) * 1e-3,
                                           pe=None, peak=0.0, last=price, trig=None)
