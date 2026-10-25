@@ -453,7 +453,12 @@ def quick(addr: str, bg: bool = False) -> dict:
         flags.append((3, f"creator launched {n_created} coins we've recorded (serial deployer)"))
     elif n_created >= 3:
         flags.append((1, f"creator launched {n_created} coins we've recorded"))
-    if dev_buy >= 5:
+    if dev_buy >= 4 and not dev_sold and first_ts is not None and time.time() - first_ts < 180:
+        # SB (vault "2026-10-25 fast-dumping devs (SB)"): our bots' 17 entries with a >= 4 SOL dev bag still held all saw the
+        # dev sell within 60 s (mean -33%); the first 100 transactions only cover a young coin, hence the 3 min limit
+        flags.append((4, f"creator bought {dev_buy:.1f} SOL at launch and hasn't sold: devs like this dumped within a minute "
+                         f"in all 17 of our bots' entries (avg -33%)"))
+    elif dev_buy >= 5:
         flags.append((1, f"creator bought {dev_buy:.1f} SOL at launch (big dev bag)"))
     fund = _funding.get(m) or {}
     if fund.get("serial"):
@@ -651,7 +656,7 @@ def _rug_worker():
             _scan["rug"][m] = dict(t=time.time(), risk=quick(m, bg=True).get("risk"))
         except Exception:  # noqa: BLE001 - an unchecked coin just stays unchecked
             _scan["rug"][m] = dict(t=time.time(), risk=None)
-        time.sleep(3)                            # ~20 checks a minute at most: each one reads 100 transactions from Helius
+        time.sleep(15)                           # 4 checks a minute at most: each one reads 100 transactions from Helius
 
 
 def _potential(m, now):
