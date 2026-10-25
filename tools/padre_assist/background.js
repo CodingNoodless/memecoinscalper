@@ -9,6 +9,10 @@ function get(url, ms) {
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
+  if (msg && msg.type === "hot") {
+    get(`${API}/hot`, 8000).then(d => reply({ ok: true, d })).catch(e => reply({ ok: false, error: e.message }));
+    return true;
+  }
   if (!msg || (msg.type !== "assist" && msg.type !== "quick")) return;
   const q = new URLSearchParams({ m: msg.m });
   if (msg.entry_mc) q.set("entry_mc", String(msg.entry_mc));

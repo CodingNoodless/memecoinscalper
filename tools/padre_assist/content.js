@@ -14,6 +14,7 @@
   // ---------- panel (shadow DOM: padre's CSS can't touch it, and ours can't touch padre) ----------
   const host = document.createElement("div");
   host.style.cssText = "position:fixed;z-index:2147483647;top:90px;right:16px;";
+  host.id = "ts-panel-host";
   const root = host.attachShadow({ mode: "open" });
   root.innerHTML = `<style>
     .p{width:300px;background:#0f141bf2;color:#e6edf3;border:1px solid #2a3340;border-radius:12px;font:12.5px/1.4 system-ui,-apple-system,Segoe UI,sans-serif;box-shadow:0 10px 30px #0008}
@@ -30,7 +31,7 @@
     .btns button:hover{border-color:#7c9cff}input{background:#161d27;border:1px solid #2a3340;color:#e6edf3;border-radius:6px;padding:4px 6px;font:inherit;width:100%;box-sizing:border-box;margin-top:6px}
     .det{margin-top:6px;border-top:1px solid #1b2330;padding-top:6px;font-size:11.5px}.det ul{margin:2px 0 6px 16px;padding:0}.lnk{display:block;width:100%;margin-top:6px;background:none;color:#93a3b8}
   </style>
-  <div class="p"><div class="h"><b>Tradeslave Assist <span class="mute small">v0.2</span></b><span class="mute small" id="st">starting</span><button id="min" title="collapse">&#8211;</button></div>
+  <div class="p"><div class="h"><b>Tradeslave Assist <span class="mute small">v0.3</span></b><span class="mute small" id="st">starting</span><button id="min" title="collapse">&#8211;</button></div>
   <div class="b" id="body"><div class="mute small">Open a token on padre.gg, or paste an address:</div><input id="paste" placeholder="token address"></div></div>`;
   document.documentElement.appendChild(host);
   const $ = id => root.getElementById(id);
@@ -155,4 +156,77 @@
   }
   tick();
   setInterval(() => tick(), POLL_MS);
+})();
+
+// ---------- trenches highlighter: green outline + badge on coins that are lighting up right now ----------
+// Matches the coin links on the page against /api/assist/hot (token, bonding-curve and PumpSwap pool addresses).
+(() => {
+  const B58 = /[1-9A-HJ-NP-Za-km-z]{32,44}/g;
+  const KIND = { callout: "CALLER", model: "MODEL", runner: "RUNNER", live: "LIVE", boost: "BOOST", decu: "DECU", smart: "SMART" };
+  let HOT = new Map(), marked = new Map(), timer = null;
+  const css = document.createElement("style");
+  css.textContent = `.ts-hot{outline:2px solid #22c55e !important;outline-offset:-2px !important;box-shadow:0 0 14px #22c55e80,inset 0 0 0 9999px #22c55e12 !important;position:relative !important}
+    .ts-badge{position:absolute;top:3px;right:3px;z-index:20;background:#16a34a;color:#fff;font:700 10px/1.35 system-ui,sans-serif;padding:1px 6px;border-radius:6px;
+      pointer-events:none;max-width:75%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.02em;box-shadow:0 1px 4px #0006}`;
+  document.documentElement.appendChild(css);
+
+  function label(c) {
+    return c.reasons.map(r => r.kind === "runner" ? r.text.replace("runner model ", "RUNNER ") : r.kind === "model" ? r.text.split(" ")[0]
+      : r.kind === "live" ? "LIVE " + ((r.text.match(/(\d+)/) || [])[1] || "") : KIND[r.kind] || r.kind).join(" · ");
+  }
+
+  function refresh() {
+    chrome.runtime.sendMessage({ type: "hot" }, res => {
+      if (!res || !res.ok || !res.d || !res.d.coins) return;
+      const map = new Map();
+      for (const c of res.d.coins) for (const a of [c.m, c.curve, c.pool]) if (a) map.set(a, c);
+      HOT = map;
+      scan();
+    });
+  }
+
+  function cardOf(el) {
+    for (let i = 0, e = el; e && e !== document.body && i < 6; i++, e = e.parentElement) {
+      if (e.offsetHeight >= 40 && e.offsetWidth >= 140) return e;
+    }
+    return el;
+  }
+
+  function scan() {
+    if (!HOT.size) { for (const [el] of marked) unmark(el); marked.clear(); return; }
+    const seen = new Map();
+    for (const el of document.querySelectorAll("a[href], [data-address], [data-mint], [data-token], [data-pair]")) {
+      const blob = (el.getAttribute("href") || "") + " " + (el.dataset.address || "") + " " + (el.dataset.mint || "") + " " + (el.dataset.token || "") + " " + (el.dataset.pair || "");
+      const hits = blob.match(B58);
+      if (!hits) continue;
+      const c = hits.map(h => HOT.get(h)).find(Boolean);
+      if (!c) continue;
+      const card = cardOf(el);
+      if (card && card.closest && !card.closest("#ts-panel-host")) seen.set(card, c);
+    }
+    for (const [el] of marked) if (!seen.has(el)) unmark(el);
+    for (const [el, c] of seen) mark(el, c);
+    marked = seen;
+  }
+
+  function mark(el, c) {
+    el.classList.add("ts-hot");
+    const txt = label(c), tip = c.reasons.map(r => r.text).join(" · ");
+    let b = el.querySelector(":scope > .ts-badge");
+    if (!b) { b = document.createElement("span"); b.className = "ts-badge"; el.appendChild(b); }
+    if (b.textContent !== txt) b.textContent = txt;
+    if (el.title !== tip) el.title = "Tradeslave: " + tip;
+  }
+
+  function unmark(el) {
+    el.classList.remove("ts-hot");
+    const b = el.querySelector(":scope > .ts-badge");
+    if (b) b.remove();
+    if (el.title && el.title.startsWith("Tradeslave: ")) el.removeAttribute("title");
+  }
+
+  new MutationObserver(() => { clearTimeout(timer); timer = setTimeout(scan, 300); }).observe(document.body || document.documentElement, { childList: true, subtree: true });
+  refresh();
+  setInterval(refresh, 4000);
+  setInterval(scan, 1500);
 })();

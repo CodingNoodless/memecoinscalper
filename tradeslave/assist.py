@@ -547,3 +547,112 @@ def quick_json(qs: dict) -> dict:
 
 
 threading.Thread(target=_creates, daemon=True).start()     # preload the creator record so the first lookup is fast
+
+
+# ---------------- hot coins for the trenches page (callouts, our models' picks, runner signals, hype) ----------------
+_hot = dict(t=0.0, out=None)
+_addr: dict = {}             # mint -> (bonding curve, PumpSwap pool), the addresses padre links use
+
+
+def _tail(path, max_bytes=3_000_000):
+    try:
+        with path.open("rb") as fh:
+            fh.seek(0, 2)
+            n = fh.tell()
+            fh.seek(max(0, n - max_bytes))
+            data = fh.read().decode("utf-8", errors="ignore").splitlines()
+        return data[1:] if n > max_bytes else data
+    except OSError:
+        return []
+
+
+def _addresses(m):
+    if m not in _addr:
+        from .research.pda import PUMP_PROGRAM, b58decode, find_pda, pumpswap_pool_address
+        try:
+            _addr[m] = (find_pda([b"bonding-curve", b58decode(m)], PUMP_PROGRAM), pumpswap_pool_address(m))
+        except (ValueError, KeyError):
+            _addr[m] = (None, None)
+    return _addr[m]
+
+
+def hot() -> dict:
+    """Coins lighting up right now, with reasons. Cached 4 s (every open padre tab polls it)."""
+    now = time.time()
+    if _hot["out"] is not None and now - _hot["t"] < 4:
+        return _hot["out"]
+    found: dict = {}
+
+    def add(m, kind, text, weight, t):
+        x = found.setdefault(m, dict(m=m, reasons=[], score=0, t=t))
+        if kind not in {r["kind"] for r in x["reasons"]}:
+            x["reasons"].append(dict(kind=kind, text=text))
+            x["score"] += weight
+        x["t"] = max(x["t"], t)
+
+    tracked = _tracked()
+    # 1. callouts: a top pump.fun caller's wallet bought (feed's leader capture), 15 min
+    for line in _tail(DATA_DIR / "feed" / "leader_trades.jsonl", 2_000_000):
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if not e.get("buy") or now - e.get("recv", 0) > 900 or (e.get("sol") or 0) < 0.05:
+            continue
+        lab = tracked.get(e["w"], "")
+        if "caller" in lab:
+            add(e["m"], "callout", "top caller bought " + lab.split(" (")[0].replace("top caller ", ""), 3, e["recv"])
+        elif e["w"] == DECU and now - e["recv"] < 600:
+            add(e["m"], "decu", "decu bought", 2, e["recv"])
+        elif lab and now - e["recv"] < 300:
+            add(e["m"], "smart", f"{lab} bought", 1, e["recv"])
+    # 2. our models bought it (open now or bought in the last 15 min)
+    for v, name in (("m12", "M12"), ("m8", "M8"), ("m9", "M9"), ("m11", "M11")):
+        try:
+            st = json.loads((DATA_DIR / v / "status.json").read_text(encoding="utf-8"))
+            for o in st.get("open", []):
+                add(o["m"], "model", f"{name} is in it", 3, o.get("t") or now)
+        except (OSError, ValueError, KeyError):
+            pass
+        for line in _tail(DATA_DIR / v / "trades.jsonl", 200_000):
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if now - r.get("t", 0) < 900:
+                add(r["m"], "model", f"{name} bought", 3, r["t"])
+    # 3. runner model: M5's probability at or above its buy cut, last 10 min
+    try:
+        cut = json.loads((DATA_DIR / "m1" / "m5_model.json").read_text())["P"]
+    except (OSError, ValueError, KeyError):
+        cut = 0.37
+    for line in _tail(DATA_DIR / "m5" / "cands.jsonl", 3_000_000):
+        if '"p"' not in line:
+            continue
+        try:
+            c = json.loads(line)
+        except ValueError:
+            continue
+        if now - c.get("t", 0) < 600 and (c.get("p") or 0) >= cut:
+            add(c["m"], "runner", f"runner model {c['p']:.0%}", 3, c["t"])
+    # 4. hype: livestream with 20+ viewers or DexScreener boost, last 30 min (HY recorder)
+    for line in _tail(DATA_DIR / "hype" / "signals.jsonl", 500_000):
+        try:
+            j = json.loads(line)
+        except ValueError:
+            continue
+        if now - j.get("t", 0) < 1800:
+            if j["src"] == "LIVE20":
+                add(j["m"], "live", f"livestream, {j.get('viewers') or '20+'} viewers", 2, j["t"])
+            else:
+                add(j["m"], "boost", "DexScreener boost", 1, j["t"])
+    rows = sorted(found.values(), key=lambda x: (-x["score"], -x["t"]))[:150]
+    for x in rows:
+        x["curve"], x["pool"] = _addresses(x["m"])
+    out = dict(t=now, coins=rows)
+    _hot.update(t=now, out=out)
+    return out
+
+
+def hot_json(_qs: dict) -> dict:
+    return hot()
