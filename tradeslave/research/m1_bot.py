@@ -130,6 +130,12 @@ TWIN_LABEL = "M9e " if VARIANT == "m9" else "M8 "
 M12 = VARIANT == "m7"
 M12_DIR, M12_RULES, M12_STOP, M12_LABEL = DATA_DIR / "m12", "m12-v1+1s", 0.90, "M12 "
 HYPE_S = 4 * 3600
+# M12r (same vault note, Rohit's design): M12's entries with a ratcheting runner exit. Below 2x: M8's exits without the 2x
+# take-profit. From the first 2x touch the stop only moves up: 1.25x at 2x, then N - 1 at each new whole multiple N >= 3; take
+# profit when the run looks done (STALLED: no new high for 120 s and 60 s net SOL flow <= 0; DYING: 60 s curve txs < 25% of the
+# busiest 60 s since entry) or after 60 min in runner mode.
+M12R_DIR, M12R_RULES, M12R_LABEL = DATA_DIR / "m12r", "m12r-v1+1s", "M12r "
+LAD_ARM, LAD_FIRST, LAD_STALL_S, LAD_DYING, LAD_HOLD = 2.0, 1.25, 120, 0.25, 3600
 
 
 class Hype:
@@ -634,6 +640,7 @@ def run():
     watch, scored, opened = {}, {}, {}           # mint -> create row; mint -> (score, narrative ok, key); mint -> pos
     twins = {}                                   # M7 process only: mint -> M8 twin position (same fill, stop -10%)
     twins12, hype = {}, (Hype() if M12 else None)   # M7 process only: M12 book (M8 + hype gate)
+    twins12r = {}                                # M7 process only: M12r book (M12 entries, ratcheting runner exit)
     m1_done = set()                              # M9: coins M1's checks rejected (M5's model can still buy them)
     m9_m5_done = set()                           # M9 v2: coins whose M5 signal already met the PX rule check
     first = {}                                   # narrative key -> the first coin seen on it (Rohit: prefer the first)
@@ -720,7 +727,7 @@ def run():
                 if line.strip():
                     meta_pool.submit(intake, json.loads(line))
         with lock:
-            for m in [m for m, c in watch.items() if t_loop - c["t"] > WATCH_S and m not in opened and m not in twins and m not in twins12]:
+            for m in [m for m, c in watch.items() if t_loop - c["t"] > WATCH_S and m not in opened and m not in twins and m not in twins12 and m not in twins12r]:
                 watch.pop(m)
             keys = {c["bc"]: m for m, c in watch.items() if c.get("bc")}
         states = rpc.curves(list(keys)) if keys and sol["usd"] else {}
@@ -732,13 +739,15 @@ def run():
             p = cs.price_sol if not cs.complete else None
             if p and sol["usd"]:
                 mc_now[m] = p * 1e9 * sol["usd"]
-            if m in opened or m in twins or m in twins12:
+            if m in opened or m in twins or m in twins12 or m in twins12r:
                 if m in opened:
                     manage(opened, m, p, cs, done, rpc)
                 if m in twins:                                   # M8 twin: same price read, its own stop
                     manage(twins, m, p, cs, done, rpc, log=TWIN_DIR / "trades.jsonl", label=TWIN_LABEL)
                 if m in twins12:                                 # M12: same price read, M8's stop
                     manage(twins12, m, p, cs, done, rpc, log=M12_DIR / "trades.jsonl", label=M12_LABEL)
+                if m in twins12r:                                # M12r: same price read, ratcheting runner exit
+                    manage(twins12r, m, p, cs, done, rpc, log=M12R_DIR / "trades.jsonl", label=M12R_LABEL)
                 continue
             if p is None or m in done or len(opened) >= MAX_OPEN:
                 continue
@@ -867,6 +876,8 @@ def run():
                 if g["go"]:
                     twins12[m] = deepcopy(opened[m])
                     twins12[m].update(stop=M12_STOP, rules=M12_RULES, twin_of=VARIANT, hype=g)
+                    twins12r[m] = deepcopy(twins12[m])
+                    twins12r[m].update(rules=M12R_RULES, ladder=True)
                     print(time.strftime("%H:%M"), f"M12 BUY {c.get('name')!r} hype {g}", flush=True)
             print(time.strftime("%H:%M"), f"BUY  {c.get('name')!r} score {sc} mc ${mc:,.0f}", flush=True)
         if M12:
@@ -875,6 +886,10 @@ def run():
                 (M12_DIR / "status.json").write_text(json.dumps({"t": time.time(), "sol_usd": sol["usd"], "twin_of": VARIANT,
                     "callers": len(hype.callers), "open": [{k: o.get(k) for k in ("m", "name", "score", "t", "p0", "last", "peak", "stop", "mc",
                                                     "holders", "h_max", "hype")} for o in twins12.values()]}))
+                M12R_DIR.mkdir(exist_ok=True)
+                (M12R_DIR / "status.json").write_text(json.dumps({"t": time.time(), "sol_usd": sol["usd"], "twin_of": VARIANT,
+                    "open": [{k: o.get(k) for k in ("m", "name", "score", "t", "p0", "last", "peak", "stop", "mc", "holders", "h_max",
+                                                    "hype", "lad_on", "lad_stop")} for o in twins12r.values()]}))
             except OSError:
                 pass
         if TWIN:
@@ -980,6 +995,25 @@ def manage(opened, m, p, cs, done, rpc=None, log=None, label=""):
         r, held = p / o["p0"], now - o["t"]
         if (M4 or M5) and o.get("bal") is not None and now - o["t_h"] >= H_EVERY:
             holders_update(o, now)
+        if o.get("ladder") and (o.get("lad_on") or r >= LAD_ARM):   # M12r runner mode: the stop only moves up
+            if not o.get("lad_on"):
+                o.update(lad_on=True, lad_stop=LAD_FIRST, t_lad=now)
+                print(time.strftime("%H:%M"), f"{label}RUN {o['name']!r} hit {r:.2f}x: stop to {LAD_FIRST}x", flush=True)
+            n = int(o["peak"] / o["p0"])
+            if n >= 3 and n - 1 > o["lad_stop"]:
+                o["lad_stop"] = float(n - 1)
+                print(time.strftime("%H:%M"), f"{label}RUN {o['name']!r} peak {o['peak'] / o['p0']:.2f}x: stop to {n - 1}x", flush=True)
+            if now - o.get("t_flow", 0) >= 5:                    # 60 s net SOL flow from the feed, every 5 s
+                rows, _ = feed_rows(m)
+                if rows:
+                    w = [x for x in rows if x[0] > now - 60]
+                    o["flow60"] = sum(x[3] if x[2] else -x[3] for x in w)
+                o["t_flow"] = now
+            o["pending"] = ("LSTOP" if r <= o["lad_stop"] else
+                            "STALLED" if now - o.get("t_peak", o["t"]) > LAD_STALL_S and o.get("flow60", 1.0) <= 0 else
+                            "DYING" if act is not None and amax and act < LAD_DYING * amax else
+                            "TIME" if now - o["t_lad"] > LAD_HOLD else None)
+            return
         if ((M4 or M5) and r > o["stop"] and o.get("bal") is not None and o["holders"] <= (1 - H_DROP) * o["h_max"]
                 and (not M5 or now - o["t"] >= M5_GRACE)):
             o["pending"] = "HDECL"
@@ -997,7 +1031,7 @@ def manage(opened, m, p, cs, done, rpc=None, log=None, label=""):
                             "DEAD" if act is not None and held > 60 and act < HI_DEAD * amax and r < 1 else
                             "TIME" if held > HI_HOLD else None)
         else:
-            o["pending"] = ("TP" if r >= TP else "STOP" if r <= o["stop"] else
+            o["pending"] = ("TP" if r >= TP and not o.get("ladder") else "STOP" if r <= o["stop"] else
                             "TREND" if o["peak"] >= o["p0"] * TREND_ARM and p <= o["peak"] * TREND_GIVE else
                             "STALL" if (act is not None and now - o.get("t_peak", o["t"]) > STALL_S
                                         and act < STALL_ACT * amax) else
