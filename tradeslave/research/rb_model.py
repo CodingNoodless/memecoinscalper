@@ -13,6 +13,7 @@ import math
 import re
 import statistics
 import sys
+import time
 from collections import defaultdict
 
 import numpy as np
@@ -340,5 +341,26 @@ def holdout() -> None:
     print("trading", {a: b for a, b in t.items() if a != "trades"})
 
 
+def final() -> None:
+    """M13's model: the holdout-validated choice (logistic, no wallet features) refit on all coins; threshold = 95th percentile
+    of time-ordered CV scores over all data (same rule as amendment 4). Writes data/m1/m13_model.json."""
+    rows = json.loads((OUT / "features.json").read_text())
+    names = _names(rows, False)
+    pred = _cv(rows, "logit", names)
+    ps = sorted((p for p, _, _ in pred), reverse=True)
+    thr = ps[max(0, int(0.05 * len(ps)) - 1)]
+    m = _model("logit").fit(_X(rows, names), [r["y"] for r in rows])
+    sc, lr = m.named_steps["standardscaler"], m.named_steps["logisticregression"]
+    n, k = _at(pred, thr)
+    out = dict(names=names, mean=sc.mean_.tolist(), scale=sc.scale_.tolist(), coef=lr.coef_[0].tolist(),
+               intercept=float(lr.intercept_[0]), thr=thr, cv_precision=k / max(1, n), cv_auc=_auc(pred), n_train=len(rows),
+               trained=time.strftime("%Y-%m-%d %H:%M"))
+    (DATA_DIR / "m1" / "m13_model.json").write_text(json.dumps(out, indent=1))
+    print(f"M13 model: {len(names)} features, {len(rows)} coins, CV AUC {out['cv_auc']:.3f}, top-5% threshold {thr:.3f} "
+          f"(CV precision {k}/{n})")
+    for nm, c in sorted(zip(names, out["coef"]), key=lambda z: -abs(z[1]))[:10]:
+        print(f"  {nm:16s} {c:+.2f}")
+
+
 if __name__ == "__main__":
-    {"build": build, "design": design, "holdout": holdout}[sys.argv[1]]()
+    {"build": build, "design": design, "holdout": holdout, "final": final}[sys.argv[1]]()

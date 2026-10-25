@@ -203,7 +203,7 @@ def m78_view() -> dict:
     def load(v):
         try:
             rs = [r for r in jsonl(DATA_DIR / v / "trades.jsonl") if r["t"] >= M78_FROM]
-            return [r for r in rs if r.get("rules") == "m8-v2+1s"] if v == "m8" else rs   # m8-v2: twin book in M7
+            return [r for r in rs if r.get("rules") in ("m8-v2+1s", "m8-v3+1s")] if v == "m8" else rs   # m8-v2: twin book in M7
         except OSError:
             return []
 
@@ -375,12 +375,14 @@ def experiments() -> dict:
 
 # every model book: (key, name, one-line idea, group, current rules label, verdict text, verdict class)
 MODELS = [
-    ("m12", "M12", "M8 + hype gate: a top pump.fun caller bought, or livestream / DexScreener boost", "active", "m12-v1+1s", "forward test, judged at 60", "done"),
-    ("m12r", "M12r", "M12's entries, ratcheting runner exit (1.25x at 2x, then N-1 at each new N)", "active", "m12r-v1+1s", "forward vs M12, at 60", "done"),
-    ("m8", "M8", "m6-v3 entries (cluster + serial-funder skips), -10% stop", "active", "m8-v2+1s", "exits ADOPTED (weak, t~0.7)", "pass"),
-    ("m7", "M7", "m6-v3 entries, M5 exits with -30% stop", "active", "m7-v1+1s", "entries PASS (weak)", "pass"),
-    ("m9", "M9", "M5/M1 signal + PX flow rule (30 s net flow >= 12.3 SOL), -10% stop", "active", "m9-v2+1s", "forward test, judged at 60", "done"),
-    ("m9e", "M9e", "M9's fills, -30% stop (twin)", "active", "m9e-v2+1s", "forward test, judged at 60", "done"),
+    ("m13", "M13", "runner model at migration (RD: 44% holdout precision) + factory filter, M12r ratchet, 6 h cap", "active", "m13-v1", "forward test, judged at 30", "done"),
+    ("m13b", "M13b", "control: buys every curve graduation at migration, same exits (no model)", "active", "m13b-v1", "control for M13", "done"),
+    ("m12", "M12", "M8 + hype gate: any of the top 50 pump.fun callers bought, or livestream / boost", "active", "m12-v3+1s", "forward test, judged at 60", "done"),
+    ("m12r", "M12r", "M12's entries, ratcheting runner exit (1.25x at 2x, then N-1 at each new N)", "active", "m12r-v3+1s", "forward vs M12, at 60", "done"),
+    ("m8", "M8", "m6-v3 entries (cluster + serial-funder skips), -10% stop", "active", "m8-v3+1s", "exits ADOPTED (weak, t~0.7)", "pass"),
+    ("m7", "M7", "m6-v3 entries, M5 exits with -30% stop", "active", "m7-v2+1s", "entries PASS (weak)", "pass"),
+    ("m9", "M9", "M5/M1 signal + PX flow rule (30 s net flow >= 12.3 SOL), -10% stop", "active", "m9-v3+1s", "forward test, judged at 60", "done"),
+    ("m9e", "M9e", "M9's fills, -30% stop (twin)", "active", "m9e-v3+1s", "forward test, judged at 60", "done"),
     ("m11", "M11", "copy decu's first buy 1 s late, TP +50% / stop -20% (feed-driven)", "active", "m11-v1+1s", "forward test, judged at 60", "done"),
     ("m10", "M10", "calm-entry rule from the M10 backtest", "retired", "m10-v2+1s", "FAIL (stopped Oct 24)", "fail"),
     ("m6", "M6", "M5 + funding-cluster skip (baseline for M7)", "baseline", "m6-v2+1s", "baseline", "quiet"),
@@ -424,7 +426,7 @@ def m12_view() -> dict:
         cands = jsonl(DATA_DIR / "m12" / "cands.jsonl")
     except OSError:
         cands = []
-    t12, t12r, t8 = load("m12", "m12-v1+1s"), load("m12r", "m12r-v1+1s"), load("m8", "m8-v2+1s")
+    t12, t12r, t8 = load("m12", "m12-v3+1s"), load("m12r", "m12r-v3+1s"), load("m8", "m8-v3+1s")
     by8, by12r = {r["m"]: r for r in t8}, {r["m"]: r for r in t12r}
     gate = {c["m"]: c for c in cands}
     since = min((c["t"] for c in cands), default=None)

@@ -770,16 +770,31 @@ def hot() -> dict:
                 add(j["m"], "live", f"livestream, {j.get('viewers') or '20+'} viewers", 2, j["t"])
             else:
                 add(j["m"], "boost", "DexScreener boost", 1, j["t"])
-    # 5. potential: momentum from the market scan
+    # 5. M13 runner model (RD: AUC 0.915, 44% holdout precision): scored at migration by the M13 bot, last 3 h
+    try:
+        thr13 = json.loads((DATA_DIR / "m1" / "m13_model.json").read_text())["thr"]
+    except (OSError, ValueError, KeyError):
+        thr13 = None
+    if thr13 is not None:
+        for line in _tail(DATA_DIR / "m13" / "scored.jsonl", 2_000_000):
+            try:
+                j = json.loads(line)
+            except ValueError:
+                continue
+            if j.get("p") is not None and now - j.get("t_mig", 0) < 3 * 3600 and j["p"] >= thr13 and not j.get("factory"):
+                add(j["m"], "runner13", f"runner model {j['p']:.0%} at migration", 5, j["t"])
+    # 6. potential: momentum from the market scan
     for m in list(_scan["hist"]):
         for kind, text, w in _potential(m, now):
             add(m, kind, text, w, now)
-    STRONG = {"elite", "callout", "model", "runner", "decu"}
+    STRONG = {"elite", "callout", "model", "runner", "decu", "runner13"}
     for x in found.values():
         kinds = {r["kind"] for r in x["reasons"]}
         rug = _scan["rug"].get(x["m"]) or {}
         x["rug"] = rug.get("risk")
-        if kinds & STRONG or x["score"] >= 4:
+        if "runner13" in kinds:
+            x["tier"] = "runner"                 # pink on the trenches page
+        elif kinds & STRONG or x["score"] >= 4:
             x["tier"] = "hot"
         else:
             x["tier"] = "watch"

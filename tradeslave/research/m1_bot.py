@@ -120,8 +120,8 @@ SERIAL_SEED = DATA_DIR / "m1" / "serial_seed.json"
 # and poll at slightly different moments (M5 and M6 on the same coin at the same second: +18.6% vs +15.9%), so the M8 - M7
 # gap mixed timing noise into the stop effect. M8 now runs inside the M7 process as a twin book: same fill, same polls,
 # only the stop differs (-10%). It writes data/m8/trades.jsonl and data/m8/status.json; `run m8` alone is retired.
-TWIN_STOP, TWIN_DIR, TWIN_RULES = ((0.70, DATA_DIR / "m9e", "m9e-v2+1s") if VARIANT == "m9"
-                                   else (0.90, DATA_DIR / "m8", "m8-v2+1s"))
+TWIN_STOP, TWIN_DIR, TWIN_RULES = ((0.70, DATA_DIR / "m9e", "m9e-v3+1s") if VARIANT == "m9"
+                                   else (0.90, DATA_DIR / "m8", "m8-v3+1s"))
 TWIN_LABEL = "M9e " if VARIANT == "m9" else "M8 "
 # M12 (vault "2026-10-24 M12 - M8 with hype context (M12)", Rohit: "watch pump.fun callouts ... use it as an indicator"): a
 # third book in the M7 process with M8's fill and exits (-10% stop). It takes M8's entry only with hype at that moment: a top
@@ -132,7 +132,7 @@ TWIN_LABEL = "M9e " if VARIANT == "m9" else "M8 "
 # leader capture, and a caller buy counts from either the feed DB or leader_trades.jsonl within HYPE_S. v1 and v2 trades
 # are judged separately (rules label).
 M12 = VARIANT == "m7"
-M12_DIR, M12_RULES, M12_STOP, M12_LABEL = DATA_DIR / "m12", "m12-v2+1s", 0.90, "M12 "
+M12_DIR, M12_RULES, M12_STOP, M12_LABEL = DATA_DIR / "m12", "m12-v3+1s", 0.90, "M12 "
 HYPE_S = 4 * 3600
 # Rohit's elite list (v2): callers with >= 31% of callouts reaching 2x and a median multiple >= 1.40 (18 of the top 50 on
 # 2026-10-24). Recorded on every entry and compared at the verdict; the gate itself takes any of the 50.
@@ -141,7 +141,7 @@ ELITE_2X, ELITE_MED = 0.31, 1.40
 # take-profit. From the first 2x touch the stop only moves up: 1.25x at 2x, then N - 1 at each new whole multiple N >= 3; take
 # profit when the run looks done (STALLED: no new high for 120 s and 60 s net SOL flow <= 0; DYING: 60 s curve txs < 25% of the
 # busiest 60 s since entry) or after 60 min in runner mode.
-M12R_DIR, M12R_RULES, M12R_LABEL = DATA_DIR / "m12r", "m12r-v2+1s", "M12r "
+M12R_DIR, M12R_RULES, M12R_LABEL = DATA_DIR / "m12r", "m12r-v3+1s", "M12r "
 LAD_ARM, LAD_FIRST, LAD_STALL_S, LAD_DYING, LAD_HOLD = 2.0, 1.25, 120, 0.25, 3600
 
 
@@ -244,7 +244,7 @@ M10_RULE = (("avg_buy_60", "<=", 0.511), ("top10", "<=", 0.233), ("t_to_n", ">="
 # as in the test). Every position uses M5's exits with a -10% stop on 1 s polls (XA L5). Forward test.
 # 1 s polls on every bot from 2026-10-23 16:00 (Rohit: simulate a 1 s delay, not 2-4 s): an exit decided on one poll
 # fills at the next, 1 s later; rules carry "+1s" so the dashboard splits results from before the change.
-RULES = ("m10-v2" if M10 else "m9-v2" if M9 else "m8-v1" if M8 else "m7-v1" if M7 else "m6-v2" if M6 else "m5-v1" if M5 else "m4-v3" if M4 else "m3-v3" if M3 else "m2-v1" if M2 else "exits-v2") + "+1s"                                # bump on every rule change; the dashboard splits results by it
+RULES = ("m10-v2" if M10 else "m9-v3" if M9 else "m8-v1" if M8 else "m7-v2" if M7 else "m6-v2" if M6 else "m5-v1" if M5 else "m4-v3" if M4 else "m3-v3" if M3 else "m2-v1" if M2 else "exits-v2") + "+1s"                                # bump on every rule change; the dashboard splits results by it
 ACT_EVERY = 6.0
 WATCH_S, POLL_S, RECHECK_S = 20 * 60, 1.0, (5 if M4 else 30)
 SIZE_SOL, TX_SOL, MAX_OPEN = 0.1, 0.0005, 5
@@ -321,7 +321,10 @@ class Llm:
         t0 = time.mktime(time.strptime(day, "%Y-%m-%d"))
         for line in CANDS.open(encoding="utf-8") if CANDS.exists() else ():   # a restart keeps today's count
             if '"model"' in line:
-                r = json.loads(line)
+                try:
+                    r = json.loads(line)
+                except ValueError:                              # a line cut short by a restart
+                    continue
                 if r.get("t", 0) >= t0 and r.get("model"):
                     self.calls[(day, r["model"])] += 1
         self.db = sqlite3.connect(SHARED, timeout=30, check_same_thread=False, isolation_level=None)
@@ -979,6 +982,26 @@ class SerialFunders:
         src = self.path if self.path.exists() else seed
         self.seen = defaultdict(int, json.loads(src.read_text()) if src.exists() else {})
 
+    def service(self, f):
+        """v3 (2026-10-25): a funder making >= 5 transactions a minute (last 1,000) is a service wallet (exchange, Axiom ...).
+        Live, those piled up in `seen` and blocked ~90% of signals for 15 h. Cached in data/m1/service_funders.json."""
+        p = DATA_DIR / "m1" / "service_funders.json"
+        if not hasattr(self, "svc"):
+            try:
+                self.svc = json.loads(p.read_text())
+            except (OSError, ValueError):
+                self.svc = {}
+        if f not in self.svc:
+            try:
+                from .m13_bot import rpc
+                sig = rpc("getSignaturesForAddress", [f, {"limit": 1000}])
+                span = (sig[0]["blockTime"] - sig[-1]["blockTime"]) / 60 if len(sig) > 1 else 0
+                self.svc[f] = bool(len(sig) >= 1000 and span and len(sig) / span >= 5)
+                p.write_text(json.dumps(self.svc))
+            except Exception:  # noqa: BLE001 - unknown stays "not a service"
+                return False
+        return self.svc[f]
+
     def check(self, funding, creator, count=True, strict=False):
         """Times the creator's funder was seen before this coin (None if unknown); counts this coin unless count=False.
         strict (M9 v2, as the PX table): a program-owned funder is unknown too."""
@@ -987,6 +1010,8 @@ class SerialFunders:
             return None
         if f in self.nonsystem:
             return None if strict else 0
+        if self.service(f):                      # exchange / terminal hot wallet: funds everyone, says nothing about the dev
+            return 0
         n = self.seen[f]
         if not count:
             return n
