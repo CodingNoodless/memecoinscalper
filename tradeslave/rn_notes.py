@@ -58,6 +58,9 @@ def attention_tags(f):
         tags.append("Top caller in the early buyers")
     if L.get("tracked"):
         tags.append("Tracked wallet in the early buyers")
+    C = f.get("chart") or {}
+    if C.get("vol_48h") and f.get("ath") and C["vol_48h"] < 0.15 * f["ath"]:
+        tags.append("Thin or inflated market (48 h volume under 15% of ATH)")   # a few wallets set the price; not real demand
     ch = f.get("curve_h")
     if ch is not None:
         tags.append("Fast curve (< 15 min)" if ch < 0.25 else "Long curve (> 6 h)" if ch > 6 else "Normal curve (15 min - 6 h)")
