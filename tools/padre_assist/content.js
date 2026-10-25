@@ -164,7 +164,7 @@
 // Matches the coin links on the page against /api/assist/hot (token, bonding-curve and PumpSwap pool addresses).
 (() => {
   const B58 = /[1-9A-HJ-NP-Za-km-z]{32,44}/g;
-  const KIND = { callout: "CALLER", model: "MODEL", runner: "RUNNER", live: "LIVE", boost: "BOOST", decu: "DECU", smart: "SMART",
+  const KIND = { elite: "ELITE CALLER", callout: "CALLER", model: "MODEL", runner: "RUNNER", live: "LIVE", boost: "BOOST", decu: "DECU", smart: "SMART",
     fast: "FAST", grad: "NEAR MIGRATION", ath: "NEW HIGH", chat: "CHAT" };
   let HOT = new Map(), marked = new Map(), timer = null;
   const css = document.createElement("style");

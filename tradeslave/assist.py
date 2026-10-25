@@ -57,7 +57,8 @@ def _tracked():
         for u in lb:
             for w in u.get("wallets", []):
                 if not w.startswith("0x"):
-                    out[w] = f"top caller {w[:6]} ({u.get('pct2xOrMore', 0):.0%} of calls 2x)"
+                    elite = u.get("pct2xOrMore", 0) >= 0.31 and u.get("medianMultiple", 0) >= 1.40   # Rohit's elite list (M12 v2)
+                    out[w] = f"{'elite' if elite else 'top'} caller {w[:6]} ({u.get('pct2xOrMore', 0):.0%} of calls 2x)"
         break
     return out
 
@@ -716,7 +717,9 @@ def hot() -> dict:
         if not e.get("buy") or now - e.get("recv", 0) > 900 or (e.get("sol") or 0) < 0.05:
             continue
         lab = tracked.get(e["w"], "")
-        if "caller" in lab:
+        if lab.startswith("elite caller"):
+            add(e["m"], "elite", lab.split(" (")[0] + " bought (" + lab.split(" (")[1], 4, e["recv"])
+        elif "caller" in lab:
             add(e["m"], "callout", "top caller bought " + lab.split(" (")[0].replace("top caller ", ""), 3, e["recv"])
         elif e["w"] == DECU and now - e["recv"] < 600:
             add(e["m"], "decu", "decu bought", 2, e["recv"])
@@ -766,7 +769,7 @@ def hot() -> dict:
     for m in list(_scan["hist"]):
         for kind, text, w in _potential(m, now):
             add(m, kind, text, w, now)
-    STRONG = {"callout", "model", "runner", "decu"}
+    STRONG = {"elite", "callout", "model", "runner", "decu"}
     for x in found.values():
         kinds = {r["kind"] for r in x["reasons"]}
         rug = _scan["rug"].get(x["m"]) or {}

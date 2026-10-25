@@ -127,14 +127,21 @@ TWIN_LABEL = "M9e " if VARIANT == "m9" else "M8 "
 # third book in the M7 process with M8's fill and exits (-10% stop). It takes M8's entry only with hype at that moment: a top
 # pump.fun caller's wallet (callout leaderboard, read with Rohit's own login token) bought the coin before now, or the coin was
 # a >= 20-viewer pump.fun livestream / DexScreener-boosted in the last 4 h (HY recorder). Every M8 entry's hype is logged.
+# v2 (amendment 2026-10-24 22:08, Rohit: "widen M12's hype readings"; 1 trade in 3 h): the top 50 callers instead of 5
+# (leaderboard limit=100; the site-wide latest-callouts list refuses non-site clients), their wallets added to the feed's
+# leader capture, and a caller buy counts from either the feed DB or leader_trades.jsonl within HYPE_S. v1 and v2 trades
+# are judged separately (rules label).
 M12 = VARIANT == "m7"
-M12_DIR, M12_RULES, M12_STOP, M12_LABEL = DATA_DIR / "m12", "m12-v1+1s", 0.90, "M12 "
+M12_DIR, M12_RULES, M12_STOP, M12_LABEL = DATA_DIR / "m12", "m12-v2+1s", 0.90, "M12 "
 HYPE_S = 4 * 3600
+# Rohit's elite list (v2): callers with >= 31% of callouts reaching 2x and a median multiple >= 1.40 (18 of the top 50 on
+# 2026-10-24). Recorded on every entry and compared at the verdict; the gate itself takes any of the 50.
+ELITE_2X, ELITE_MED = 0.31, 1.40
 # M12r (same vault note, Rohit's design): M12's entries with a ratcheting runner exit. Below 2x: M8's exits without the 2x
 # take-profit. From the first 2x touch the stop only moves up: 1.25x at 2x, then N - 1 at each new whole multiple N >= 3; take
 # profit when the run looks done (STALLED: no new high for 120 s and 60 s net SOL flow <= 0; DYING: 60 s curve txs < 25% of the
 # busiest 60 s since entry) or after 60 min in runner mode.
-M12R_DIR, M12R_RULES, M12R_LABEL = DATA_DIR / "m12r", "m12r-v1+1s", "M12r "
+M12R_DIR, M12R_RULES, M12R_LABEL = DATA_DIR / "m12r", "m12r-v2+1s", "M12r "
 LAD_ARM, LAD_FIRST, LAD_STALL_S, LAD_DYING, LAD_HOLD = 2.0, 1.25, 120, 0.25, 3600
 
 
@@ -142,7 +149,7 @@ class Hype:
     """Top-caller wallets (refreshed every 6 h in a thread) and HY's recent livestream/boost signals."""
 
     def __init__(self):
-        self.callers, self.sig, self.t_sig = set(), {}, 0.0
+        self.callers, self.elite, self.sig, self.t_sig = set(), set(), {}, 0.0
         self._load_callers()
         threading.Thread(target=self._refresh, daemon=True, name="callouts").start()
 
@@ -153,6 +160,15 @@ class Hype:
             except (OSError, ValueError):
                 continue
             self.callers = {w for u in lb for w in u.get("wallets", []) if not w.startswith("0x")}
+            self.elite = {w for u in lb if u.get("pct2xOrMore", 0) >= ELITE_2X and u.get("medianMultiple", 0) >= ELITE_MED
+                          for w in u.get("wallets", []) if not w.startswith("0x")}
+            try:                                 # the feed's leader capture also records these wallets' buys on any coin
+                lp = DATA_DIR / "feed" / "leaders.json"
+                cur = set(json.loads(lp.read_text())) if lp.exists() else set()
+                if not self.callers <= cur:
+                    lp.write_text(json.dumps(sorted(cur | self.callers)))
+            except (OSError, ValueError):
+                pass
             return
 
     def _refresh(self):
@@ -162,7 +178,7 @@ class Hype:
             tok = (dotenv_values(PROJECT_ROOT / ".env").get("PUMP_JWT") or "").strip().strip('"').strip("'")
             if tok:
                 try:
-                    r = requests.get("https://frontend-api-v3.pump.fun/callout/leaderboard", timeout=20,
+                    r = requests.get("https://frontend-api-v3.pump.fun/callout/leaderboard?limit=100", timeout=20,
                                      headers={"User-Agent": "tradeslave-research/0.1 (personal research; low rate)",
                                               "Accept": "application/json", "Authorization": f"Bearer {tok}"})
                     if r.status_code == 200:
@@ -199,8 +215,19 @@ class Hype:
                 db.close()
             except sqlite3.Error:
                 pass
+        try:                                     # caller buys the feed DB missed (bought before the coin was written)
+            with (DATA_DIR / "feed" / "leader_trades.jsonl").open(encoding="utf-8") as fh:
+                fh.seek(max(0, fh.seek(0, 2) - 3_000_000))
+                for line in fh:
+                    if m in line:
+                        e = json.loads(line)
+                        if e.get("m") == m and e.get("buy") and e.get("w") in self.callers and time.time() - e.get("recv", 0) < HYPE_S:
+                            callers_in.append(e["w"])
+        except (OSError, ValueError):
+            pass
+        callers_in = sorted(set(callers_in))
         src = sorted(self.signals().get(m, ()))
-        return dict(caller=len(callers_in), live_or_boost=src, go=bool(callers_in) or bool(src))
+        return dict(caller=len(callers_in), elite=len(set(callers_in) & self.elite), live_or_boost=src, go=bool(callers_in) or bool(src))
 # M9 v2 (vault "2026-10-23 pattern search for M9 (PX)", 17:20): the one PX rule that held on holdout replaces M9 v1's
 # skips on both entry sources: net SOL flow over the 30 s before the last feed trade >= M9_FLOW, and the creator's funder
 # funded no earlier creator (counts continue from the PX table; a program-owned or unknown funder skips). Main book L5
