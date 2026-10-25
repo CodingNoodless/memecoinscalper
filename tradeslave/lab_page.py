@@ -30,10 +30,28 @@ details.card>summary b{font-size:14px}details .body{padding:0 16px 16px;display:
 .fail{color:var(--bad);border-color:#f8717166}.done{color:var(--acc);border-color:#7c9cff66}
 tr.hl td{background:#7c9cff12}code{font-size:11.5px;word-break:break-all;color:#b6c0cf}
 a.coin{color:var(--ink)}a.coin:hover{color:var(--acc)}
+.board-head{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px}.board-head h2{margin:0}
+.chips{display:flex;gap:6px}.chip{background:transparent;border:1px solid var(--line);color:var(--mute);border-radius:999px;padding:4px 12px;font:inherit;font-size:12px;cursor:pointer}
+.chip.on{color:var(--ink);border-color:var(--acc);background:#7c9cff1f}
+h2.sect{margin:6px 2px -4px;font-size:13px;color:var(--mute);text-transform:uppercase;letter-spacing:.07em}
+.prog{height:6px;background:var(--line);border-radius:4px;overflow:hidden;min-width:70px}.prog i{display:block;height:100%;background:var(--acc)}
+.prog.full i{background:var(--good)}td.mname b{font-size:13px}td.mname div{max-width:340px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:#475569}.dot.on{background:var(--good);box-shadow:0 0 6px #34d39988}
 @media (max-width:640px){main{padding:12px}.kgrid{grid-template-columns:repeat(2,1fr)}}
 </style></head><body>""" + nav("lab", "Paper only &middot; refreshes every 15 s") + r"""
 <main>
-<section class="bots" id="bots"></section>
+<section class="card"><div class="board-head"><h2>Model scoreboard</h2><div class="chips" id="chips">
+<button data-f="active" class="chip on">Active</button><button data-f="retired" class="chip">Retired &amp; baselines</button><button data-f="all" class="chip">All</button></div>
+<span class="mute small">current rules only &middot; paper, 0.1 SOL a trade, real 1 s fills &middot; judged once at 60 trades</span></div><div id="board" class="scroll" style="max-height:none"></div></section>
+<h2 class="sect">Active models</h2>
+<section class="bots" id="active"></section>
+<details class="card" open><summary><span class="chev">&#9654;</span><b>M12 vs M12r vs M8</b><span class="mute small">same coins, same fill, same moment &middot; M12 = M8 + hype gate &middot; M12r = M12 with the ratcheting runner exit &middot; judged at 60 trades each</span></summary><div class="body">
+<div class="grid"><div><div class="lbl">Same-coin comparison</div><div id="m12p"></div><div class="lbl" style="margin-top:14px">Hype gate (every M8 entry is checked)</div><div id="m12g"></div></div>
+<div><div class="lbl">M12r open positions (runner mode = stop has moved up)</div><div id="m12o"></div></div></div>
+<div class="grid"><div><div class="lbl">Recent M12 trades &middot; what M12r and M8 made on the same coin</div><div id="m12t" class="scroll"></div></div>
+<div><div class="lbl">Recent gate checks</div><div id="m12l" class="scroll"></div></div></div></div></details>
+<details class="card"><summary><span class="chev">&#9654;</span><b>Retired and baseline bots</b><span class="mute small">M1&ndash;M6 (baselines the newer models are measured against) and M10 (failed, stopped)</span></summary><div class="body">
+<section class="bots" id="bots"></section></div></details>
 <details class="card" open><summary><span class="chev">&#9654;</span><b>M1 details</b><span class="mute small">slices, recent trades, funnel, every scored coin</span></summary><div class="body">
 <div class="grid"><div><div class="lbl">Results by slice</div><div id="rules" class="scroll"></div></div>
 <div><div class="lbl">Narrative scores, last 24 h</div><div class="bar" id="sc"></div><div class="lbl" style="margin-top:14px">Open positions</div><div id="open"></div></div></div>
@@ -96,19 +114,42 @@ function bot(title,desc,m,extra){const s=m.stats;return `<div class="card bot"><
 const trow=(v,r)=>[tm(r.t),`<a class="coin" href="/trades#${v}|${esc(r.m)}">${esc(r.name)}</a>`,r.score,esc(r.exit),pct(r.ret),r.held+"m"];
 const funnel=ff=>table(["Stage","Count"],[["Narrative &ge; 7",ff.passed],["Reached $4&ndash;7k + checks",ff.checked],["Passed checks (bought)",ff.checks_ok],
  ...Object.entries(ff.blocked).sort((a,b)=>b[1]-a[1]).map(([k,v])=>[`<span class="mute">blocked: ${esc(k)}</span>`,v])]);
+document.addEventListener("click",e=>{const b=e.target.closest(".chip");if(!b)return;window.BOARD_F=b.dataset.f;
+ document.querySelectorAll(".chip").forEach(x=>x.classList.toggle("on",x===b));tick()});
 async function tick(){let d;try{d=await (await fetch("/api/lab",{cache:"no-store"})).json()}catch(e){$("navnote").textContent="dashboard server unreachable";return}
  $("navnote").textContent="Paper only · updated "+new Date().toLocaleTimeString();const m=d.m1,m2=d.m2,m3=d.m3,m4=d.m4,m5=d.m5;
+const F=window.BOARD_F||"active";
+ const B=(d.board||[]).filter(r=>F=="all"||(F=="active"?r.group=="active":r.group!="active"));
+ $("board").innerHTML=table(["Model","Status","Verdict","Progress","Trades","Mean / trade","Median","Win","&le; &minus;25%","&ge; +50%","t","Last 24 h","Last trade"],B.map(r=>{const s=r.stats,n=s.n||0,pr=Math.min(1,n/60);
+  return [`<td class="mname"><b>${esc(r.name)}</b><div class="mute small">${esc(r.idea)}</div></td>`.replace(/^<td class="mname">|<\/td>$/g,""),
+   `<span class="dot ${r.live?"on":""}"></span><span class="small">${r.live?"running":r.group=="retired"?"stopped":"idle"}</span>`,
+   `<span class="pill ${r.vclass}">${esc(r.verdict)}</span>`,`<div class="prog ${n>=60?"full":""}" title="${n}/60"><i style="width:${(100*pr).toFixed(0)}%"></i></div><span class="mute small">${n}/60</span>`,
+   n,n?`<b>${pct(s.mean)}</b>`:DASH,n?pct(s.median):DASH,n?(100*s.win).toFixed(0)+"%":DASH,r.deep!=null?pct(r.deep,0).replace(/[+]/,""):DASH,
+   r.big!=null?(100*r.big).toFixed(0)+"%":DASH,n>1?s.t.toFixed(2):DASH,r.day.n?pct(r.day.mean)+` <span class="mute small">(${r.day.n})</span>`:DASH,r.last?ago(r.last):DASH]}));
+ const X=d.m12x||{},P=X.paired||{},prow=(k,v)=>[k,v&&v.n?v.n:0,v&&v.n?pct(v.mean):DASH,v&&v.n?pct(v.median):DASH,v&&v.n?(100*v.win).toFixed(0)+"%":DASH];
+ $("m12p").innerHTML=table(["Book","Trades","Mean","Median","Win"],[prow("M12 (M8 exits)",P.m12),prow("M12r (ratchet runner)",P.m12r),prow("M8 on the same coins",P.m8),
+  prow("<span class='mute'>M8 on coins the gate took</span>",X.taken8),prow("<span class='mute'>M8 on coins the gate skipped</span>",X.skipped8)]);
+ $("m12g").innerHTML=table(["Measure","Count"],[["M8 entries checked",X.checked??0],["Passed (M12 bought)",X.passed??0],["&hellip; a top caller had bought",X.caller??0],["&hellip; livestream / boost",X.live??0],["Since",X.since?tm(X.since):DASH]]);
+ $("m12o").innerHTML=table(["Coin","Since","Now","Peak","Mode","Stop"],(X.open12r||[]).map(o=>[esc((o.name||o.m.slice(0,6)).slice(0,20)),ago(o.t),o.r!=null?(+o.r).toFixed(2)+"&times;":DASH,o.peak!=null?(+o.peak).toFixed(2)+"&times;":DASH,
+  o.lad_on?'<span class="pill pass">runner</span>':'<span class="mute small">normal</span>',o.lad_on?(+o.lad_stop).toFixed(2)+"&times;":"&minus;10%"]));
+ $("m12t").innerHTML=table(["Time","Coin","Why it qualified","M12","M12r","M8"],(X.recent||[]).map(r=>[tm(r.t),`<a class="coin" href="/trades#m12|${esc(r.m)}">${esc((r.name||r.m.slice(0,6)).slice(0,20))}</a>`,
+  [r.hype.caller?`caller &times;${r.hype.caller}`:"",...((r.hype.live_or_boost)||[])].filter(Boolean).map(esc).join(", ")||DASH,
+  pct(r.ret12)+` <span class="mute small">${esc(r.exit12||"")}</span>`,r.ret12r!=null?pct(r.ret12r)+` <span class="mute small">${esc(r.exit12r||"")}</span>`:DASH,r.ret8!=null?pct(r.ret8):DASH]));
+ $("m12l").innerHTML=table(["Time","Coin","Gate","Caller","Live / boost","M8 result"],(X.gate_log||[]).map(c=>[tm(c.t),esc((c.name||c.m.slice(0,6)).slice(0,20)),c.go?'<b class="pos">buy</b>':'<span class="mute">skip</span>',c.caller||0,esc((c.live||[]).join(", "))||DASH,c.ret8!=null?pct(c.ret8):DASH]));
+ const NEWP="<span class='pill done' style='margin-left:6px'>new</span>";
+ $("active").innerHTML=(d.m12?bot("M12"+NEWP,"M8 + hype gate: buys M8's entry only when a top pump.fun caller already bought, or the coin is a livestream / DexScreener boost &middot; &minus;10% stop",d.m12,[["Gate checks",(d.m12x||{}).checked??0],["Passed",(d.m12x||{}).passed??0],["Since",esc("Oct 24 17:32")]]):"")+
+  (d.m12r?bot("M12r"+NEWP,"M12's entries, ratcheting runner exit: stop to 1.25&times; at 2&times;, then N&minus;1 at each new N&times;; takes profit when the run stalls or dies",d.m12r,[["Running now",((d.m12x||{}).open12r||[]).filter(o=>o.lad_on).length],["Open",((d.m12x||{}).open12r||[]).length],["Since",esc("Oct 24 17:46")]]):"")+
+  (d.m8?bot("M8 <span class='pill done' style='margin-left:6px'>new</span>","Twin exit book inside M7: same fills, &minus;10% stop (max-loss test)",d.m8,[["Checked",((d.m7||{}).m6||{}).checked??0],["Skipped",((d.m7||{}).m6||{}).skipped??0],["Since",esc("Oct 23 16:00")]]):"")+
+  (d.m7?bot("M7 <span class='pill done' style='margin-left:6px'>new</span>","m6-v3 entries (cluster + serial-funder skip), M5 exits (stop &minus;30%); side by side with M8",d.m7,[["Checked",(d.m7.m6||{}).checked??0],["Skipped",(d.m7.m6||{}).skipped??0],["Since",esc("Oct 23 16:00")]]):"")+
+  (d.m9?bot("M9 <span class='pill done' style='margin-left:6px'>new</span>","m9-v2: M5's or M1's signal, then the PX rule (30 s net flow &ge; 12.3 SOL, creator funder new to us) &middot; &minus;10% stop, 1 s polls &middot; twin M9e: same fills, &minus;30% stop (judged at 60 trades)",d.m9,[["Twin M9e (&minus;30%)",d.m9e&&d.m9e.stats.n?d.m9e.stats.n+" &middot; "+pct(d.m9e.stats.mean):"0"],["From M5 signal",d.m9.by_src&&d.m9.by_src.m5.n?d.m9.by_src.m5.n+" &middot; "+pct(d.m9.by_src.m5.mean):"0"],["From M1 signal",d.m9.by_src&&d.m9.by_src.m1.n?d.m9.by_src.m1.n+" &middot; "+pct(d.m9.by_src.m1.mean):"0"],["Since",esc("Oct 23 17:21 (v2)")]]):"")+
+  (d.m11?bot("M11 <span class='pill done' style='margin-left:6px'>newest</span>","Leader wave rider: copies decu's first buy 1 s after we detect it, exits TP +50% / stop &minus;20% (only copy design that passed a backtest, narrowly)",d.m11,[["Open",(d.m11.open||[]).length],["Lag",(d.m11x||{}).lag_median!=null?(+d.m11x.lag_median).toFixed(1)+" s":DASH],["Since",esc("Oct 24 02:23")]]):"");
  $("bots").innerHTML=bot("M1","Rohit's process automated: narrative score, $4&ndash;7k entry, bundle checks",m,[["Watching",m.status.watching??DASH],["Narratives",m.narratives.n],["Model",`<span class="small">${esc((m.status.llm||DASH).replace(/gemini-/g,""))}</span>`]])+
   bot("M2","M1 + sniper-bag rug filter, &minus;10% stop, 1 s checks",m2,[["Narratives",m2.narratives.n],["Mean / narrative",m2.narratives.n?pct(m2.narratives.mean):DASH],["M1 since 09:20",m.fresh.n?pct(m.fresh.mean):DASH]])+
   bot("M3","M2 + dead-coin and dev filters, real-cause scoring, rides runners",m3,[["Half-sold, rode",m3.rides||0],["Narratives",m3.narratives.n],["Mean / narrative",m3.narratives.n?pct(m3.narratives.mean):DASH]])+
   bot("M4 <span class='pill done' style='margin-left:6px'>new</span>","M1 + TF fixes: wait for 20 holders, sell when holders fall 10%, skip buying a top",m4,[["Narratives",m4.narratives.n],["Mean / narrative",m4.narratives.n?pct(m4.narratives.mean):DASH],["Rules",esc(Object.keys(m4.by_rules||{}).join(", ")||"m4-v1")]])+
   bot("M5 <span class='pill done' style='margin-left:6px'>new</span>","Runner model: buys only coins whose post-band momentum says runner (backtest: held out -5%, all -1.6%; forward test)",m5,[["Narratives",m5.narratives.n],["Mean / narrative",m5.narratives.n?pct(m5.narratives.mean):DASH],["Since",esc("Oct 22 23:00")]])+
   (d.m6?bot("M6 <span class='pill done' style='margin-left:6px'>new</span>","M5 + funding-cluster skip: no buy when one funder holds &ge; 15% of the top-20 (forward test; FL backtest failed narrowly)",d.m6,[["Narratives",d.m6.narratives.n],["Mean / narrative",d.m6.narratives.n?pct(d.m6.narratives.mean):DASH],["Since",esc("Oct 23 17:00")]]):"")+
-  (d.m7?bot("M7 <span class='pill done' style='margin-left:6px'>new</span>","m6-v3 entries (cluster + serial-funder skip), M5 exits (stop &minus;30%); side by side with M8",d.m7,[["Checked",(d.m7.m6||{}).checked??0],["Skipped",(d.m7.m6||{}).skipped??0],["Since",esc("Oct 23 16:00")]]):"")+
-  (d.m11?bot("M11 <span class='pill done' style='margin-left:6px'>newest</span>","Leader wave rider: copies decu's first buy 1 s after we detect it, exits TP +50% / stop &minus;20% (only copy design that passed a backtest, narrowly)",d.m11,[["Open",(d.m11.open||[]).length],["Lag",(d.m11x||{}).lag_median!=null?(+d.m11x.lag_median).toFixed(1)+" s":DASH],["Since",esc("Oct 24 02:23")]]):"")+
-  (d.m10?bot("M10 <span class='pill done' style='margin-left:6px'>flagship</span>","Calm-entry rule from the M10 backtest: many small buys, low top-10, 30+ s old, no buying burst &middot; &minus;10% stop, 1 s polls (forward test; backtest &minus;4.6%)",d.m10,[["Checks",(d.m10x||{}).checked??0],["Bought",(d.m10x||{}).bought??0],["Since",esc("Oct 23 23:45")]]):"")+
-  (d.m9?bot("M9 <span class='pill done' style='margin-left:6px'>new</span>","m9-v2: M5's or M1's signal, then the PX rule (30 s net flow &ge; 12.3 SOL, creator funder new to us) &middot; &minus;10% stop, 1 s polls &middot; twin M9e: same fills, &minus;30% stop (judged at 60 trades)",d.m9,[["Twin M9e (&minus;30%)",d.m9e&&d.m9e.stats.n?d.m9e.stats.n+" &middot; "+pct(d.m9e.stats.mean):"0"],["From M5 signal",d.m9.by_src&&d.m9.by_src.m5.n?d.m9.by_src.m5.n+" &middot; "+pct(d.m9.by_src.m5.mean):"0"],["From M1 signal",d.m9.by_src&&d.m9.by_src.m1.n?d.m9.by_src.m1.n+" &middot; "+pct(d.m9.by_src.m1.mean):"0"],["Since",esc("Oct 23 17:21 (v2)")]]):"")+
-  (d.m8?bot("M8 <span class='pill done' style='margin-left:6px'>new</span>","Twin exit book inside M7: same fills, &minus;10% stop (max-loss test)",d.m8,[["Checked",((d.m7||{}).m6||{}).checked??0],["Skipped",((d.m7||{}).m6||{}).skipped??0],["Since",esc("Oct 23 16:00")]]):"");
+  (d.m10?bot("M10 <span class='pill done' style='margin-left:6px'>flagship</span>","Calm-entry rule from the M10 backtest: many small buys, low top-10, 30+ s old, no buying burst &middot; &minus;10% stop, 1 s polls (forward test; backtest &minus;4.6%)",d.m10,[["Checks",(d.m10x||{}).checked??0],["Bought",(d.m10x||{}).bought??0],["Since",esc("Oct 23 23:45")]]):"");
  const sc=m.funnel.scores,mx=Math.max(1,...Object.values(sc));
  $("sc").innerHTML=[...Array(11).keys()].map(k=>`<div class="${k>=7?"hot":""}" style="height:${(sc[k]||0)/mx*100}%" title="score ${k}: ${sc[k]||0}"><span>${k}</span></div>`).join("");
  $("open").innerHTML=table(["Coin","Score","Entry","Now","Since"],m.open.map(o=>[esc(o.name),o.score,"$"+(o.mc||0).toLocaleString(),pct(o.ret_now),ago(o.t)]));

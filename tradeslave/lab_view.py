@@ -373,7 +373,84 @@ def experiments() -> dict:
     return dict(rows=rows[::-1], total=len(rows), running=sum(r["state"] == "running" for r in rows))
 
 
+# every model book: (key, name, one-line idea, group, current rules label, verdict text, verdict class)
+MODELS = [
+    ("m12", "M12", "M8 + hype gate: a top pump.fun caller bought, or livestream / DexScreener boost", "active", "m12-v1+1s", "forward test, judged at 60", "done"),
+    ("m12r", "M12r", "M12's entries, ratcheting runner exit (1.25x at 2x, then N-1 at each new N)", "active", "m12r-v1+1s", "forward vs M12, at 60", "done"),
+    ("m8", "M8", "m6-v3 entries (cluster + serial-funder skips), -10% stop", "active", "m8-v2+1s", "exits ADOPTED (weak, t~0.7)", "pass"),
+    ("m7", "M7", "m6-v3 entries, M5 exits with -30% stop", "active", "m7-v1+1s", "entries PASS (weak)", "pass"),
+    ("m9", "M9", "M5/M1 signal + PX flow rule (30 s net flow >= 12.3 SOL), -10% stop", "active", "m9-v2+1s", "forward test, judged at 60", "done"),
+    ("m9e", "M9e", "M9's fills, -30% stop (twin)", "active", "m9e-v2+1s", "forward test, judged at 60", "done"),
+    ("m11", "M11", "copy decu's first buy 1 s late, TP +50% / stop -20% (feed-driven)", "active", "m11-v1+1s", "forward test, judged at 60", "done"),
+    ("m10", "M10", "calm-entry rule from the M10 backtest", "retired", "m10-v2+1s", "FAIL (stopped Oct 24)", "fail"),
+    ("m6", "M6", "M5 + funding-cluster skip (baseline for M7)", "baseline", "m6-v2+1s", "baseline", "quiet"),
+    ("m5", "M5", "runner model on post-band momentum (baseline)", "baseline", "m5-v1+1s", "baseline", "quiet"),
+    ("m4", "M4", "M1 + watchlist to 20 holders, holder-drop exit", "baseline", "m4-v3+1s", "baseline", "quiet"),
+    ("m3", "M3", "M2 + dead-coin / dev filters, rides runners", "baseline", "m3-v3+1s", "baseline", "quiet"),
+    ("m2", "M2", "M1 + sniper-bag rug filter", "baseline", "m2-v1+1s", "baseline", "quiet"),
+    ("m1", "M1", "Rohit's process automated: narrative score, $4-7k entry", "baseline", "exits-v2+1s", "baseline", "quiet"),
+]
+
+
+def scoreboard() -> list[dict]:
+    out, now = [], time.time()
+    for key, name, idea, group, rules, verdict, vclass in MODELS:
+        try:
+            tr = [r for r in jsonl(DATA_DIR / key / "trades.jsonl") if r.get("rules") == rules]
+        except OSError:
+            tr = []
+        try:
+            st_t = json.loads((DATA_DIR / key / "status.json").read_text(encoding="utf-8")).get("t", 0)
+        except (OSError, ValueError):
+            st_t = 0
+        rs = [r["ret"] for r in tr]
+        r24 = [r["ret"] for r in tr if r["t"] >= now - 86400]
+        out.append(dict(key=key, name=name, idea=idea, group=group, rules=rules, verdict=verdict, vclass=vclass,
+                        live=now - st_t < 300, stats=stats(rs), day=stats(r24),
+                        deep=(sum(x <= -0.25 for x in rs) / len(rs)) if rs else None,
+                        big=(sum(x >= 0.5 for x in rs) / len(rs)) if rs else None,
+                        last=max((r.get("t_exit", r["t"]) for r in tr), default=None)))
+    return out
+
+
+def m12_view() -> dict:
+    """M12 vs M12r vs M8 on the same coins, and the hype gate's log."""
+    def load(v, rules):
+        try:
+            return [r for r in jsonl(DATA_DIR / v / "trades.jsonl") if r.get("rules") == rules]
+        except OSError:
+            return []
+    try:
+        cands = jsonl(DATA_DIR / "m12" / "cands.jsonl")
+    except OSError:
+        cands = []
+    t12, t12r, t8 = load("m12", "m12-v1+1s"), load("m12r", "m12r-v1+1s"), load("m8", "m8-v2+1s")
+    by8, by12r = {r["m"]: r for r in t8}, {r["m"]: r for r in t12r}
+    gate = {c["m"]: c for c in cands}
+    since = min((c["t"] for c in cands), default=None)
+    paired = [(r["ret"], by12r[r["m"]]["ret"], by8[r["m"]]["ret"]) for r in t12 if r["m"] in by12r and r["m"] in by8]
+    taken8 = [by8[m]["ret"] for m, c in gate.items() if c.get("go") and m in by8]
+    skipped8 = [by8[m]["ret"] for m, c in gate.items() if not c.get("go") and m in by8]
+    try:
+        op = json.loads((DATA_DIR / "m12r" / "status.json").read_text(encoding="utf-8")).get("open", [])
+    except (OSError, ValueError):
+        op = []
+    return dict(since=since, checked=len(cands), passed=sum(bool(c.get("go")) for c in cands),
+                caller=sum((c.get("caller") or 0) > 0 for c in cands), live=sum(bool(c.get("live_or_boost")) for c in cands),
+                paired=dict(n=len(paired), m12=stats([a for a, _, _ in paired]), m12r=stats([b for _, b, _ in paired]),
+                            m8=stats([c for _, _, c in paired])),
+                taken8=stats(taken8), skipped8=stats(skipped8),
+                open12r=[dict(m=o["m"], name=o.get("name"), t=o.get("t"), r=(o["last"] / o["p0"]) if o.get("last") and o.get("p0") else None,
+                              peak=(o["peak"] / o["p0"]) if o.get("peak") and o.get("p0") else None, lad_on=o.get("lad_on"),
+                              lad_stop=o.get("lad_stop")) for o in op],
+                recent=[dict(t=r["t"], m=r["m"], name=r.get("name"), hype=gate.get(r["m"], {}), exit12=r["exit"], ret12=r["ret"],
+                             exit12r=by12r.get(r["m"], {}).get("exit"), ret12r=by12r.get(r["m"], {}).get("ret"),
+                             ret8=by8.get(r["m"], {}).get("ret")) for r in t12[-30:]][::-1],
+                gate_log=[dict(t=c["t"], m=c["m"], name=c.get("name"), go=c.get("go"), caller=c.get("caller"),
+                               live=c.get("live_or_boost"), ret8=by8.get(c["m"], {}).get("ret")) for c in cands[-30:]][::-1])
+
+
 def build_lab_snapshot() -> dict:
-    return dict(t=time.time(), jobs=jobs(), m1=m1(), m2=m1("m2"), m3=m1("m3"), m4=m1("m4"), m5=m1("m5"), m6=m1("m6"), m7=m1("m7"), m8=m1("m8"), m9=m1("m9"), m9e=m1("m9e"), m10=m1("m10"), m10x=m10_view(), m11=m1("m11"), m11x=m11_view(), m78=m78_view(), c1=c1(), kalshi=kalshi(), experiments=experiments())
+    return dict(t=time.time(), jobs=jobs(), m1=m1(), m2=m1("m2"), m3=m1("m3"), m4=m1("m4"), m5=m1("m5"), m6=m1("m6"), m7=m1("m7"), m8=m1("m8"), m9=m1("m9"), m9e=m1("m9e"), m10=m1("m10"), m10x=m10_view(), m11=m1("m11"), m11x=m11_view(), m12=m1("m12"), m12r=m1("m12r"), m12x=m12_view(), board=scoreboard(), m78=m78_view(), c1=c1(), kalshi=kalshi(), experiments=experiments())
 
 
