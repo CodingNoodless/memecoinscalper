@@ -20,6 +20,7 @@ from .label_page import LABEL_HTML
 from .label_view import label_next, label_save
 from .paper_view import paper_next, paper_save
 from .watch_view import WATCH_HTML, live, watch_list
+from .assist import assist_json
 from .trade_view import TRADES_HTML, chart, trade_list
 from .scalper.dashboard_view import build_scalper_snapshot, scalper_html
 
@@ -326,6 +327,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
         elif path == "/watch":
             body = WATCH_HTML.encode("utf-8")
             content_type = "text/html; charset=utf-8"
+        elif path == "/api/assist":                              # padre.gg extension (tools/padre_assist), read-only
+            try:
+                body = json.dumps(assist_json(parse_qs(urlsplit(self.path).query)), allow_nan=False, default=str).encode("utf-8")
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                logger.exception("Assist failed")
+                body = json.dumps({"error": f"Could not analyze the token: {exc}"}).encode("utf-8")
+            content_type = "application/json; charset=utf-8"
         elif path in ("/api/watch", "/api/live"):
             try:
                 data = watch_list() if path == "/api/watch" else live(parse_qs(urlsplit(self.path).query).get("m", [""])[0])
