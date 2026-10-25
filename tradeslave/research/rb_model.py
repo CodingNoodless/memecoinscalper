@@ -44,68 +44,73 @@ def _wallets():
     return callers, elite, set(WALLETS), "4vw54BmAogeRV3vPKWyFet5yf8DTLcREzdSzx4rw9Ud9"
 
 
+def windows(x):
+    """Amendment 3/3b: launch = last 200 trades with t <= created + 120 s; run-up = last 200 trades with t <= migration.
+    Full-history files are cut to exactly these windows, so every coin carries the same information."""
+    if "rows" in x:
+        rows = x["rows"]
+        return [r for r in rows if r[0] <= x["created"] + 120][-200:], [r for r in rows if r[0] <= x["t_mig"]][-200:]
+    return x["launch"][-200:], x["runup"][-200:]
+
+
 def features(x, d, wallets):
     callers, elite, wl, decu = wallets
-    rows = [r for r in x["rows"] if r[6] == "pump" and r[0] <= x["t_mig"]]
-    if len(rows) < 5:
+    la, ru = windows(x)
+    la = [r for r in la if r[6] == "pump"]
+    ru = [r for r in ru if r[6] == "pump" and r[0] <= x["t_mig"]]
+    if len(la) < 3 or len(ru) < 5:
         return None
-    t0, tm = rows[0][0], x["t_mig"]
-    start_mc = rows[0][5] * 1e9
+    t0, tm = la[0][0], x["t_mig"]
+    start_mc = la[0][5] * 1e9
     creator = (d or {}).get("creator")
-    buys = [r for r in rows if r[2]]
-    sells = [r for r in rows if not r[2]]
-    bal = defaultdict(float)
-    for r in rows:
-        bal[r[1]] += r[4] if r[2] else -r[4]
-    hold = sorted((v for w, v in bal.items() if v > 0), reverse=True)
     sup = 1e9
-    launch = [r for r in buys if r[0] <= t0 + 2 and r[1] != creator]
-    dev_buy = sum(r[3] for r in buys if r[1] == creator and r[0] <= t0 + 2)
-    dev_sells = [r for r in sells if r[1] == creator]
-    first5 = [r for r in rows if r[0] <= t0 + 300]
-    last10 = [r for r in rows if r[0] >= tm - 600]
-    last2 = [r for r in rows if r[0] >= tm - 120]
-    bsz = sorted(r[3] for r in buys)
-    per_buyer = defaultdict(float)
-    for r in buys:
-        per_buyer[r[1]] += r[3]
-    top5_buy = sum(sorted(per_buyer.values(), reverse=True)[:5]) / (sum(per_buyer.values()) or 1)
-    cum, half_t = 0.0, None
-    for r in rows:
-        cum += r[3] if r[2] else -r[3]
-        if half_t is None and cum >= 40:
-            half_t = r[0] - t0
-    peak, dd = 0.0, 0.0
-    for r in rows:
-        peak = max(peak, r[5])
-        dd = max(dd, 1 - r[5] / peak if peak else 0)
+
+    def block(rows, pre):
+        buys = [r for r in rows if r[2]]
+        sells = [r for r in rows if not r[2]]
+        bs = sum(r[3] for r in buys)
+        per = defaultdict(float)
+        for r in buys:
+            per[r[1]] += r[3]
+        cnt = defaultdict(int)
+        for r in buys:
+            cnt[r[1]] += 1
+        peak, dd = 0.0, 0.0
+        for r in rows:
+            peak = max(peak, r[5])
+            dd = max(dd, 1 - r[5] / peak if peak else 0)
+        bsz = sorted(r[3] for r in buys)
+        span = max(1.0, rows[-1][0] - rows[0][0])
+        return {
+            pre + "buyers": len(per), pre + "sellers": len({r[1] for r in sells}),
+            pre + "flow": bs - sum(r[3] for r in sells), pre + "sell_ratio": sum(r[3] for r in sells) / (bs or 1),
+            pre + "whale": sum(r[3] for r in buys if r[3] >= 2) / (bs or 1),
+            pre + "top5": sum(sorted(per.values(), reverse=True)[:5]) / (bs or 1),
+            pre + "repeat": sum(1 for v in cnt.values() if v > 1) / (len(cnt) or 1), pre + "dd": dd,
+            pre + "chg": rows[-1][5] / rows[0][5] - 1 if rows[0][5] else 0.0, pre + "rate": math.log1p(len(rows) / span * 60),
+            pre + "buy_med": statistics.median(bsz) if bsz else 0.0,
+            pre + "dev_sold": float(any(r[1] == creator and not r[2] for r in rows)),
+        }
+    launch = [r for r in la if r[2] and r[0] <= t0 + 2 and r[1] != creator]
     desc = ((d or {}).get("description") or "")
     name, sym = (d or {}).get("name") or "", (d or {}).get("symbol") or ""
     tw = (d or {}).get("twitter") or ""
-    users = {r[1] for r in buys}
+    users = {r[1] for r in la + ru if r[2]}
     hr = (tm % 86400) / 3600
     f = dict(
         curve_min=math.log1p((tm - t0) / 60), start_mc=start_mc,
-        n_trades=math.log1p(len(rows)), n_buyers=math.log1p(len(users)), n_sellers=math.log1p(len({r[1] for r in sells})),
-        buy_sol=math.log1p(sum(r[3] for r in buys)), sell_ratio=sum(r[3] for r in sells) / (sum(r[3] for r in buys) or 1),
-        dev_buy=dev_buy, dev_sold=float(bool(dev_sells)), dev_sold_sol=sum(r[3] for r in dev_sells),
-        dev_hold=max(0.0, bal.get(creator, 0.0)) / sup if creator else 0.0,
+        dev_buy=sum(r[3] for r in la if r[2] and r[1] == creator and r[0] <= t0 + 2),
         snipers=len({r[1] for r in launch}), snipe_share=sum(r[4] for r in launch) / sup,
-        top1=(hold[0] / sup) if hold else 0.0, top10=sum(hold[:10]) / sup, holders=math.log1p(len(hold)),
-        buyers_5m=len({r[1] for r in first5 if r[2]}), flow_5m=sum(r[3] if r[2] else -r[3] for r in first5),
-        flow_10m_last=sum(r[3] if r[2] else -r[3] for r in last10), buyers_10m_last=len({r[1] for r in last10 if r[2]}),
-        trades_2m_last=len(last2), share_last10=len(last10) / len(rows),
-        half_curve_frac=(half_t / (tm - t0)) if half_t is not None and tm > t0 else 1.0,
-        buy_med=statistics.median(bsz) if bsz else 0.0, buy_p90=bsz[int(0.9 * (len(bsz) - 1))] if bsz else 0.0,
-        whale_share=sum(r[3] for r in buys if r[3] >= 2) / (sum(r[3] for r in buys) or 1), top5_buy=top5_buy,
-        repeat=sum(1 for w in users if sum(1 for r in buys if r[1] == w) > 1) / (len(users) or 1), max_dd=dd,
         has_tw=float(bool(tw)), tw_status=float("/status/" in tw), has_web=float(bool((d or {}).get("website"))),
         has_tg=float(bool((d or {}).get("telegram"))), desc_len=math.log1p(len(desc)), name_len=len(name), sym_len=len(sym),
         sym_upper=float(sym.isupper()), vanity=float(not x["m"].endswith("pump")),
-        launcher=float(any(k in desc.lower() for k in LAUNCHERS)), template=float(bool(re.search(r"meme energy|brings .* to solana|vibes", desc.lower()))),
+        launcher=float(any(k in desc.lower() for k in LAUNCHERS)),
+        template=float(bool(re.search(r"meme energy|brings .* to solana|vibes", desc.lower()))),
         hour_sin=math.sin(2 * math.pi * hr / 24), hour_cos=math.cos(2 * math.pi * hr / 24),
         callers_in=len(users & callers), elite_in=len(users & elite), wl_in=len(users & wl), decu_in=float(decu in users),
     )
+    f.update(block(la, "l_"))
+    f.update(block(ru, "r_"))
     return f
 
 
@@ -114,9 +119,13 @@ def build() -> None:
     P = json.loads((OUT / "population.json").read_text())
     wallets = _wallets()
     out, skipped = [], defaultdict(int)
-    for p in sorted((OUT / "trades").glob("*.json")):
+    seen = set()
+    for p in sorted((OUT / "trades_lite").glob("*.json")) + sorted((OUT / "trades").glob("*.json")):   # windowed first
         x = json.loads(p.read_text())
-        if x["status"] == "error":
+        if x["m"] in seen:
+            continue
+        seen.add(x["m"])
+        if x["status"] in ("error", "capped") or ("launch" in x and not x.get("runup_v2")):
             skipped["fetch error"] += 1
             continue
         if x["t_mig"] - x["created"] < CURVE_MIN_S:
@@ -237,6 +246,13 @@ def design() -> None:
                     if best is None or cand[0] > best[0]:
                         best = cand
                     break
+    # amendment 4: logistic without wallet features, threshold = 95th percentile of its design-CV scores
+    pred = _cv(dz, "logit", _names(rows, False))
+    ps = sorted((p for p, _, _ in pred), reverse=True)
+    thr = ps[max(0, int(0.05 * len(ps)) - 1)]
+    n, k = _at(pred, thr)
+    cv_days = (max(t for _, _, t in pred) - min(t for _, _, t in pred)) / 86400
+    best = (k / max(1, n), "logit", thr, n, k, n * scale / cv_days)
     prec, kind, thr, n, k, per_day = best
     lo, hi = wilson(k, n)
     print(f"chosen: {kind} without wallet features, threshold {thr:.3f}: design-CV precision {k}/{n} = {prec:.0%} "
@@ -287,7 +303,7 @@ def holdout() -> None:
         days = (max(r["t"] for r in ho) - cut) / 86400
         n, k = _at(pred, ch["thr"])
         ps = sorted(p, reverse=True)
-        tops = {}
+        tops = {"holdout top5% (secondary)": list(_at(pred, ps[max(0, int(0.05 * len(ps)) - 1)])[::-1])}
         for q in (0.01, 0.05, 0.10):
             nn, kk = _at(pred, ps[max(0, int(q * len(ps)) - 1)])
             tops[f"top{int(q * 100)}%"] = [kk, nn]

@@ -17,7 +17,7 @@ from pathlib import Path
 
 VAULT = Path(r"D:\vault\tradeslave")
 START, END = "<!-- map:start -->", "<!-- map:end -->"
-SKIP_DIRS = {".obsidian", "Templates", "Sources", "Map", ".trash", "Trades"}
+SKIP_DIRS = {".obsidian", "Templates", "Sources", "Map", ".trash", "Trades", "Runners"}   # Runners: reached via the RN1000 study and its hubs
 SRC_DIR = VAULT / "Research" / "Runner research" / "Sources"
 # trade data-point notes (Trades/Data points) -> words that place them in a topic
 DP_TOPIC = {"Data - Narrative score": "narrative", "Data - X author followers": "KOL narrative",
@@ -87,6 +87,8 @@ LINEAGE = [
     ("2026-10-18 imitation policy (N5)", "2026-10-24 reverse-engineering profitable bots (BR)"),
     ("2026-10-24 copying Twitch streamers (ST)", "2026-10-24 reverse-engineering profitable bots (BR)"),
     ("Research synthesis R9 - calm-moment signals", "Research synthesis R10 - edges that don't need a pump"),
+    ("2026-10-24 the last 1,000 runners (RN1000)", "2026-10-24 runner detection on 1,000 real runners (RD)"),
+    ("2026-10-24 the last 1,000 runners (RN1000)", "2026-10-25 fast-dumping devs (SB)"),
     ("Research synthesis R10 - edges that don't need a pump", "Kalshi W4 live micro-test plan (2026-10-24)"),
     ("Research synthesis R10 - edges that don't need a pump", "2026-10-23 memecoin DLMM liquidity provision (DL)"),
     ("2026-10-21 M1 automated manual process", "2026-10-21 M2 rug-filtered M1"),
