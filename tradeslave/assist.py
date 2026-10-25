@@ -357,6 +357,7 @@ def assist_json(qs: dict) -> dict:
 # ---------------- fast rug check (one RPC call + the first 100 transactions, ~1 s) ----------------
 TOKEN_PROGRAMS = ("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb")
 ATA_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+MAYHEM_AGENT = "BwWK17cbHxwWBKZkUYvzxLcNQ1YVyaFezduWbtm2de6s"   # holds ~1B of every 2B-supply Mayhem-mode coin (seen 4 of 4)
 _quick: dict = {}
 
 
@@ -367,17 +368,24 @@ def _rpc(method, params):
 
 
 def _curve_accounts(mint, pair):
-    """The bonding curve and its token accounts (excluded from holder figures: they hold the unsold supply)."""
-    from .research.pda import PUMP_PROGRAM, b58decode, find_pda
-    curve = pair or find_pda([b"bonding-curve", b58decode(mint)], PUMP_PROGRAM)
-    out = {curve}
-    for tp in TOKEN_PROGRAMS:
-        out.add(find_pda([b58decode(curve), b58decode(tp), b58decode(mint)], ATA_PROGRAM))
+    """The bonding curve, the PumpSwap pool and their token accounts (excluded from holder figures: they hold the unsold
+    supply / the pool's liquidity, not a wallet's bag)."""
+    from .research.pda import PUMP_PROGRAM, b58decode, find_pda, pumpswap_pool_address
+    owners = {pair, find_pda([b"bonding-curve", b58decode(mint)], PUMP_PROGRAM), MAYHEM_AGENT}
+    try:
+        owners.add(pumpswap_pool_address(mint))
+    except (ValueError, KeyError):
+        pass
+    out = {o for o in owners if o}
+    for o in list(out):
+        for tp in TOKEN_PROGRAMS:
+            out.add(find_pda([b58decode(o), b58decode(tp), b58decode(mint)], ATA_PROGRAM))
     return out
 
 
-def quick(addr: str) -> dict:
-    """Rug risk in about a second: current top-20 holders (exact, from the chain) + launch transactions + creator record."""
+def quick(addr: str, bg: bool = False) -> dict:
+    """Rug risk in about a second: current top-20 holders (exact, from the chain) + launch transactions + creator record.
+    bg: a background screen for the trenches highlighter (no feed watch, no narrative/runner scoring)."""
     from concurrent.futures import ThreadPoolExecutor
     from .research.bw_test import gtfa
     from .research.fl_test import helius_url
@@ -387,9 +395,11 @@ def quick(addr: str) -> dict:
     c = _quick.get(m)
     if c and time.time() - c["t"] < 20:
         return c
-    _want(m)
-    with ThreadPoolExecutor(3) as ex:
+    if not bg:
+        _want(m)
+    with ThreadPoolExecutor(4) as ex:
         f_hold = ex.submit(_rpc, "getTokenLargestAccounts", [m, {"commitment": "confirmed"}])
+        f_sup = ex.submit(_rpc, "getTokenSupply", [m])
         f_first = ex.submit(gtfa, helius_url(), m, 0, time.time(), "full", 100, 1)
         f_cr = ex.submit(_creates)
         try:
@@ -409,7 +419,11 @@ def quick(addr: str) -> dict:
         creator = k0 if isinstance(k0, str) else k0.get("pubkey")
     curve = _curve_accounts(m, pair)
     accts = [(a["address"], float(a.get("uiAmount") or 0)) for a in hold if a["address"] not in curve]
-    supply = 1e9
+    try:
+        supply = float((f_sup.result(timeout=8) or {})["value"]["uiAmount"]) or 1e9
+    except Exception:  # noqa: BLE001
+        supply = 1e9
+    supply -= 1e9 if supply > 1.5e9 else 0      # Mayhem mode: the agent's extra 1B is not tradable supply
     top10 = sum(v for _, v in accts[:10]) / supply
     top1 = accts[0][1] / supply if accts else 0.0
     first_ts = ev[0]["ts"] if ev else None
@@ -452,7 +466,8 @@ def quick(addr: str) -> dict:
                launch_wallets=launch_w, dev_buy_sol=dev_buy, dev_sold=dev_sold, creator_coins=n_created,
                holders_seen=len(accts), launch_seen=len(ev))
     _quick[m] = out
-    scores(m)                                    # starts the narrative + runner scoring in the background
+    if not bg:
+        scores(m)                                  # starts the narrative + runner scoring in the background
     return out
 
 
@@ -576,9 +591,110 @@ def _addresses(m):
     return _addr[m]
 
 
-def hot() -> dict:
-    """Coins lighting up right now, with reasons. Cached 4 s (every open padre tab polls it)."""
+# Market scan: pump.fun's coin lists (most recently traded + newest), every 8 s while a padre tab polls /hot, with 10 min of
+# history per coin, so the highlighter sees momentum on every active coin, not only the ones our bots watch.
+PUMP_LIST = "https://frontend-api-v3.pump.fun/coins"
+CURVE_TOKENS = 793_100_000                   # tokens sold on the bonding curve before it migrates
+_scan = dict(want_t=0.0, t=0.0, hist=defaultdict(list), info={}, rug={}, rug_q=[], logged={})
+
+
+def _scan_once(H):
     now = time.time()
+    got = []
+    for q in [f"offset={o}&limit=50&sort=last_trade_timestamp&order=DESC" for o in (0, 50, 100, 150)] + \
+             ["offset=0&limit=50&sort=created_timestamp&order=DESC"]:
+        try:
+            r = requests.get(f"{PUMP_LIST}?{q}&includeNsfw=true", headers=H, timeout=10)
+            got += r.json() if r.ok else []
+        except (requests.RequestException, ValueError):
+            pass
+    for c in got:
+        m, mc = c.get("mint"), c.get("usd_market_cap")
+        if not m or not mc:
+            continue
+        h = _scan["hist"][m]
+        if not h or now - h[-1][0] > 4:
+            h.append((now, mc, c.get("reply_count") or 0))
+        _scan["info"][m] = dict(sym=c.get("symbol"), created=(c.get("created_timestamp") or 0) / 1000, complete=c.get("complete"),
+                                ath=c.get("ath_market_cap") or 0, live=c.get("is_currently_live"),
+                                prog=None if c.get("complete") else 1 - (c.get("real_token_reserves") or 0) / 1e6 / CURVE_TOKENS,
+                                curve=c.get("bonding_curve"), pool=c.get("pump_swap_pool") or c.get("pool_address"))
+    for m in list(_scan["hist"]):
+        h = _scan["hist"][m] = [x for x in _scan["hist"][m] if now - x[0] < 600]
+        if not h:
+            del _scan["hist"][m]
+            _scan["info"].pop(m, None)
+    _scan["t"] = now
+
+
+def _scanner():
+    from .research.rn_collect import _pump_headers
+    H = _pump_headers()
+    while True:
+        if time.time() - _scan["want_t"] < 90:
+            _scan_once(H)
+            time.sleep(8)
+        else:
+            time.sleep(2)
+
+
+def _rug_worker():
+    """Background rug check (quick, ~1 s) for coins the scan flags, newest first; one at a time, cached 10 min."""
+    while True:
+        q = _scan["rug_q"]
+        m = q.pop() if q else None
+        if not m or time.time() - _scan["rug"].get(m, {}).get("t", 0) < 600:
+            time.sleep(0.5)
+            continue
+        try:
+            _scan["rug"][m] = dict(t=time.time(), risk=quick(m, bg=True).get("risk"))
+        except Exception:  # noqa: BLE001 - an unchecked coin just stays unchecked
+            _scan["rug"][m] = dict(t=time.time(), risk=None)
+        time.sleep(3)                            # ~20 checks a minute at most: each one reads 100 transactions from Helius
+
+
+def _potential(m, now):
+    """Momentum signals from the scan history: (kind, text, weight) list. Heuristics, not yet validated (logged for that)."""
+    h, inf = _scan["hist"].get(m) or [], _scan["info"].get(m) or {}
+    if len(h) < 2 or not inf:
+        return []
+    t1, mc, rep = h[-1]
+    if mc < 8_000 or mc > 5_000_000 or now - t1 > 60:
+        return []
+    out = []
+    lo3 = min(x[1] for x in h if t1 - x[0] <= 180)
+    lo10 = min(x[1] for x in h)
+    age = now - (inf["created"] or now)
+    if mc >= 2.5 * lo3:
+        out.append(("pump", f"up {mc / lo3 - 1:.0%} in 3 min", 3))
+    elif mc >= 1.5 * lo3:
+        out.append(("pump", f"up {mc / lo3 - 1:.0%} in 3 min", 2))
+    elif mc >= 2 * lo10 and mc >= max(x[1] for x in h) * 0.9:
+        out.append(("pump", f"up {mc / lo10 - 1:.0%} in 10 min, at its high", 2))
+    if not inf["complete"] and age < 1200 and mc >= 25_000 and mc >= lo3:
+        out.append(("fast", f"${mc / 1e3:.0f}k only {age / 60:.0f} min after launch", 2))
+    if not inf["complete"] and (inf["prog"] or 0) >= 0.8 and mc > h[0][1]:
+        out.append(("grad", f"{inf['prog']:.0%} of the curve filled, climbing", 1))
+    if inf["complete"] and inf["ath"] >= 60_000 and mc >= 0.95 * inf["ath"] and mc > lo3 * 1.1:
+        out.append(("ath", f"breaking its high (${inf['ath'] / 1e3:.0f}k) after migrating", 2))
+    old = [x[2] for x in h if t1 - x[0] >= 120]
+    if old and rep - old[-1] >= 8:
+        out.append(("chat", f"+{rep - old[-1]} replies in the last few minutes", 1))
+    if inf["live"] and mc >= lo3:
+        out.append(("live", "livestreaming now", 1))
+    return out
+
+
+threading.Thread(target=_scanner, daemon=True).start()
+threading.Thread(target=_rug_worker, daemon=True).start()
+
+
+def hot() -> dict:
+    """Coins lighting up right now, with reasons and a tier: hot (a strong signal: callers, our models, the runner model,
+    decu), watch (momentum / potential from the market scan) or risky (pumping, but the rug check says HIGH).
+    Cached 4 s (every open padre tab polls it)."""
+    now = time.time()
+    _scan["want_t"] = now
     if _hot["out"] is not None and now - _hot["t"] < 4:
         return _hot["out"]
     found: dict = {}
@@ -646,10 +762,37 @@ def hot() -> dict:
                 add(j["m"], "live", f"livestream, {j.get('viewers') or '20+'} viewers", 2, j["t"])
             else:
                 add(j["m"], "boost", "DexScreener boost", 1, j["t"])
-    rows = sorted(found.values(), key=lambda x: (-x["score"], -x["t"]))[:150]
+    # 5. potential: momentum from the market scan
+    for m in list(_scan["hist"]):
+        for kind, text, w in _potential(m, now):
+            add(m, kind, text, w, now)
+    STRONG = {"callout", "model", "runner", "decu"}
+    for x in found.values():
+        kinds = {r["kind"] for r in x["reasons"]}
+        rug = _scan["rug"].get(x["m"]) or {}
+        x["rug"] = rug.get("risk")
+        if kinds & STRONG or x["score"] >= 4:
+            x["tier"] = "hot"
+        else:
+            x["tier"] = "watch"
+        if x["rug"] == "HIGH":
+            x["tier"] = "risky"
+        if not rug and x["score"] >= 2 and x["m"] not in _scan["rug_q"]:
+            _scan["rug_q"].append(x["m"])
+    del _scan["rug_q"][:-30]
+    keep = [x for x in found.values() if x["score"] >= 2 or {r["kind"] for r in x["reasons"]} & (STRONG | {"smart", "live"})]
+    rows = sorted(keep, key=lambda x: (-x["score"], -x["t"]))[:200]
     for x in rows:
-        x["curve"], x["pool"] = _addresses(x["m"])
-    out = dict(t=now, coins=rows)
+        inf = _scan["info"].get(x["m"]) or {}
+        x["sym"] = inf.get("sym")
+        x["curve"], x["pool"] = (inf["curve"], inf["pool"]) if inf.get("curve") else _addresses(x["m"])
+        if x["tier"] != "risky" and x["score"] >= 2 and now - _scan["logged"].get(x["m"], 0) > 1800:
+            _scan["logged"][x["m"]] = now      # flag log, to measure later how often a flag led to a 2x / a runner
+            h = _scan["hist"].get(x["m"]) or [(0, None, 0)]
+            with (ASSIST / "hot_flags.jsonl").open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(dict(t=round(now), m=x["m"], tier=x["tier"], score=x["score"], mc=h[-1][1], rug=x["rug"],
+                                         kinds=sorted({r["kind"] for r in x["reasons"]}))) + "\n")
+    out = dict(t=now, coins=rows, scanned=len(_scan["hist"]))
     _hot.update(t=now, out=out)
     return out
 

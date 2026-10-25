@@ -26,3 +26,13 @@ If the token isn't detected from the URL, paste its address into the panel. Afte
 - **First look at a coin the feed hasn't recorded:** the history comes from Helius (last 30 min only), and the panel says so. From then on the live feed records the coin.
 - **The funding checks** (serial funder, cluster) run Helius lookups once per coin, so they show "looking up" for a few seconds.
 - **Not financial advice.** The bot results behind these checks are weak evidence so far (see the dashboard scoreboard).
+
+## Trenches highlighting (v0.4)
+
+Coins worth a look get an outline and a badge (hover the coin for the full reasons):
+
+- **Bright green, "hot":** a strong signal. A top pump.fun caller bought it, one of our paper models (M8/M9/M11/M12) is in it, the M5 runner model is above its buy cut, or decu bought it.
+- **Dashed green, "watch":** potential, from a market scan of the ~250 most active pump.fun coins every 8 s. Badges: `+80% 3m` (pumping), `FAST` (≥ $25k within 20 min of launch), `NEAR MIGRATION` (≥ 80% of the curve, climbing), `NEW HIGH` (a migrated coin breaking its ATH), `CHAT` (8+ new replies in minutes), `LIVE`, `SMART` (a tracked wallet bought).
+- **Red, "RUG?":** it has signals, but the background rug check (holders, launch bundle, creator record) says HIGH.
+
+The "watch" signals are heuristics and haven't been validated yet. Every flag is logged to `data/m_assist/hot_flags.jsonl` so we can measure how often each one led to a 2x or a runner.

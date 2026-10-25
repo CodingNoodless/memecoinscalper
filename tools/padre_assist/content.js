@@ -31,7 +31,7 @@
     .btns button:hover{border-color:#7c9cff}input{background:#161d27;border:1px solid #2a3340;color:#e6edf3;border-radius:6px;padding:4px 6px;font:inherit;width:100%;box-sizing:border-box;margin-top:6px}
     .det{margin-top:6px;border-top:1px solid #1b2330;padding-top:6px;font-size:11.5px}.det ul{margin:2px 0 6px 16px;padding:0}.lnk{display:block;width:100%;margin-top:6px;background:none;color:#93a3b8}
   </style>
-  <div class="p"><div class="h"><b>Tradeslave Assist <span class="mute small">v0.3</span></b><span class="mute small" id="st">starting</span><button id="min" title="collapse">&#8211;</button></div>
+  <div class="p"><div class="h"><b>Tradeslave Assist <span class="mute small">v0.4</span></b><span class="mute small" id="st">starting</span><button id="min" title="collapse">&#8211;</button></div>
   <div class="b" id="body"><div class="mute small">Open a token on padre.gg, or paste an address:</div><input id="paste" placeholder="token address"></div></div>`;
   document.documentElement.appendChild(host);
   const $ = id => root.getElementById(id);
@@ -158,20 +158,26 @@
   setInterval(() => tick(), POLL_MS);
 })();
 
-// ---------- trenches highlighter: green outline + badge on coins that are lighting up right now ----------
+// ---------- trenches highlighter: outline + badge on coins worth a look ----------
+// hot (bright green): a top caller, our models, the runner model or decu.  watch (dashed green): momentum / potential from the
+// market scan (pumping, fast curve, near migration, new high, busy chat, live).  risky (red): pumping, but the rug check says HIGH.
 // Matches the coin links on the page against /api/assist/hot (token, bonding-curve and PumpSwap pool addresses).
 (() => {
   const B58 = /[1-9A-HJ-NP-Za-km-z]{32,44}/g;
-  const KIND = { callout: "CALLER", model: "MODEL", runner: "RUNNER", live: "LIVE", boost: "BOOST", decu: "DECU", smart: "SMART" };
+  const KIND = { callout: "CALLER", model: "MODEL", runner: "RUNNER", live: "LIVE", boost: "BOOST", decu: "DECU", smart: "SMART",
+    fast: "FAST", grad: "NEAR MIGRATION", ath: "NEW HIGH", chat: "CHAT" };
   let HOT = new Map(), marked = new Map(), timer = null;
   const css = document.createElement("style");
   css.textContent = `.ts-hot{outline:2px solid #22c55e !important;outline-offset:-2px !important;box-shadow:0 0 14px #22c55e80,inset 0 0 0 9999px #22c55e12 !important;position:relative !important}
+    .ts-watch{outline:2px dashed #4ade80b0 !important;outline-offset:-2px !important;box-shadow:inset 0 0 0 9999px #22c55e0a !important;position:relative !important}
+    .ts-risky{outline:2px solid #ef4444 !important;outline-offset:-2px !important;box-shadow:inset 0 0 0 9999px #ef444410 !important;position:relative !important}
+    .ts-watch>.ts-badge{background:#166534d0}.ts-risky>.ts-badge{background:#b91c1c}
     .ts-badge{position:absolute;top:3px;right:3px;z-index:20;background:#16a34a;color:#fff;font:700 10px/1.35 system-ui,sans-serif;padding:1px 6px;border-radius:6px;
       pointer-events:none;max-width:75%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.02em;box-shadow:0 1px 4px #0006}`;
   document.documentElement.appendChild(css);
 
   function label(c) {
-    return c.reasons.map(r => r.kind === "runner" ? r.text.replace("runner model ", "RUNNER ") : r.kind === "model" ? r.text.split(" ")[0]
+    return (c.tier === "risky" ? "RUG? · " : "") + c.reasons.map(r => r.kind === "pump" ? r.text.replace(/up (\d+%) in (\d+) min.*/, "+$1 $2m") : r.kind === "runner" ? r.text.replace("runner model ", "RUNNER ") : r.kind === "model" ? r.text.split(" ")[0]
       : r.kind === "live" ? "LIVE " + ((r.text.match(/(\d+)/) || [])[1] || "") : KIND[r.kind] || r.kind).join(" · ");
   }
 
@@ -209,9 +215,12 @@
     marked = seen;
   }
 
+  const TIERS = ["ts-hot", "ts-watch", "ts-risky"];
   function mark(el, c) {
-    el.classList.add("ts-hot");
-    const txt = label(c), tip = c.reasons.map(r => r.text).join(" · ");
+    const cls = "ts-" + (c.tier || "hot");
+    for (const t of TIERS) if (t !== cls) el.classList.remove(t);
+    el.classList.add(cls);
+    const txt = label(c), tip = c.reasons.map(r => r.text).join(" · ") + (c.rug ? ` · rug check: ${c.rug}` : "");
     let b = el.querySelector(":scope > .ts-badge");
     if (!b) { b = document.createElement("span"); b.className = "ts-badge"; el.appendChild(b); }
     if (b.textContent !== txt) b.textContent = txt;
@@ -219,7 +228,7 @@
   }
 
   function unmark(el) {
-    el.classList.remove("ts-hot");
+    el.classList.remove(...TIERS);
     const b = el.querySelector(":scope > .ts-badge");
     if (b) b.remove();
     if (el.title && el.title.startsWith("Tradeslave: ")) el.removeAttribute("title");
