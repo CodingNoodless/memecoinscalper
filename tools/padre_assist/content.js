@@ -30,7 +30,7 @@
     .btns button:hover{border-color:#7c9cff}input{background:#161d27;border:1px solid #2a3340;color:#e6edf3;border-radius:6px;padding:4px 6px;font:inherit;width:100%;box-sizing:border-box;margin-top:6px}
     .det{margin-top:6px;border-top:1px solid #1b2330;padding-top:6px;font-size:11.5px}.det ul{margin:2px 0 6px 16px;padding:0}.lnk{display:block;width:100%;margin-top:6px;background:none;color:#93a3b8}
   </style>
-  <div class="p"><div class="h"><b>Tradeslave Assist</b><span class="mute small" id="st">starting</span><button id="min" title="collapse">&#8211;</button></div>
+  <div class="p"><div class="h"><b>Tradeslave Assist <span class="mute small">v0.2</span></b><span class="mute small" id="st">starting</span><button id="min" title="collapse">&#8211;</button></div>
   <div class="b" id="body"><div class="mute small">Open a token on padre.gg, or paste an address:</div><input id="paste" placeholder="token address"></div></div>`;
   document.documentElement.appendChild(host);
   const $ = id => root.getElementById(id);

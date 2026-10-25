@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Tradeslave Assist for padre.gg",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Read-only padre.gg panel: bot checks, risk flags, tracked wallets and an exit helper. Uses the local Tradeslave dashboard.",
   "permissions": [
     "storage"
