@@ -9,6 +9,7 @@ watch list on the first request, via data/m_assist/cands.jsonl); a coin the feed
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import threading
 import time
@@ -289,7 +290,7 @@ def analyze(m: str, entry_mc: float | None = None, t_entry: float | None = None)
         net = r * (1 - FEE) ** 2 - 1
         exit_help = dict(mc=mc, r=r, net=net, peak=peak_r, stop=stop, mode=mode, action=action, why=why,
                          stalled=stalled, dying=dying, act60=act, act_max=amax, flow60=flow60)
-    return dict(m=m, t=now, partial=partial, n_trades=len(rows), age_s=now - t0, price=p, mc_usd=p * 1e9 * sol_usd, sol_usd=sol_usd,
+    return dict(m=m, t=now, partial=partial, scores=scores(m), n_trades=len(rows), age_s=now - t0, price=p, mc_usd=p * 1e9 * sol_usd, sol_usd=sol_usd,
                 feats={k: f.get(k) for k in ("buyers_30", "accel", "flow_30", "buy_ratio_60", "from_lo60", "h_vs_max", "vs_launch", "trades_60", "avg_buy_60")},
                 holders=len(holders), top10=top10, top1=top1, creator=creator, creator_hold=cr_hold, creator_sold=cr_sold,
                 creator_coins=creates.get(creator, 0) if creator else None, early_hold=early_hold, flow60=flow60,
@@ -297,14 +298,239 @@ def analyze(m: str, entry_mc: float | None = None, t_entry: float | None = None)
                 live_viewers=live, boosts=boosts, exit=exit_help)
 
 
+_pair_map: dict = {}         # pair / bonding-curve address -> token mint (padre.gg URLs carry the pair, not the mint)
+
+
+def resolve(addr: str) -> tuple[str, str | None]:
+    """(token mint, pair address or None). An address the feed doesn't know as a coin is looked up as a pair on DexScreener."""
+    if addr in _pair_map:
+        return _pair_map[addr], addr
+    try:
+        db = sqlite3.connect(DATA_DIR / "feed" / "trades.sqlite", timeout=5)
+        known = db.execute("SELECT 1 FROM tr WHERE m=? LIMIT 1", (addr,)).fetchone()
+        db.close()
+    except sqlite3.Error:
+        known = None
+    if known or addr.endswith("pump"):
+        return addr, None
+    try:
+        pairs = requests.get(f"https://api.dexscreener.com/latest/dex/pairs/solana/{addr}", timeout=10,
+                             headers={"User-Agent": "tradeslave-research/0.1 (personal research; low rate)"}).json().get("pairs") or []
+    except (requests.RequestException, ValueError):
+        pairs = []
+    mint = next((p["baseToken"]["address"] for p in pairs if (p.get("baseToken") or {}).get("address")), None)
+    if mint:
+        _pair_map[addr] = mint
+        return mint, addr
+    return addr, None
+
+
 def assist_json(qs: dict) -> dict:
-    m = (qs.get("m") or [""])[0].strip()
+    addr = (qs.get("m") or [""])[0].strip()
+    m, pair = resolve(addr) if 32 <= len(addr) <= 44 else (addr, None)
     try:
         entry = float((qs.get("entry_mc") or [""])[0] or 0) or None
         t_entry = float((qs.get("t_entry") or [""])[0] or 0) or None
     except ValueError:
         entry = t_entry = None
     try:
-        return analyze(m, entry, t_entry)
+        out = analyze(m, entry, t_entry)
     except sqlite3.Error as exc:
-        return dict(m=m, error=f"feed database busy: {exc}")
+        out = dict(m=m, error=f"feed database busy: {exc}")
+    out["pair"] = pair
+    return out
+
+
+# ---------------- fast rug check (one RPC call + the first 100 transactions, ~1 s) ----------------
+TOKEN_PROGRAMS = ("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb")
+ATA_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+_quick: dict = {}
+
+
+def _rpc(method, params):
+    from .research.fl_test import helius_url
+    r = requests.post(helius_url(), json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params}, timeout=8)
+    return r.json().get("result")
+
+
+def _curve_accounts(mint, pair):
+    """The bonding curve and its token accounts (excluded from holder figures: they hold the unsold supply)."""
+    from .research.pda import PUMP_PROGRAM, b58decode, find_pda
+    curve = pair or find_pda([b"bonding-curve", b58decode(mint)], PUMP_PROGRAM)
+    out = {curve}
+    for tp in TOKEN_PROGRAMS:
+        out.add(find_pda([b58decode(curve), b58decode(tp), b58decode(mint)], ATA_PROGRAM))
+    return out
+
+
+def quick(addr: str) -> dict:
+    """Rug risk in about a second: current top-20 holders (exact, from the chain) + launch transactions + creator record."""
+    from concurrent.futures import ThreadPoolExecutor
+    from .research.bw_test import gtfa
+    from .research.fl_test import helius_url
+    from .scalper.trade_events import parse_trade_events
+    t0 = time.time()
+    m, pair = resolve(addr) if 32 <= len(addr) <= 44 else (addr, None)
+    c = _quick.get(m)
+    if c and time.time() - c["t"] < 20:
+        return c
+    _want(m)
+    with ThreadPoolExecutor(3) as ex:
+        f_hold = ex.submit(_rpc, "getTokenLargestAccounts", [m, {"commitment": "confirmed"}])
+        f_first = ex.submit(gtfa, helius_url(), m, 0, time.time(), "full", 100, 1)
+        f_cr = ex.submit(_creates)
+        try:
+            hold = (f_hold.result(timeout=8) or {}).get("value") or []
+        except Exception:  # noqa: BLE001 - a partial answer beats none
+            hold = []
+        try:
+            txs = f_first.result(timeout=8)[0]
+        except Exception:  # noqa: BLE001
+            txs = []
+        creates, dev_of = f_cr.result(timeout=8)
+    ev = [e for tx in txs for e in parse_trade_events((tx.get("meta") or {}).get("logMessages") or []) if e["mint"] == m]
+    ev.sort(key=lambda e: e["ts"])
+    creator = dev_of.get(m)
+    if not creator and txs:
+        k0 = txs[0]["transaction"]["message"]["accountKeys"][0]
+        creator = k0 if isinstance(k0, str) else k0.get("pubkey")
+    curve = _curve_accounts(m, pair)
+    accts = [(a["address"], float(a.get("uiAmount") or 0)) for a in hold if a["address"] not in curve]
+    supply = 1e9
+    top10 = sum(v for _, v in accts[:10]) / supply
+    top1 = accts[0][1] / supply if accts else 0.0
+    first_ts = ev[0]["ts"] if ev else None
+    dev_buy = sum(e["sol"] for e in ev if e["buy"] and e["user"] == creator) / 1e9
+    dev_sold = any((not e["buy"]) and e["user"] == creator for e in ev)
+    launch = [e for e in ev if e["buy"] and e["user"] != creator and first_ts is not None and e["ts"] <= first_ts + 1]
+    launch_tok = sum(e["tok"] for e in launch) / 1e6 / supply
+    launch_w = len({e["user"] for e in launch})
+    n_created = creates.get(creator, 0) if creator else 0
+    flags = []
+    if top1 > 0.15:
+        flags.append((3, f"one wallet holds {top1:.0%} of supply"))
+    elif top1 > 0.08:
+        flags.append((1, f"largest holder has {top1:.0%}"))
+    if top10 > 0.40:
+        flags.append((3, f"top-10 holders own {top10:.0%}"))
+    elif top10 > 0.25:
+        flags.append((1, f"top-10 holders own {top10:.0%}"))
+    if launch_tok > 0.20:
+        flags.append((3, f"{launch_w} wallets bought {launch_tok:.0%} of supply in the launch second (bundle / snipers)"))
+    elif launch_tok > 0.08:
+        flags.append((1, f"launch-second buyers took {launch_tok:.0%} ({launch_w} wallets)"))
+    if dev_sold:
+        flags.append((2, "creator already sold in the first transactions"))
+    if n_created >= 10:
+        flags.append((3, f"creator launched {n_created} coins we've recorded (serial deployer)"))
+    elif n_created >= 3:
+        flags.append((1, f"creator launched {n_created} coins we've recorded"))
+    if dev_buy >= 5:
+        flags.append((1, f"creator bought {dev_buy:.1f} SOL at launch (big dev bag)"))
+    fund = _funding.get(m) or {}
+    if fund.get("serial"):
+        flags.append((2, f"creator's funder already funded {fund['serial']} signalled creators"))
+    if (fund.get("cluster") or 0) >= 0.15:
+        flags.append((2, f"one funder controls {fund['cluster']:.0%} of the top-20 holders"))
+    score = sum(pts for pts, _ in flags)
+    risk = "HIGH" if score >= 4 else "MEDIUM" if score >= 2 else "LOW"
+    out = dict(m=m, pair=pair, t=time.time(), ms=int(1000 * (time.time() - t0)), risk=risk, score=score,
+               flags=[dict(points=pts, text=txt) for pts, txt in flags], top10=top10, top1=top1, launch_share=launch_tok,
+               launch_wallets=launch_w, dev_buy_sol=dev_buy, dev_sold=dev_sold, creator_coins=n_created,
+               holders_seen=len(accts), launch_seen=len(ev))
+    _quick[m] = out
+    scores(m)                                    # starts the narrative + runner scoring in the background
+    return out
+
+
+# ---------------- narrative and runner scores (background, cached per coin) ----------------
+_scores: dict = {}
+_llm: dict = {}
+
+
+def _scores_job(m):
+    res = dict(status="done")
+    try:
+        from .research import m1_bot as M1
+        asset = _rpc("getAsset", {"id": m}) or {}
+        content = asset.get("content") or {}
+        md = content.get("metadata") or {}
+        uri = content.get("json_uri")
+        meta = {}
+        if uri:
+            try:
+                meta = requests.get(uri, timeout=8).json()
+            except (requests.RequestException, ValueError):
+                meta = {}
+        name, sym = md.get("name") or meta.get("name"), md.get("symbol") or meta.get("symbol")
+        desc = str(meta.get("description", ""))[:400]
+        link = next((str(meta[k]) for k in ("twitter", "website", "telegram") if M1.LINK.match(str(meta.get(k) or ""))), None)
+        res.update(name=name, sym=sym, link=link)
+        if link:
+            if "llm" not in _llm:
+                _llm["llm"] = M1.Llm()
+            info, _ = M1.tweet_info(M1.SOC, link)
+            sc, crit, why, _b = _llm["llm"].score(M1.PROMPT.format(name=name, sym=sym, desc=desc or "(none)", link=link,
+                                                                   tweet=info, earlier="", improves=""))
+            res.update(narrative=sc, criterion=crit, why=why, model=_llm["llm"].used)
+        else:
+            res.update(narrative=None, why="no X / website link in the coin's metadata, so M1 wouldn't score it")
+    except Exception as exc:  # noqa: BLE001 - shown in the panel
+        res.update(narrative=None, why=f"narrative scoring failed: {type(exc).__name__}")
+    _scores[m] = dict(res, status="runner pending")
+    try:
+        res.update(_runner(m))
+    except Exception as exc:  # noqa: BLE001
+        res.update(runner=None, runner_why=f"runner score failed: {type(exc).__name__}")
+    _scores[m] = res
+
+
+def _runner(m):
+    """M5's runner model probability at the coin's band moment (needs the history from launch)."""
+    from .research.m5_bt import Coin, identical_top5
+    from .research.runners import decision
+    rows, complete = feed_rows(m)
+    if not rows or not complete:
+        from .research.bw_test import gtfa
+        from .research.fl_test import helius_url
+        from .scalper.trade_events import parse_trade_events
+        txs, _ = gtfa(helius_url(), m, 0, time.time(), max_pages=30)
+        rows, bal, h = [], {}, 0
+        for tx in txs:
+            for e in parse_trade_events((tx.get("meta") or {}).get("logMessages") or []):
+                if e["mint"] != m or not e["vt"] or not e["vs"]:
+                    continue
+                tok, w = e["tok"] / 1e6, e["user"]
+                b0 = bal.get(w, 0.0)
+                b1 = b0 + (tok if e["buy"] else -tok)
+                bal[w] = b1
+                h += (b0 <= 1 < b1) - (b1 <= 1 < b0)
+                rows.append([float(e["ts"]), e["vs"] / e["vt"] * 1e-3, e["buy"], e["sol"] / 1e9, w, tok, h])
+        rows.sort(key=lambda r: r[0])
+    if len(rows) < 10:
+        return dict(runner=None, runner_why="too few trades yet")
+    model = json.loads((DATA_DIR / "m1" / "m5_model.json").read_text())
+    t0 = rows[0][0]
+    i = decision(rows, t0)
+    if i is None:
+        return dict(runner=None, runner_why="hasn't reached M5's decision point (band) yet")
+    f, k = Coin({"rows": rows, "t0": t0}).feats(min(time.time(), rows[i][0] + 60), i)
+    x = [(math.log1p(max(0.0, f[n])) if n not in ("vs_band", "vs_high") else f[n]) for n in model["feats"]]
+    z = model["intercept"] + sum(w * (v - mu) / sd for w, v, mu, sd in zip(model["coef"], x, model["mu"], model["sd"]))
+    p = 1 / (1 + math.exp(-z))
+    return dict(runner=p, runner_cut=model["P"], runner_pass=bool(p >= model["P"] and f["mc_k"] <= 20 and not identical_top5(rows, k)),
+                runner_why=f"at M5's decision point ({time.strftime('%H:%M:%S', time.localtime(rows[i][0]))}); M5 buys at >= {model['P']:.2f}")
+
+
+def scores(m):
+    if m not in _scores:
+        _scores[m] = dict(status="scoring")
+        threading.Thread(target=_scores_job, args=(m,), daemon=True).start()
+    return _scores[m]
+
+
+def quick_json(qs: dict) -> dict:
+    return quick((qs.get("m") or [""])[0].strip())
+
+
+threading.Thread(target=_creates, daemon=True).start()     # preload the creator record so the first lookup is fast

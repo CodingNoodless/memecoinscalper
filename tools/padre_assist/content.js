@@ -56,7 +56,7 @@
   });
 
   // ---------- state ----------
-  let pasted = null, last = null, pos = {};
+  let pasted = null, last = null, pos = {}, busy = false;
   chrome.storage.local.get(["positions"], s => { pos = s.positions || {}; });
   const savePos = () => chrome.storage.local.set({ positions: pos });
 
@@ -66,8 +66,36 @@
   const mark = ok => ok == null ? '<span class="mute">?</span>' : ok ? '<span class="ok">&#10003;</span>' : '<span class="bad">&#10007;</span>';
   const ago = s => s < 90 ? `${s | 0}s` : s < 5400 ? `${(s / 60) | 0}m` : `${(s / 3600).toFixed(1)}h`;
 
+  function layout() {
+    if (!$("full") || !root.getElementById("full").isConnected) {
+      $("body").innerHTML = `<div id="rug"><div class="mute">checking rug risk&hellip;</div></div><div id="scores"></div><div id="full"><div class="mute small">loading full analysis&hellip;</div></div>`;
+    }
+  }
+
+  function renderQuick(q) {
+    layout();
+    if (q.error) { $("rug").innerHTML = `<div class="warn">${esc(q.error)}</div>`; return; }
+    const col = q.risk === "HIGH" ? "SELL" : q.risk === "MEDIUM" ? "TAKE" : "HOLD";
+    const flags = q.flags.length ? `<ul>${q.flags.map(f => `<li class="${f.points >= 3 ? "bad" : "warn"}">${esc(f.text)}</li>`).join("")}</ul>` : '<div class="ok small">no rug flags in holders, launch buys or creator record</div>';
+    $("rug").innerHTML = `<div class="act ${col}">RUG RISK: ${esc(q.risk)}</div>${flags}
+      <div class="mute small">top-10 ${pct(q.top10)} &middot; top-1 ${pct(q.top1)} &middot; launch-second buyers ${pct(q.launch_share)} (${q.launch_wallets}) &middot; dev bought ${(+q.dev_buy_sol).toFixed(2)} SOL${q.dev_sold ? ", sold" : ""} &middot; checked in ${q.ms} ms</div>`;
+  }
+
+  function renderScores(sc) {
+    if (!sc) return;
+    const nar = sc.narrative == null ? `<span class="mute">${sc.status === "scoring" ? "scoring&hellip;" : esc(sc.why || "n/a")}</span>`
+      : `<b class="${sc.narrative >= 7 ? "ok" : sc.narrative >= 4 ? "warn" : "bad"}">${sc.narrative}/10</b> <span class="mute small">${esc(sc.why || "")}</span>`;
+    const run = sc.runner == null ? `<span class="mute">${sc.status !== "done" ? "scoring&hellip;" : esc(sc.runner_why || "n/a")}</span>`
+      : `<b class="${sc.runner_pass ? "ok" : sc.runner >= 0.25 ? "warn" : "bad"}">${(+sc.runner).toFixed(2)}</b> <span class="mute small">${sc.runner_pass ? "M5 would buy" : "below M5's buy cut"} &middot; ${esc(sc.runner_why || "")}</span>`;
+    $("scores").innerHTML = `<div class="sec"><div>Scores${sc.name ? " &middot; " + esc(sc.name) + (sc.sym ? " ($" + esc(sc.sym) + ")" : "") : ""}</div>
+      <div class="row"><span>Narrative (M1's LLM)</span></div><div>${nar}</div>
+      <div class="row" style="margin-top:4px"><span>Runner (M5 model)</span></div><div>${run}</div></div>`;
+  }
+
   function render(m, d) {
-    if (d.error) { $("body").innerHTML = `<div class="warn">${esc(d.error)}</div><div class="mute small">${esc(m)}</div>`; return; }
+    layout();
+    renderScores(d.scores);
+    if (d.error) { $("full").innerHTML = `<div class="warn">${esc(d.error)}</div><div class="mute small">${esc(m)}</div>`; return; }
     const f = d.feats || {}, x = d.exit, P = pos[m];
     const checks = d.checks.map(c => `<div class="row"><span>${mark(c.ok)} ${esc(c.name)}</span><span class="mute">${c.value == null ? "" : typeof c.value === "number" ? (+c.value).toFixed(2) : esc(c.value)}</span></div>`).join("");
     const risks = d.risks.length ? `<ul>${d.risks.map(r => `<li class="warn">${esc(r)}</li>`).join("")}</ul>` : '<span class="ok">none of our red flags</span>';
@@ -87,7 +115,7 @@
         <div class="btns"><button id="now">I bought now (${usd(d.mc_usd)})</button></div>
         <input id="emc" placeholder="or type your entry market cap in $, then Enter">`;
     }
-    $("body").innerHTML = `
+    $("full").innerHTML = `
       <div class="kpis"><div class="kpi"><span>Mcap</span><b>${usd(d.mc_usd)}</b></div><div class="kpi"><span>Age</span><b>${ago(d.age_s)}</b></div><div class="kpi"><span>Holders</span><b>${d.holders}</b></div>
       <div class="kpi"><span>Buyers 30 s</span><b>${f.buyers_30 ?? "–"}</b></div><div class="kpi"><span>Accel</span><b class="${(f.accel || 0) > 4 ? "bad" : ""}">${f.accel != null ? (+f.accel).toFixed(1) + "&times;" : "–"}</b></div><div class="kpi"><span>Flow 30 s</span><b class="${(f.flow_30 || 0) >= 0 ? "ok" : "bad"}">${f.flow_30 != null ? (+f.flow_30).toFixed(1) : "–"}</b></div></div>
       ${d.partial ? '<div class="warn small">Partial history (last 30 min from Helius): holder and creator figures may be incomplete. The feed is recording it now.</div>' : ""}
@@ -112,11 +140,21 @@
     }
     if (root.activeElement && root.activeElement.id === "emc") return; // don't redraw while typing an entry
     const P = pos[m];
+    if (m !== last) {                                   // a new coin: rug check first (~1 s), then the full analysis
+      last = m; $("body").innerHTML = ""; layout();
+      chrome.runtime.sendMessage({ type: "quick", m }, res => {
+        if (res && res.ok && last === m) renderQuick(res.d);
+        else if (res && !res.ok && last === m) $("rug").innerHTML = `<div class="warn">${esc(res.error)}</div>`;
+      });
+    }
+    if (busy) return;
+    busy = true;
     chrome.runtime.sendMessage({ type: "assist", m, entry_mc: P && P.entry_mc, t_entry: P && P.t }, res => {
+      busy = false;
       if (!res) { $("st").textContent = "extension reloading"; return; }
-      if (!res.ok) { $("st").textContent = "offline"; $("body").innerHTML = `<div class="warn">${esc(res.error)}</div>`; return; }
+      if (!res.ok) { $("st").textContent = "retrying: " + res.error.split(".")[0]; return; }   // keep the last good view
+      if (last !== m) return;
       $("st").textContent = "updated " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-      last = m;
       render(m, res.d);
     });
   }
