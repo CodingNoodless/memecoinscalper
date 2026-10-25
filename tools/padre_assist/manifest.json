@@ -2,14 +2,25 @@
   "manifest_version": 3,
   "name": "Tradeslave Assist for padre.gg",
   "version": "0.1.0",
-  "description": "Read-only trading assistant: bot checks, risk flags, tracked wallets and an exit helper for the token open on padre.gg. Data comes from the local Tradeslave dashboard (127.0.0.1:8765). Never trades.",
-  "permissions": ["storage"],
-  "host_permissions": ["http://127.0.0.1:8765/*"],
-  "background": { "service_worker": "background.js" },
+  "description": "Read-only padre.gg panel: bot checks, risk flags, tracked wallets and an exit helper. Uses the local Tradeslave dashboard.",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8765/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
-      "matches": ["https://padre.gg/*", "https://*.padre.gg/*"],
-      "js": ["content.js"],
+      "matches": [
+        "https://padre.gg/*",
+        "https://*.padre.gg/*"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ]
