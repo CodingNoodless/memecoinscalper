@@ -1,13 +1,16 @@
 # Tradeslave Assist for padre.gg
 
-A read-only browser panel for the token you have open on padre.gg. It shows:
-- **Exit helper:** after you record your entry, it shows a live HOLD / SELL / TAKE PROFIT, with M12r's rules.
-  - Below 2x, the stop is −10%.
-  - From 2x the stop ratchets up: 1.25x at 2x, then N−1 at each new whole multiple N.
-  - It takes profit when the run stalls (no new high for 2 min and net selling) or dies (activity below a quarter of its peak).
-- **Bot checks:** buyer acceleration (the losers' pattern), M9's flow rule, the serial-funder and funding-cluster skips (M6–M8), and M12's hype gate.
-- **Risk flags:** creator holdings, sells and history, top-10 / top-1 concentration, how much the launch-burst buyers still hold, creator-linked holders, and fresh wallets.
-- **Tracked wallets & hype:** decu, the 17 WL study wallets, the top pump.fun callers, livestream viewers and DexScreener boosts.
+A read-only browser panel for the token you have open on padre.gg. It's a compact board of five verdicts, each with one short reason:
+
+| Row | What it tells you |
+| --- | --- |
+| **Rug risk** | LOW / MEDIUM / HIGH in about 1 s: current top holders (on-chain, bonding curve excluded), launch-second bundle and snipers, and the creator's sells, history and dev buy |
+| **Narrative** | 0–10 from M1's LLM scorer (name, description and linked X post) |
+| **Runner** | LIKELY / MAYBE / UNLIKELY from M5's runner model (M5 buys at 37%+) |
+| **Hype** | YES / SOME / NO: top pump.fun callers bought, livestream viewers, DexScreener boosts, and tracked wallets in it |
+| **Dead coin?** | ALIVE / FADING / DEAD, from trades in the last minute vs its busiest minute, and price vs its peak |
+
+**Optional exit helper:** click **I bought now** to add a **My position** row that shows HOLD / SELL / TAKE PROFIT using M12r's ratchet rules. **details** shows every reason.
 
 It **never trades, never clicks or types on padre.gg, and never reads your wallet**. It only reads the page URL to find the token address. Data comes from the local dashboard (`/api/assist`).
 

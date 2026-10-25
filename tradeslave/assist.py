@@ -290,7 +290,20 @@ def analyze(m: str, entry_mc: float | None = None, t_entry: float | None = None)
         net = r * (1 - FEE) ** 2 - 1
         exit_help = dict(mc=mc, r=r, net=net, peak=peak_r, stop=stop, mode=mode, action=action, why=why,
                          stalled=stalled, dying=dying, act60=act, act_max=amax, flow60=flow60)
-    return dict(m=m, t=now, partial=partial, scores=scores(m), n_trades=len(rows), age_s=now - t0, price=p, mc_usd=p * 1e9 * sol_usd, sol_usd=sol_usd,
+    per_min = defaultdict(int)
+    for r in rows:
+        per_min[int(r[0] // 60)] += 1
+    peak_min = max(per_min.values(), default=0)
+    last_age = now - rows[-1][0]
+    off_peak = p / max(r[1] for r in rows)
+    if last_age > 180 or (peak_min >= 20 and len(w60) < 0.1 * peak_min and off_peak < 0.5):
+        dead, dead_why = "DEAD", (f"no trades for {last_age / 60:.0f} min" if last_age > 180 else
+                                  f"{len(w60)} trades in the last minute vs {peak_min} at its busiest, {off_peak:.0%} of its peak price")
+    elif peak_min >= 10 and len(w60) < LAD_DYING * peak_min:
+        dead, dead_why = "FADING", f"{len(w60)} trades in the last minute vs {peak_min} at its busiest, {off_peak:.0%} of peak price"
+    else:
+        dead, dead_why = "ALIVE", f"{len(w60)} trades in the last minute ({peak_min} at its busiest), net flow {flow60:+.1f} SOL"
+    return dict(m=m, t=now, partial=partial, scores=scores(m), dead=dead, dead_why=dead_why, n_trades=len(rows), age_s=now - t0, price=p, mc_usd=p * 1e9 * sol_usd, sol_usd=sol_usd,
                 feats={k: f.get(k) for k in ("buyers_30", "accel", "flow_30", "buy_ratio_60", "from_lo60", "h_vs_max", "vs_launch", "trades_60", "avg_buy_60")},
                 holders=len(holders), top10=top10, top1=top1, creator=creator, creator_hold=cr_hold, creator_sold=cr_sold,
                 creator_coins=creates.get(creator, 0) if creator else None, early_hold=early_hold, flow60=flow60,
