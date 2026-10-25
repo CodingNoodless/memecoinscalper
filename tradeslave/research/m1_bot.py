@@ -43,12 +43,12 @@ from concurrent.futures import ThreadPoolExecutor
 import requests
 
 OLLAMA_MODEL = "qwen2.5:7b"                    # the 14b model needs more free RAM than this PC has
-from ..paths import DATA_DIR
+from ..paths import DATA_DIR, PROJECT_ROOT
 from ..scalper.curve import decode_bonding_curve
 from .c1_curve import CREATES, CURVE_FEE, SOL_USDC, T0, V0, sell_curve
 from .chain import env_rpc
 from .full_trades import Pace, ts as iso_ts
-from .live_feed import feed_rows, feed_trades
+from .live_feed import DB as FEED_DB, feed_rows, feed_trades
 from .fl_test import LiveFunding
 
 VARIANT = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] in ("m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10") else "m1"
@@ -123,6 +123,78 @@ SERIAL_SEED = DATA_DIR / "m1" / "serial_seed.json"
 TWIN_STOP, TWIN_DIR, TWIN_RULES = ((0.70, DATA_DIR / "m9e", "m9e-v2+1s") if VARIANT == "m9"
                                    else (0.90, DATA_DIR / "m8", "m8-v2+1s"))
 TWIN_LABEL = "M9e " if VARIANT == "m9" else "M8 "
+# M12 (vault "2026-10-24 M12 - M8 with hype context (M12)", Rohit: "watch pump.fun callouts ... use it as an indicator"): a
+# third book in the M7 process with M8's fill and exits (-10% stop). It takes M8's entry only with hype at that moment: a top
+# pump.fun caller's wallet (callout leaderboard, read with Rohit's own login token) bought the coin before now, or the coin was
+# a >= 20-viewer pump.fun livestream / DexScreener-boosted in the last 4 h (HY recorder). Every M8 entry's hype is logged.
+M12 = VARIANT == "m7"
+M12_DIR, M12_RULES, M12_STOP, M12_LABEL = DATA_DIR / "m12", "m12-v1+1s", 0.90, "M12 "
+HYPE_S = 4 * 3600
+
+
+class Hype:
+    """Top-caller wallets (refreshed every 6 h in a thread) and HY's recent livestream/boost signals."""
+
+    def __init__(self):
+        self.callers, self.sig, self.t_sig = set(), {}, 0.0
+        self._load_callers()
+        threading.Thread(target=self._refresh, daemon=True, name="callouts").start()
+
+    def _load_callers(self):
+        for f in sorted((DATA_DIR / "callouts").glob("leaderboard_*.json"), reverse=True):   # newest readable one
+            try:
+                lb = json.loads(f.read_text(encoding="utf-8")).get("callouts", [])
+            except (OSError, ValueError):
+                continue
+            self.callers = {w for u in lb for w in u.get("wallets", []) if not w.startswith("0x")}
+            return
+
+    def _refresh(self):
+        import requests
+        from dotenv import dotenv_values
+        while True:
+            tok = (dotenv_values(PROJECT_ROOT / ".env").get("PUMP_JWT") or "").strip().strip('"').strip("'")
+            if tok:
+                try:
+                    r = requests.get("https://frontend-api-v3.pump.fun/callout/leaderboard", timeout=20,
+                                     headers={"User-Agent": "tradeslave-research/0.1 (personal research; low rate)",
+                                              "Accept": "application/json", "Authorization": f"Bearer {tok}"})
+                    if r.status_code == 200:
+                        (DATA_DIR / "callouts").mkdir(exist_ok=True)
+                        (DATA_DIR / "callouts" / f"leaderboard_{int(time.time())}.json").write_text(r.text, encoding="utf-8")
+                        self._load_callers()
+                    else:
+                        print(time.strftime("%H:%M"), f"M12 callout leaderboard HTTP {r.status_code} (token expired?)", flush=True)
+                except Exception as exc:  # noqa: BLE001 - keep the last caller list
+                    print(time.strftime("%H:%M"), f"M12 callout refresh failed: {type(exc).__name__}", flush=True)
+            time.sleep(6 * 3600)
+
+    def signals(self):
+        if time.time() - self.t_sig > 60:
+            self.t_sig, out = time.time(), {}
+            try:
+                with (DATA_DIR / "hype" / "signals.jsonl").open() as fh:
+                    for line in fh:
+                        j = json.loads(line)
+                        if time.time() - j["t"] < HYPE_S:
+                            out.setdefault(j["m"], set()).add(j["src"])
+            except (OSError, ValueError):
+                pass
+            self.sig = out
+        return self.sig
+
+    def gate(self, m):
+        callers_in = []
+        if self.callers:
+            try:
+                q = ",".join("?" * len(self.callers))
+                db = sqlite3.connect(FEED_DB, timeout=5)
+                callers_in = [w for (w,) in db.execute(f"SELECT DISTINCT w FROM tr WHERE m=? AND b=1 AND w IN ({q})", (m, *self.callers))]
+                db.close()
+            except sqlite3.Error:
+                pass
+        src = sorted(self.signals().get(m, ()))
+        return dict(caller=len(callers_in), live_or_boost=src, go=bool(callers_in) or bool(src))
 # M9 v2 (vault "2026-10-23 pattern search for M9 (PX)", 17:20): the one PX rule that held on holdout replaces M9 v1's
 # skips on both entry sources: net SOL flow over the 30 s before the last feed trade >= M9_FLOW, and the creator's funder
 # funded no earlier creator (counts continue from the PX table; a program-owned or unknown funder skips). Main book L5
@@ -561,6 +633,7 @@ def run():
     sol = {"usd": 0.0, "t": 0.0}
     watch, scored, opened = {}, {}, {}           # mint -> create row; mint -> (score, narrative ok, key); mint -> pos
     twins = {}                                   # M7 process only: mint -> M8 twin position (same fill, stop -10%)
+    twins12, hype = {}, (Hype() if M12 else None)   # M7 process only: M12 book (M8 + hype gate)
     m1_done = set()                              # M9: coins M1's checks rejected (M5's model can still buy them)
     m9_m5_done = set()                           # M9 v2: coins whose M5 signal already met the PX rule check
     first = {}                                   # narrative key -> the first coin seen on it (Rohit: prefer the first)
@@ -647,7 +720,7 @@ def run():
                 if line.strip():
                     meta_pool.submit(intake, json.loads(line))
         with lock:
-            for m in [m for m, c in watch.items() if t_loop - c["t"] > WATCH_S and m not in opened and m not in twins]:
+            for m in [m for m, c in watch.items() if t_loop - c["t"] > WATCH_S and m not in opened and m not in twins and m not in twins12]:
                 watch.pop(m)
             keys = {c["bc"]: m for m, c in watch.items() if c.get("bc")}
         states = rpc.curves(list(keys)) if keys and sol["usd"] else {}
@@ -659,11 +732,13 @@ def run():
             p = cs.price_sol if not cs.complete else None
             if p and sol["usd"]:
                 mc_now[m] = p * 1e9 * sol["usd"]
-            if m in opened or m in twins:
+            if m in opened or m in twins or m in twins12:
                 if m in opened:
                     manage(opened, m, p, cs, done, rpc)
                 if m in twins:                                   # M8 twin: same price read, its own stop
                     manage(twins, m, p, cs, done, rpc, log=TWIN_DIR / "trades.jsonl", label=TWIN_LABEL)
+                if m in twins12:                                 # M12: same price read, M8's stop
+                    manage(twins12, m, p, cs, done, rpc, log=M12_DIR / "trades.jsonl", label=M12_LABEL)
                 continue
             if p is None or m in done or len(opened) >= MAX_OPEN:
                 continue
@@ -784,7 +859,24 @@ def run():
             if TWIN:
                 twins[m] = deepcopy(opened[m])
                 twins[m].update(stop=TWIN_STOP, rules=TWIN_RULES, twin_of=VARIANT)
+            if M12:
+                g = hype.gate(m)
+                M12_DIR.mkdir(exist_ok=True)
+                with (M12_DIR / "cands.jsonl").open("a") as fh:
+                    fh.write(json.dumps(dict(t=time.time(), m=m, name=c.get("name"), stage="m12", **g)) + "\n")
+                if g["go"]:
+                    twins12[m] = deepcopy(opened[m])
+                    twins12[m].update(stop=M12_STOP, rules=M12_RULES, twin_of=VARIANT, hype=g)
+                    print(time.strftime("%H:%M"), f"M12 BUY {c.get('name')!r} hype {g}", flush=True)
             print(time.strftime("%H:%M"), f"BUY  {c.get('name')!r} score {sc} mc ${mc:,.0f}", flush=True)
+        if M12:
+            try:
+                M12_DIR.mkdir(exist_ok=True)
+                (M12_DIR / "status.json").write_text(json.dumps({"t": time.time(), "sol_usd": sol["usd"], "twin_of": VARIANT,
+                    "callers": len(hype.callers), "open": [{k: o.get(k) for k in ("m", "name", "score", "t", "p0", "last", "peak", "stop", "mc",
+                                                    "holders", "h_max", "hype")} for o in twins12.values()]}))
+            except OSError:
+                pass
         if TWIN:
             try:
                 TWIN_DIR.mkdir(exist_ok=True)
