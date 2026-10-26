@@ -452,7 +452,58 @@ def m12_view() -> dict:
                                live=c.get("live_or_boost"), ret8=by8.get(c["m"], {}).get("ret")) for c in cands[-30:]][::-1])
 
 
+def m13_view() -> dict:
+    """M13 (runner model at migration) vs its control M13b: every trade, open positions, and the model's scoring log."""
+    def load(v, rules):
+        return [r for r in jsonl(DATA_DIR / v / "trades.jsonl") if r.get("rules") == rules]
+
+    def status(v):
+        try:
+            return json.loads((DATA_DIR / v / "status.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+    t13, t13b = load("m13", "m13-v1"), load("m13b", "m13b-v1")
+    st13, st13b = status("m13"), status("m13b")
+    by_b = {r["m"]: r for r in t13b}
+    scored = jsonl(DATA_DIR / "m13" / "scored.jsonl")
+    pr = [c for c in scored if "p" in c]
+
+    def row(r, v):
+        p0 = r.get("p0") or 0
+        return dict(v=v, t=r["t"], m=r["m"], name=r.get("name"), sym=r.get("sym"), score=r.get("score"), mc=r.get("mc"),
+                    lag=r["t"] - r["t_mig"] if r.get("t_mig") else None, peak=r.get("peak_x"), exit=r.get("exit"), ret=r["ret"],
+                    held=round((r["t_exit"] - r["t"]) / 60, 1), armed=r.get("armed"),
+                    ret_b=by_b.get(r["m"], {}).get("ret") if v == "m13" else None,
+                    low=(r["p_exit"] / p0) if p0 and r.get("p_exit") else None)
+
+    def opens(st, v):
+        return [dict(v=v, m=o["m"], name=o.get("name"), t=o["t"], score=o.get("score"), mc=o.get("mc"),
+                     r=(o["last"] / o["p0"]) if o.get("last") and o.get("p0") else None,
+                     peak=(o["peak"] / o["p0"]) if o.get("peak") and o.get("p0") else None,
+                     stop=(o["stop"] / o["p0"]) if o.get("stop") and o.get("p0") else None) for o in st.get("open", [])]
+
+    def summ(tr):
+        rs = [r["ret"] for r in tr]
+        h = len(rs) // 2
+        return dict(stats(rs), deep=(sum(x <= -0.25 for x in rs) / len(rs)) if rs else None,
+                    two_x=sum((r.get("peak_x") or 0) >= 2 for r in tr), big=max(rs, default=None),
+                    halves=[statistics.mean(rs[:h]) if h else None, statistics.mean(rs[h:]) if rs[h:] else None],
+                    exits=Counter(r.get("exit") for r in tr))
+    same = [(r["ret"], by_b[r["m"]]["ret"]) for r in t13 if r["m"] in by_b]
+    t0 = min((r["t"] for r in t13), default=None)
+    return dict(m13=summ(t13), m13b=summ(t13b), m13b_since=summ([r for r in t13b if t0 and r["t"] >= t0]),
+                same=dict(n=len(same), m13=stats([a for a, _ in same]), m13b=stats([b for _, b in same])),
+                thr=st13.get("threshold"), live=time.time() - (st13.get("t") or 0) < 300,
+                open=opens(st13, "m13") + opens(st13b, "m13b"),
+                trades=[row(r, "m13") for r in t13][::-1], trades_b=[row(r, "m13b") for r in t13b][-40:][::-1],
+                funnel=dict(seen=len(scored), scored=len(pr), flagged=sum(bool(c.get("buy")) for c in pr),
+                            factory=sum(bool(c.get("factory")) for c in pr), skips=Counter(c["skip"] for c in scored if c.get("skip")),
+                            near=sum(1 for c in pr if st13.get("threshold") and c["p"] >= 0.8 * st13["threshold"])),
+                log=[dict(t=c["t"], m=c["m"], sym=c.get("sym"), p=c.get("p"), factory=c.get("factory"), buy=c.get("buy"),
+                          skip=c.get("skip"), lag=c.get("lag")) for c in scored[-60:]][::-1])
+
+
 def build_lab_snapshot() -> dict:
-    return dict(t=time.time(), jobs=jobs(), m1=m1(), m2=m1("m2"), m3=m1("m3"), m4=m1("m4"), m5=m1("m5"), m6=m1("m6"), m7=m1("m7"), m8=m1("m8"), m9=m1("m9"), m9e=m1("m9e"), m10=m1("m10"), m10x=m10_view(), m11=m1("m11"), m11x=m11_view(), m12=m1("m12"), m12r=m1("m12r"), m12x=m12_view(), board=scoreboard(), m78=m78_view(), c1=c1(), kalshi=kalshi(), experiments=experiments())
+    return dict(t=time.time(), jobs=jobs(), m1=m1(), m2=m1("m2"), m3=m1("m3"), m4=m1("m4"), m5=m1("m5"), m6=m1("m6"), m7=m1("m7"), m8=m1("m8"), m9=m1("m9"), m9e=m1("m9e"), m10=m1("m10"), m10x=m10_view(), m11=m1("m11"), m11x=m11_view(), m12=m1("m12"), m12r=m1("m12r"), m12x=m12_view(), m13=m1("m13"), m13b=m1("m13b"), m13x=m13_view(), board=scoreboard(), m78=m78_view(), c1=c1(), kalshi=kalshi(), experiments=experiments())
 
 

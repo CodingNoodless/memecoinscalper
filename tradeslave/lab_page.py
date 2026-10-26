@@ -50,6 +50,12 @@ h2.sect{margin:6px 2px -4px;font-size:13px;color:var(--mute);text-transform:uppe
 <div><div class="lbl">M12r open positions (runner mode = stop has moved up)</div><div id="m12o"></div></div></div>
 <div class="grid"><div><div class="lbl">Recent M12 trades &middot; what M12r and M8 made on the same coin</div><div id="m12t" class="scroll"></div></div>
 <div><div class="lbl">Recent gate checks</div><div id="m12l" class="scroll"></div></div></div></div></details>
+<details class="card" open><summary><span class="chev">&#9654;</span><b>M13 vs M13b</b><span class="mute small">M13 = runner model at migration (buys at migration + 60 s when p &ge; threshold, not factory, pool &ge; 40 SOL) &middot; M13b = control, buys every curve graduation &middot; same ratchet exit (stop 0.8&times;, 1.25&times; after 2&times;, N&minus;1 at each N&times;, 6 h cap) &middot; judged once at 30 M13 trades</span></summary><div class="body">
+<div class="grid"><div><div class="lbl">Pre-registered test</div><div id="m13v"></div></div>
+<div><div class="lbl">Open positions (stop = current stop as a multiple of entry)</div><div id="m13o"></div><div class="lbl" style="margin-top:14px">Model funnel (every migration since start)</div><div id="m13f"></div></div></div>
+<div class="lbl">Every M13 trade &middot; what M13b made on the same coin</div><div id="m13t" class="scroll"></div>
+<div class="grid"><div><div class="lbl">Recent M13b (control) trades</div><div id="m13b" class="scroll"></div></div>
+<div><div class="lbl">Migration scoring log (newest first)</div><div id="m13l" class="scroll"></div></div></div></div></details>
 <details class="card"><summary><span class="chev">&#9654;</span><b>Retired and baseline bots</b><span class="mute small">M1&ndash;M6 (baselines the newer models are measured against) and M10 (failed, stopped)</span></summary><div class="body">
 <section class="bots" id="bots"></section></div></details>
 <details class="card" open><summary><span class="chev">&#9654;</span><b>M1 details</b><span class="mute small">slices, recent trades, funnel, every scored coin</span></summary><div class="body">
@@ -136,8 +142,31 @@ const F=window.BOARD_F||"active";
   [r.hype.caller?`caller &times;${r.hype.caller}`:"",...((r.hype.live_or_boost)||[])].filter(Boolean).map(esc).join(", ")||DASH,
   pct(r.ret12)+` <span class="mute small">${esc(r.exit12||"")}</span>`,r.ret12r!=null?pct(r.ret12r)+` <span class="mute small">${esc(r.exit12r||"")}</span>`:DASH,r.ret8!=null?pct(r.ret8):DASH]));
  $("m12l").innerHTML=table(["Time","Coin","Gate","Caller","Live / boost","M8 result"],(X.gate_log||[]).map(c=>[tm(c.t),esc((c.name||c.m.slice(0,6)).slice(0,20)),c.go?'<b class="pos">buy</b>':'<span class="mute">skip</span>',c.caller||0,esc((c.live||[]).join(", "))||DASH,c.ret8!=null?pct(c.ret8):DASH]));
+ const Q=d.m13x||{m13:{},m13b:{},m13b_since:{},open:[],trades:[],trades_b:[],funnel:{skips:{}},log:[]},q13=Q.m13||{},q13b=Q.m13b_since||{};
+ const qf=(s,k,fn)=>s&&s.n?fn(s[k]):DASH,qx=x=>x==null?DASH:(+x).toFixed(2)+"&times;",qn=x=>x==null?DASH:(100*x).toFixed(0)+"%";
+ $("m13v").innerHTML=table(["Measure","M13 (model)","M13b (control, same period)","Bar"],[["Trades",q13.n||0,q13b.n||0,"judged at 30 M13 trades"],
+  ["Mean / trade",qf(q13,"mean",pct),qf(q13b,"mean",pct),"M13 &gt; 0 and &gt; M13b"],["Halves (by entry time)",q13.n>1?pct(q13.halves[0])+" / "+pct(q13.halves[1]):DASH,DASH,"both &gt; 0"],
+  ["Median",qf(q13,"median",pct),qf(q13b,"median",pct),"report"],["Win rate",qf(q13,"win",qn),qf(q13b,"win",qn),"report"],["Hit 2&times; (peak)",q13.n?q13.two_x+" / "+q13.n:DASH,q13b.n?q13b.two_x+" / "+q13b.n:DASH,"report"],
+  ["Share &le; &minus;25%",qf(q13,"deep",qn),qf(q13b,"deep",qn),"report"],["Biggest win",qf(q13,"big",pct),qf(q13b,"big",pct),"report"],["Worst",qf(q13,"worst",pct),qf(q13b,"worst",pct),"report"],
+  ["Buy threshold (runner p)",Q.thr!=null?(+Q.thr).toFixed(3):DASH,"&mdash;","fixed (RD refit)"]]);
+ $("m13o").innerHTML=table(["Book","Coin","p","Entry mc","Since","Now","Peak","Stop"],(Q.open||[]).map(o=>[o.v=="m13"?"<b>M13</b>":'<span class="mute">M13b</span>',
+  `<a class="coin" href="/trades#${o.v}|${esc(o.m)}">${esc((o.name||o.m.slice(0,6)).slice(0,20))}</a>`,o.score!=null?(+o.score).toFixed(2):DASH,o.mc?"$"+(o.mc/1000).toFixed(1)+"k":DASH,ago(o.t),
+  o.r!=null?`<span class="${o.r>=1?"pos":"neg"}">${qx(o.r)}</span>`:DASH,qx(o.peak),o.stop!=null?(o.stop>1?`<span class="pill pass">${qx(o.stop)}</span>`:qx(o.stop)):DASH]));
+ const QF=Q.funnel||{skips:{}};
+ $("m13f").innerHTML=table(["Stage","Count"],[["Migrations seen",QF.seen??0],...Object.entries(QF.skips||{}).sort((a,b)=>b[1]-a[1]).map(([k,v])=>[`<span class="mute">skipped: ${esc(k)}</span>`,v]),
+  ["Scored by the model",QF.scored??0],["&hellip; factory fingerprint",QF.factory??0],["&hellip; within 80% of threshold",QF.near??0],["&hellip; flagged (p &ge; threshold, not factory)",QF.flagged??0],["M13 trades",q13.n||0]]);
+ const qrow=r=>[new Date(r.t*1e3).toLocaleString([], {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}),`<a class="coin" href="/trades#${r.v}|${esc(r.m)}">${esc((r.name||r.m.slice(0,6)).slice(0,22))}</a> <span class="mute small">${esc(r.sym||"")}</span>`,
+  r.score!=null?(+r.score).toFixed(2):DASH,r.mc?"$"+(r.mc/1000).toFixed(1)+"k":DASH,r.lag!=null?(+r.lag).toFixed(0)+" s":DASH,qx(r.peak),
+  esc(r.exit||"")+(r.armed?' <span class="pill pass">ratchet</span>':""),qx(r.low),`<b>${pct(r.ret)}</b>`,r.held+"m"];
+ $("m13t").innerHTML=table(["Entry","Coin","p","Entry mc","After mig.","Peak","Exit","Exit at","Return","Held","M13b same coin"],(Q.trades||[]).map(r=>[...qrow(r),r.ret_b!=null?pct(r.ret_b):DASH]));
+ $("m13b").innerHTML=table(["Entry","Coin","p","Entry mc","After mig.","Peak","Exit","Exit at","Return","Held"],(Q.trades_b||[]).map(qrow));
+ $("m13l").innerHTML=table(["Time","Coin","p","","Decision"],(Q.log||[]).map(c=>[tm(c.t),esc((c.sym||c.m.slice(0,6)).slice(0,18)),c.p!=null?`<b class="${c.buy?"pos":c.p>=0.8*(Q.thr||1)?"":"mute"}">${(+c.p).toFixed(3)}</b>`:DASH,
+  c.p!=null?`<div style="background:#252d38;border-radius:4px;height:8px;width:80px;position:relative"><div style="position:absolute;left:0;top:0;bottom:0;border-radius:4px;width:${Math.min(100,Q.thr?c.p/Q.thr*100:0)}%;background:${c.buy?"#ec4899":c.factory?"#f87171":"#475569"}"></div></div>`:"",
+  c.buy?'<b style="color:#ec4899">flag: buy</b>':c.skip?`<span class="mute small">${esc(c.skip)}</span>`:c.factory?'<span class="neg small">factory</span>':'<span class="mute small">below threshold</span>']));
  const NEWP="<span class='pill done' style='margin-left:6px'>new</span>";
- $("active").innerHTML=(d.m12?bot("M12"+NEWP,"M8 + hype gate: buys M8's entry only when a top pump.fun caller already bought, or the coin is a livestream / DexScreener boost &middot; &minus;10% stop",d.m12,[["Gate checks",(d.m12x||{}).checked??0],["Passed",(d.m12x||{}).passed??0],["Since",esc("Oct 24 17:32")]]):"")+
+ $("active").innerHTML=(d.m13?bot("M13"+NEWP,"Runner model at migration (RD: AUC 0.915, 44% holdout precision) + factory filter, pool &ge; 40 SOL &middot; ratchet exit, 6 h cap",d.m13,[["Flagged",((d.m13x||{}).funnel||{}).flagged??0],["Open",((d.m13x||{}).open||[]).filter(o=>o.v=="m13").length],["Since",esc("Oct 25 12:13")]]):"")+
+  (d.m13b?bot("M13b","Control: buys every curve graduation at migration + 60 s, same exits, no model",d.m13b,[["Open",((d.m13x||{}).open||[]).filter(o=>o.v=="m13b").length],["Since",esc("Oct 25 12:44")]]):"")+
+  (d.m12?bot("M12"+NEWP,"M8 + hype gate: buys M8's entry only when a top pump.fun caller already bought, or the coin is a livestream / DexScreener boost &middot; &minus;10% stop",d.m12,[["Gate checks",(d.m12x||{}).checked??0],["Passed",(d.m12x||{}).passed??0],["Since",esc("Oct 24 17:32")]]):"")+
   (d.m12r?bot("M12r"+NEWP,"M12's entries, ratcheting runner exit: stop to 1.25&times; at 2&times;, then N&minus;1 at each new N&times;; takes profit when the run stalls or dies",d.m12r,[["Running now",((d.m12x||{}).open12r||[]).filter(o=>o.lad_on).length],["Open",((d.m12x||{}).open12r||[]).length],["Since",esc("Oct 24 17:46")]]):"")+
   (d.m8?bot("M8 <span class='pill done' style='margin-left:6px'>new</span>","Twin exit book inside M7: same fills, &minus;10% stop (max-loss test)",d.m8,[["Checked",((d.m7||{}).m6||{}).checked??0],["Skipped",((d.m7||{}).m6||{}).skipped??0],["Since",esc("Oct 23 16:00")]]):"")+
   (d.m7?bot("M7 <span class='pill done' style='margin-left:6px'>new</span>","m6-v3 entries (cluster + serial-funder skip), M5 exits (stop &minus;30%); side by side with M8",d.m7,[["Checked",(d.m7.m6||{}).checked??0],["Skipped",(d.m7.m6||{}).skipped??0],["Since",esc("Oct 23 16:00")]]):"")+
