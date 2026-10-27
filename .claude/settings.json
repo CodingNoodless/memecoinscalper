@@ -1,0 +1,34 @@
+{
+  "env": {
+    "TRADESLAVE_VAULT": "D:/vault/tradeslave",
+    "PYTHONUTF8": "1"
+  },
+  "permissions": {
+    "additionalDirectories": [
+      "D:/vault/tradeslave"
+    ],
+    "allow": [
+      "Bash(uv run python tools/lab.py:*)",
+      "Bash(uv run pytest:*)",
+      "Bash(bash tools/start_all.sh:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)"
+    ],
+    "deny": [
+      "Read(./.env)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run python tools/lab.py brief"
+          }
+        ]
+      }
+    ]
+  }
+}

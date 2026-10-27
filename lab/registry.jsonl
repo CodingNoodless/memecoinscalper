@@ -1,0 +1,34 @@
+{"id": "m8", "family": "runner-bot", "hypothesis": "M5 signals, m6-v3 entries, M8 exits (paper)", "status": "idea", "variants": 1, "t": "2026-10-27 02:58"}
+{"id": "m8", "status": "forward", "note": "2026-10-23 M7 vs M8 forward test", "t": "2026-10-27 02:58"}
+{"id": "m9", "family": "runner-bot", "hypothesis": "M1+M5 entries with loss controls (paper)", "status": "idea", "variants": 1, "t": "2026-10-27 02:58"}
+{"id": "m9", "status": "forward", "note": "2026-10-23 M9 design test", "t": "2026-10-27 02:58"}
+{"id": "m9e", "family": "runner-bot", "hypothesis": "M9 twin", "status": "idea", "variants": 1, "t": "2026-10-27 02:58"}
+{"id": "m9e", "status": "forward", "note": null, "t": "2026-10-27 02:58"}
+{"id": "m12", "family": "runner-bot", "hypothesis": "M8 with hype gate (v3)", "status": "idea", "variants": 1, "t": "2026-10-27 02:58"}
+{"id": "m12", "status": "forward", "note": "judged at 60", "t": "2026-10-27 02:58"}
+{"id": "m12r", "family": "runner-bot", "hypothesis": "M12 with ratchet exit", "status": "idea", "variants": 1, "t": "2026-10-27 02:58"}
+{"id": "m12r", "status": "forward", "note": null, "t": "2026-10-27 02:58"}
+{"id": "m13", "family": "migration", "hypothesis": "RD runner model at migration", "status": "idea", "variants": 1, "t": "2026-10-27 02:58"}
+{"id": "m13", "status": "forward", "note": "judged at 30 per its prereg", "t": "2026-10-27 02:58"}
+{"id": "m13b", "family": "migration", "hypothesis": "control: buy every real graduation", "status": "idea", "variants": 1, "t": "2026-10-27 02:58"}
+{"id": "m13b", "status": "forward", "note": null, "t": "2026-10-27 02:58"}
+{"id": "m11", "family": "copy", "hypothesis": "copy decu +1 s", "status": "idea", "variants": 1, "t": "2026-10-27 02:58"}
+{"id": "m11", "status": "forward", "note": null, "t": "2026-10-27 02:58"}
+{"id": "NL", "family": "narrative", "hypothesis": "narrative leaders: first coin on a live unclaimed narrative to draw a crowd", "status": "idea", "variants": 1, "t": "2026-10-27 02:58"}
+{"id": "NL", "status": "prereg", "note": "2026-10-25 narrative leaders (NL); collection ended Oct 26 01:30", "t": "2026-10-27 02:58"}
+{"id": "m1", "family": "baseline", "hypothesis": "baseline bot", "status": "idea", "variants": 1, "t": "2026-10-27 02:58"}
+{"id": "m1", "status": "killed", "note": "lab rules 2026-10-27", "t": "2026-10-27 02:58"}
+{"id": "m2", "family": "baseline", "hypothesis": "baseline bot", "status": "idea", "variants": 1, "t": "2026-10-27 02:58"}
+{"id": "m2", "status": "killed", "note": "lab rules 2026-10-27", "t": "2026-10-27 02:58"}
+{"id": "m3", "family": "baseline", "hypothesis": "baseline bot", "status": "idea", "variants": 1, "t": "2026-10-27 02:58"}
+{"id": "m3", "status": "killed", "note": "lab rules 2026-10-27", "t": "2026-10-27 02:58"}
+{"id": "m4", "family": "baseline", "hypothesis": "baseline bot", "status": "idea", "variants": 1, "t": "2026-10-27 02:58"}
+{"id": "m4", "status": "killed", "note": "lab rules 2026-10-27", "t": "2026-10-27 02:58"}
+{"id": "m5", "family": "baseline", "hypothesis": "baseline bot", "status": "idea", "variants": 1, "t": "2026-10-27 02:58"}
+{"id": "m5", "status": "killed", "note": "lab rules 2026-10-27", "t": "2026-10-27 02:58"}
+{"id": "m6", "family": "baseline", "hypothesis": "baseline bot", "status": "idea", "variants": 1, "t": "2026-10-27 02:58"}
+{"id": "m6", "status": "killed", "note": "lab rules 2026-10-27", "t": "2026-10-27 02:58"}
+{"id": "m7", "family": "baseline", "hypothesis": "baseline bot", "status": "idea", "variants": 1, "t": "2026-10-27 02:58"}
+{"id": "m7", "status": "killed", "note": "lab rules 2026-10-27", "t": "2026-10-27 02:58"}
+{"id": "m10", "family": "baseline", "hypothesis": "baseline bot", "status": "idea", "variants": 1, "t": "2026-10-27 02:58"}
+{"id": "m10", "status": "killed", "note": "lab rules 2026-10-27", "t": "2026-10-27 02:58"}
