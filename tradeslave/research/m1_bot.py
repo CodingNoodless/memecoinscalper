@@ -8,7 +8,7 @@ Process (Rohit, 2026-10-20), step by step:
 1. New pump.fun pairs (launch_watch logs every create to data/c1/creates.jsonl) with an X post / profile /
    community link in the metadata.
 2. Narrative read by an LLM against his four criteria (influential poster, project with real potential,
-   community cause like charity, correcting an existing narrative). Claude Haiku if ANTHROPIC_API_KEY is set,
+   community cause like charity, correcting an existing narrative). NVIDIA GPT-OSS 20B if NVIDIA_API_KEY is set,
    else local Ollama. Buy only if score >= SCORE_MIN; score >= SCORE_HIGH is "really sure".
 3. Market filters: volume >= $1.5k; entry while market cap is $4k-7k ($5-7k best, $4-5k ok), up to $10k when the
    narrative scores >= SCORE_HIGH.
@@ -41,6 +41,7 @@ from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
+from openai import OpenAI
 
 OLLAMA_MODEL = "qwen2.5:7b"                    # the 14b model needs more free RAM than this PC has
 from ..paths import DATA_DIR, PROJECT_ROOT
@@ -69,10 +70,8 @@ GT = "https://api.geckoterminal.com/api/v2/networks/solana/pools/" + SOL_USDC
 MC_MIN, VOL_MIN, MC_BUY, MC_HIGH = 4000.0, 1500.0, (4000.0, 7000.0), 10000.0   # Rohit: 5-7k best, 4-5k ok,
                                                                          # up to 10k if the narrative is really good
 SCORE_MIN, SCORE_HIGH = 7, 9
-GEMINI = (("gemini-3.8-flash", 9_000), ("gemini-3.5-flash-lite", 140_000))   # (model, daily budget): free-tier RPD
-DAY_CAP, EVENING = 1500, 17                     # infra v3: before 17:00 PT each bot spends at most 1,500 flash calls,
-                                                 # so the shared 9k quota lasts through Rohit's 17-24 test hours
-                                                 # 10k / 150k (Rohit's AI Studio limits, 2026-10-21); resets at midnight PT
+NVIDIA_MODEL = "openai/gpt-oss-20b"
+NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
 TP, STOP, TREND_ARM, TREND_GIVE, STALL_S, STALL_ACT, MAX_HOLD = 2.0, 0.70, 1.30, 0.80, 120, 0.50, 600
 HI_ARM, HI_GIVE, HI_DEAD, HI_HOLD = 1.50, 0.60, 0.20, 7200
 if M2 or M8 or M9 or M10:
@@ -308,32 +307,22 @@ def jlog(path, row):
         fh.write(json.dumps(row) + "\n")
 
 
-SHARED = DATA_DIR / "llm_scores.sqlite"   # infra v2 (2026-10-21 22:50): bots with the same prompt share one answer
+SHARED = DATA_DIR / "llm_scores_nvidia_gpt_oss_20b.sqlite"  # isolated from Gemini-era cached answers
 
 
 class Llm:
     def __init__(self):
-        self.key = os.environ.get("GEMINI_API_KEY") or self._env("GEMINI_API_KEY")
-        self.name = "+".join(m for m, _ in GEMINI) if self.key else f"ollama:{OLLAMA_MODEL}"
-        self.used, self.fails, self.calls = None, defaultdict(int), defaultdict(int)   # calls: (PT date, model) -> n
-        self.cool = {}                                          # model -> unix time its per-minute 429 cools off
-        day = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 7 * 3600))
-        t0 = time.mktime(time.strptime(day, "%Y-%m-%d"))
-        for line in CANDS.open(encoding="utf-8") if CANDS.exists() else ():   # a restart keeps today's count
-            if '"model"' in line:
-                try:
-                    r = json.loads(line)
-                except ValueError:                              # a line cut short by a restart
-                    continue
-                if r.get("t", 0) >= t0 and r.get("model"):
-                    self.calls[(day, r["model"])] += 1
+        self.key = os.environ.get("NVIDIA_API_KEY") or self._env("NVIDIA_API_KEY")
+        self.client = OpenAI(base_url=NVIDIA_BASE_URL, api_key=self.key, timeout=30) if self.key else None
+        self.name = NVIDIA_MODEL if self.client else f"ollama:{OLLAMA_MODEL}"
+        self.used, self.fails, self.calls = None, defaultdict(int), defaultdict(int)
         self.db = sqlite3.connect(SHARED, timeout=30, check_same_thread=False, isolation_level=None)
         self.db.execute("CREATE TABLE IF NOT EXISTS s (h TEXT PRIMARY KEY, t REAL, model TEXT, out TEXT)")
 
     @staticmethod
     def _env(k):
         try:
-            for line in open(".env", encoding="utf-8", errors="ignore"):
+            for line in (PROJECT_ROOT / ".env").open(encoding="utf-8", errors="ignore"):
                 if line.strip().startswith(k + "="):
                     return line.split("=", 1)[1].strip().strip('"').strip("'") or None
         except OSError:
@@ -341,8 +330,7 @@ class Llm:
         return None
 
     def score(self, text):
-        """Identical prompts (M1 and M2 see the same coins with the same prompt) are scored once: the first bot claims
-        the prompt, the others wait up to 20 s for its answer instead of spending the shared Gemini quota again."""
+        """Identical prompts (M1 and M2 see the same coins with the same prompt) are scored once."""
         h = hashlib.sha1(text.encode("utf-8")).hexdigest()
         try:
             if self.db.execute("INSERT OR IGNORE INTO s VALUES (?, ?, NULL, NULL)", (h, time.time())).rowcount == 0:
@@ -364,9 +352,8 @@ class Llm:
         h = hashlib.sha1(text.encode("utf-8")).hexdigest()
         try:
             out = None
-            if self.key:
-                out = self._gemini(text)
-            if out is None:                                     # no key, or Gemini refused / rate-limited / slow
+            out = self.generate(text)
+            if out is None:
                 self.used = OLLAMA_MODEL
                 r = requests.post("http://localhost:11434/api/generate", timeout=120, json={
                     "model": OLLAMA_MODEL, "prompt": text, "stream": False, "format": "json",
@@ -381,31 +368,26 @@ class Llm:
         except Exception as exc:  # noqa: BLE001 - unscored = no buy
             return None, None, f"llm error: {type(exc).__name__}", False
 
-    def _gemini(self, text):
-        day = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 7 * 3600))
-        for model, budget in GEMINI:
-            if model == GEMINI[0][0] and time.localtime().tm_hour < EVENING and self.calls[(day, model)] >= DAY_CAP:
-                continue
-            if self.calls[(day, model)] >= budget or self.cool.get(model, 0) > time.time():
-                continue
-            self.calls[(day, model)] += 1
-            try:
-                r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                                  headers={"x-goog-api-key": self.key}, timeout=20, json={
-                                      "contents": [{"parts": [{"text": text}]}],
-                                      "generationConfig": {"temperature": 0, "responseMimeType": "application/json",
-                                                           "thinkingConfig": {"thinkingLevel": "low"}}})
-                if r.ok:
-                    self.used = model
-                    return r.json()["candidates"][0]["content"]["parts"][0]["text"]
-                self.fails[(model, r.status_code)] += 1
-                if r.status_code == 429 and "PerDay" in r.text:   # daily quota gone: the next model for the rest of the day
-                    self.calls[(day, model)] = budget
-                elif r.status_code == 429:                      # per-minute limit (infra v2): back off 2 min, not all day
-                    self.cool[model] = time.time() + 120
-            except (requests.RequestException, KeyError, IndexError, ValueError) as exc:
-                self.fails[(model, type(exc).__name__)] += 1
-        return None
+    def generate(self, text):
+        """Generate with NVIDIA; return None on provider failure so callers can fall back to local Ollama."""
+        if not self.client:
+            return None
+        try:
+            day = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 7 * 3600))
+            self.calls[(day, NVIDIA_MODEL)] += 1
+            completion = self.client.chat.completions.create(
+                model=NVIDIA_MODEL,
+                messages=[{"role": "user", "content": text}],
+                temperature=1,
+                top_p=1,
+                max_tokens=4096,
+                stream=False,
+            )
+            self.used = NVIDIA_MODEL
+            return completion.choices[0].message.content
+        except Exception as exc:  # noqa: BLE001 - avoid logging provider response text or credentials
+            self.fails[(NVIDIA_MODEL, type(exc).__name__)] += 1
+            return None
 
 
 def age_text(ts):

@@ -32,3 +32,15 @@
 {"id": "m7", "status": "killed", "note": "lab rules 2026-10-27", "t": "2026-10-27 02:58"}
 {"id": "m10", "family": "baseline", "hypothesis": "baseline bot", "status": "idea", "variants": 1, "t": "2026-10-27 02:58"}
 {"id": "m10", "status": "killed", "note": "lab rules 2026-10-27", "t": "2026-10-27 02:58"}
+{"id": "SA1", "family": "wallet-supply", "hypothesis": "After early buyers sell most of their peak inventory, positive outside-wallet net SOL flow plus a price rebound may offer a better delayed entry than the first band touch.", "status": "idea", "variants": 1, "t": "2026-10-26 20:36"}
+{"id": "SA1", "status": "killtest", "note": "Frozen one-rule existing-data kill test; no holdout touched.", "t": "2026-10-26 20:36"}
+{"id": "SA1", "status": "killed", "note": "KILL: trigger mean -4.93%; paired delta -0.51 pp; both data sets negative.", "t": "2026-10-26 20:37"}
+{"id": "M14", "family": "migration", "hypothesis": "M13 scored runner flags with a first post-migration 1-minute candle close above its open have higher M12r net returns than all M13 flags; test one fixed green-candle veto on RD design only.", "status": "idea", "variants": 1, "t": "2026-10-26 20:45"}
+{"id": "M14", "status": "killtest", "note": "Pre-registered before examining M14 design returns; RD frozen design sample only, holdout prohibited.", "t": "2026-10-26 20:45"}
+{"id": "M14", "status": "killed", "note": "Design-only killtest: green-candle filter n=12 (<20), mean without top 3=-8.94%; no M13 changes.", "t": "2026-10-26 20:46"}
+{"id": "M15", "family": "migration", "hypothesis": "For the same M13 out-of-fold migration flags and M12r exits, a 0.90x initial stop improves net returns over the current 0.80x stop after standard execution costs.", "status": "idea", "variants": 1, "t": "2026-10-26 20:46"}
+{"id": "M15", "status": "killtest", "note": "Pre-registered a single 0.90x initial stop variant on RD design only; holdout sealed; M13 remains unchanged.", "t": "2026-10-26 20:46"}
+{"id": "M15", "status": "killed", "note": "Design-only fixed stop test: +6.07pp paired mean lift, but both halves remain negative in second half and ex-top3 remains -9.82%; keep criterion failed. M13 unchanged.", "t": "2026-10-26 20:47"}
+{"id": "M16", "family": "migration", "hypothesis": "Replace M13's ATH label with the actual after-cost M12r trade outcome and train the same migration-time model to select net-profitable buyer entries.", "status": "idea", "variants": 1, "t": "2026-10-26 20:47"}
+{"id": "M16", "status": "killtest", "note": "Pre-registered one direct-outcome label/model on RD design only; features and entry/exit fixed; holdout outcomes prohibited.", "t": "2026-10-26 20:47"}
+{"id": "M16", "status": "killed", "note": "Correct descending OOF top-5% design-only result: n=21 mean -14.71% vs M13 control +1.48%; halves -3.69/-24.72%, ex-top3 -24.72%. M13 remains frozen.", "t": "2026-10-26 20:50"}

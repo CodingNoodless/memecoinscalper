@@ -1,0 +1,6 @@
+[shell_environment_policy]
+inherit = "core"
+
+[shell_environment_policy.set]
+TRADESLAVE_VAULT = "D:/vault/tradeslave"
+PYTHONUTF8 = "1"

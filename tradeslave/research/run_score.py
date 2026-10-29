@@ -1,7 +1,7 @@
 """MV idea 1: score coins on whether they will run, learned from examples (vault "2026-10-22 M4 variants backtest (MV)").
 
     uv run python -m tradeslave.research.run_score posts     # fetch each coin's linked post (fxtwitter) -> data/m1/post_info.json
-    uv run python -m tradeslave.research.run_score score     # run scores (Gemini flash-lite) -> data/m1/run_scores.json
+    uv run python -m tradeslave.research.run_score score     # run scores (NVIDIA GPT-OSS 20B) -> data/m1/run_scores_nvidia_gpt_oss_20b.json
 
 "Ran" = from a realistic entry (first trade in the $4-7k band >= 5 s after create, filled 1 s later) the price reached
 2x within 30 min. Examples come only from B-train (live-feed coins created before 20:00 Oct 22); the coins used as
@@ -25,8 +25,7 @@ from .m1_bot import Llm
 from .m4_bt import B_SPLIT, OUT as COINS, SOL_USD
 
 POSTS = DATA_DIR / "m1" / "post_info.json"
-SCORES = DATA_DIR / "m1" / "run_scores.json"
-MODEL = "gemini-3.5-flash-lite"
+SCORES = DATA_DIR / "m1" / "run_scores_nvidia_gpt_oss_20b.json"
 
 
 def ran(co) -> bool | None:
@@ -128,16 +127,14 @@ def score() -> None:
             return co["m"], out.get(co["m"])
         text = PROMPT.format(coin=card(co, info.get(co["m"], {})), **head)
         for k in range(4):
-            r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent",
-                              headers={"x-goog-api-key": llm.key}, timeout=30, json={
-                                  "contents": [{"parts": [{"text": text}]}],
-                                  "generationConfig": {"temperature": 0, "responseMimeType": "application/json"}})
-            if r.ok:
+            raw = llm.generate(text)
+            if raw:
                 try:
-                    return co["m"], int(json.loads(r.json()["candidates"][0]["content"]["parts"][0]["text"])["run"])
-                except (KeyError, IndexError, ValueError, TypeError):
+                    parsed = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
+                    return co["m"], int(parsed["run"])
+                except (KeyError, ValueError, TypeError):
                     return co["m"], None
-            time.sleep(10 * (k + 1) if r.status_code == 429 else 2)
+            time.sleep(2 * (k + 1))
         return co["m"], None
 
     todo = [co for co in coins if co["m"] not in ex_ids and co["m"] not in out]
