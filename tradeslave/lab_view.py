@@ -375,8 +375,10 @@ def experiments() -> dict:
 
 # every model book: (key, name, one-line idea, group, current rules label, verdict text, verdict class)
 MODELS = [
-    ("m13", "M13", "runner model at migration (RD: 44% holdout precision) + factory filter, M12r ratchet, 6 h cap", "active", "m13-v1", "forward test, judged at 30", "done"),
-    ("m13b", "M13b", "control: buys every curve graduation at migration, same exits (no model)", "active", "m13b-v1", "control for M13", "done"),
+    ("m13_110", "M13 early BE 1.10x", "runner model at migration + factory filter; net-breakeven stop after 1.10x peak", "active", "m13-earlybe110-v2", "fresh forward test", "done"),
+    ("m13b_110", "M13b early BE 1.10x", "all qualifying migrations; net-breakeven stop after 1.10x peak", "active", "m13b-earlybe110-v2", "paired control", "done"),
+    ("m13", "M13 v1 (historical)", "runner model at migration + factory filter, original M12r ratchet, 6 h cap", "retired", "m13-v1", "historical baseline", "quiet"),
+    ("m13b", "M13b v1 (historical)", "all qualifying migrations, original ratchet; historical control", "retired", "m13b-v1", "historical baseline", "quiet"),
     ("m12", "M12", "M8 + hype gate: any of the top 50 pump.fun callers bought, or livestream / boost", "active", "m12-v3+1s", "forward test, judged at 60", "done"),
     ("m12r", "M12r", "M12's entries, ratcheting runner exit (1.25x at 2x, then N-1 at each new N)", "active", "m12r-v3+1s", "forward vs M12, at 60", "done"),
     ("m8", "M8", "m6-v3 entries (cluster + serial-funder skips), -10% stop", "active", "m8-v3+1s", "exits ADOPTED (weak, t~0.7)", "pass"),
@@ -462,10 +464,10 @@ def m13_view() -> dict:
             return json.loads((DATA_DIR / v / "status.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return {}
-    t13, t13b = load("m13", "m13-v1"), load("m13b", "m13b-v1")
-    st13, st13b = status("m13"), status("m13b")
+    t13, t13b = load("m13_110", "m13-earlybe110-v2"), load("m13b_110", "m13b-earlybe110-v2")
+    st13, st13b = status("m13_110"), status("m13b_110")
     by_b = {r["m"]: r for r in t13b}
-    scored = jsonl(DATA_DIR / "m13" / "scored.jsonl")
+    scored = jsonl(DATA_DIR / "m13_110" / "scored.jsonl")
     pr = [c for c in scored if "p" in c]
 
     def row(r, v):
@@ -504,6 +506,6 @@ def m13_view() -> dict:
 
 
 def build_lab_snapshot() -> dict:
-    return dict(t=time.time(), jobs=jobs(), m1=m1(), m2=m1("m2"), m3=m1("m3"), m4=m1("m4"), m5=m1("m5"), m6=m1("m6"), m7=m1("m7"), m8=m1("m8"), m9=m1("m9"), m9e=m1("m9e"), m10=m1("m10"), m10x=m10_view(), m11=m1("m11"), m11x=m11_view(), m12=m1("m12"), m12r=m1("m12r"), m12x=m12_view(), m13=m1("m13"), m13b=m1("m13b"), m13x=m13_view(), board=scoreboard(), m78=m78_view(), c1=c1(), kalshi=kalshi(), experiments=experiments())
+    return dict(t=time.time(), jobs=jobs(), m1=m1(), m2=m1("m2"), m3=m1("m3"), m4=m1("m4"), m5=m1("m5"), m6=m1("m6"), m7=m1("m7"), m8=m1("m8"), m9=m1("m9"), m9e=m1("m9e"), m10=m1("m10"), m10x=m10_view(), m11=m1("m11"), m11x=m11_view(), m12=m1("m12"), m12r=m1("m12r"), m12x=m12_view(), m13=m1("m13_110"), m13b=m1("m13b_110"), m13x=m13_view(), board=scoreboard(), m78=m78_view(), c1=c1(), kalshi=kalshi(), experiments=experiments())
 
 

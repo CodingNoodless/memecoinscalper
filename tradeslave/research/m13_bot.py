@@ -7,8 +7,9 @@ What it combines:
     run-up window (last 200 curve trades <= migration) + metadata; refit on all 1,981 coins (data/m1/m13_model.json).
   - RN1000: runners peak about 1 h after migration (median), so entry is at migration + 60 s; exits ratchet, 6 h cap.
   - RN1000 factory fingerprint: template description, or curve filled in < 3 min with <= 40 launch buyers -> skip.
-  - M12r: stop 0.8x; once 2x, stop 1.25x; at each whole multiple N >= 3, stop N - 1.
-  - Costs as in the RD check: 1.25% fee + 1% slippage, each side.
+  - M13 early-ratchet v2: stop 0.8x until peak reaches 1.10x, then net breakeven;
+    once 2x, stop 1.25x; at each whole multiple N >= 3, stop N - 1.
+  - Paper unit: 0.1 SOL. Costs: 1.25% fee + 1% slippage each side, plus 0.0003 SOL per transaction.
 
 Paper only: it never signs or sends a transaction.
 
@@ -36,9 +37,13 @@ from .rb_model import _wallets, features
 from .runners import SOL_USD
 from .ticks import curve_of
 
-M13, M13B = DATA_DIR / "m13", DATA_DIR / "m13b"
-RULES, RULES_B = "m13-v1", "m13b-v1"
-COST, ENTRY_DELAY, STALE, HOLD, POLL = 0.0225, 60, 180, 6 * 3600, 2.0
+M13, M13B = DATA_DIR / "m13_110", DATA_DIR / "m13b_110"
+RULES, RULES_B = "m13-earlybe110-v2", "m13b-earlybe110-v2"
+COST, PAPER_SIZE_SOL, NETWORK_FEE_SOL = 0.0225, 0.1, 0.0003
+ROUND_TRIP_NETWORK_FEE_SOL = 2 * NETWORK_FEE_SOL
+BREAKEVEN_X = (1 + COST) / (1 - COST) * (1 + ROUND_TRIP_NETWORK_FEE_SOL / PAPER_SIZE_SOL)
+EARLY_TRIGGER_X = 1.10
+ENTRY_DELAY, STALE, HOLD, POLL = 60, 180, 6 * 3600, 2.0
 CURVE_MIN_S, START_MAX, MIN_POOL_SOL = 60, 10_000, 40
 HISTORY_PAGES, HISTORY_CANDIDATES, TX_WORKERS = 20, 200, 4
 _RPC_PACE_LOCK = threading.Lock()
@@ -234,6 +239,8 @@ class Book:
     def enter(self, c, p0, now):
         self.open[c["m"]] = dict(m=c["m"], name=c["name"], sym=c["sym"], t=now, t_mig=c["t_mig"], p0=p0, last=p0, peak=p0,
                                  stop=0.8 * p0, armed=False, score=c["p"], rules=self.rules, pool=c["pool"],
+                                 paper_size_sol=PAPER_SIZE_SOL, network_fee_sol=ROUND_TRIP_NETWORK_FEE_SOL,
+                                 breakeven_x=BREAKEVEN_X, early_trigger_x=EARLY_TRIGGER_X,
                                  mc=p0 * 1e9 * SOL_USD)
         print(time.strftime("%H:%M:%S"), f"{self.label} BUY {c['sym']} p={c['p']:.2f} at {p0 * 1e9:.1f} SOL mcap", flush=True)
 
@@ -243,6 +250,8 @@ class Book:
             if not p:
                 continue
             o["last"], o["peak"] = p, max(o["peak"], p)
+            if o["peak"] >= EARLY_TRIGGER_X * o["p0"]:
+                o["stop"] = max(o["stop"], BREAKEVEN_X * o["p0"])
             if o["peak"] >= 2 * o["p0"]:
                 o["armed"] = True
             if o["armed"]:
@@ -254,8 +263,9 @@ class Book:
 
     def close(self, m, p, now, why):
         o = self.open.pop(m)
-        ret = p / o["p0"] * (1 - COST) / (1 + COST) - 1
-        o.update(t_exit=now, p_exit=p, exit=why, ret=ret, peak_x=o["peak"] / o["p0"])
+        ret = p / o["p0"] * (1 - COST) / (1 + COST) - 1 - ROUND_TRIP_NETWORK_FEE_SOL / PAPER_SIZE_SOL
+        o.update(t_exit=now, p_exit=p, exit=why, ret=ret, peak_x=o["peak"] / o["p0"],
+                 paper_size_sol=PAPER_SIZE_SOL, network_fee_sol=ROUND_TRIP_NETWORK_FEE_SOL)
         with (self.d / "trades.jsonl").open("a") as fh:
             fh.write(json.dumps(o) + "\n")
         self.closed += 1

@@ -44,3 +44,10 @@
 {"id": "M16", "family": "migration", "hypothesis": "Replace M13's ATH label with the actual after-cost M12r trade outcome and train the same migration-time model to select net-profitable buyer entries.", "status": "idea", "variants": 1, "t": "2026-10-26 20:47"}
 {"id": "M16", "status": "killtest", "note": "Pre-registered one direct-outcome label/model on RD design only; features and entry/exit fixed; holdout outcomes prohibited.", "t": "2026-10-26 20:47"}
 {"id": "M16", "status": "killed", "note": "Correct descending OOF top-5% design-only result: n=21 mean -14.71% vs M13 control +1.48%; halves -3.69/-24.72%, ex-top3 -24.72%. M13 remains frozen.", "t": "2026-10-26 20:50"}
+{"id": "m13_110", "family": "m13-early-ratchet", "hypothesis": "M13 unchanged selection with 1.10x early fee-adjusted breakeven ratchet; evaluate on fresh post-activation paper trades.", "status": "idea", "variants": 27, "t": "2026-10-29 02:24"}
+{"id": "m13_110", "status": "prereg", "note": "Pre-registered M17; new m13_110 data only; pass t>=2.56 (27 variants), n>=100, both halves and ex-top3 positive; fixed lab KILL rules.", "t": "2026-10-29 02:24"}
+{"id": "m13b_110", "family": "m13-early-ratchet-control", "hypothesis": "M13b all qualifying migrations with 1.10x early fee-adjusted breakeven ratchet; fresh post-activation paper control.", "status": "idea", "variants": 1, "t": "2026-10-29 02:24"}
+{"id": "m13b_110", "status": "prereg", "note": "Pre-registered M17 control; new m13b_110 data only; pass t>=2.5, n>=100, both halves and ex-top3 positive; fixed lab KILL rules.", "t": "2026-10-29 02:24"}
+{"id": "m13_110", "status": "forward", "note": "Activated fresh 1.10x early breakeven paper book; data/m13_110 only.", "t": "2026-10-29 02:27"}
+{"id": "m13b_110", "status": "forward", "note": "Activated fresh 1.10x early breakeven paired control; data/m13b_110 only.", "t": "2026-10-29 02:27"}
+{"id": "m13b", "status": "killed", "note": "Fixed lab KILL: original v1 n=126, t=0.19; old process stopped. New control is separately preregistered as m13b_110.", "t": "2026-10-29 02:30"}
