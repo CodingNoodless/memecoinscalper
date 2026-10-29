@@ -22,21 +22,27 @@ import math
 import queue
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 from dotenv import dotenv_values
 from urllib.parse import urlsplit
 
 from ..paths import DATA_DIR, PROJECT_ROOT
+from .backfill_trades import parse_trade
 from .bw_test import MIG_AUTH, pool_and_mint
-from .rb_collect import _page_back, _pump_headers, _rows
+from .rb_collect import _pump_headers
 from .rb_model import _wallets, features
 from .runners import SOL_USD
+from .ticks import curve_of
 
 M13, M13B = DATA_DIR / "m13", DATA_DIR / "m13b"
 RULES, RULES_B = "m13-v1", "m13b-v1"
 COST, ENTRY_DELAY, STALE, HOLD, POLL = 0.0225, 60, 180, 6 * 3600, 2.0
 CURVE_MIN_S, START_MAX, MIN_POOL_SOL = 60, 10_000, 40
+HISTORY_PAGES, HISTORY_CANDIDATES, TX_WORKERS = 20, 200, 4
+_RPC_PACE_LOCK = threading.Lock()
+_RPC_LAST: dict[str, float] = {}
 MODEL = json.loads((DATA_DIR / "m1" / "m13_model.json").read_text())
 
 
@@ -58,11 +64,133 @@ def rpc(method, params):
             r = requests.post(u, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params}, timeout=15)
             j = r.json()
             if "result" in j:
-                return j["result"]
+                result = j["result"]
+                # Some RPC plans return an empty history page instead of an error when they do not
+                # retain the account's signatures. Try the next configured provider in that case.
+                if result is None or (method == "getSignaturesForAddress" and not result):
+                    last = "empty result"
+                    continue
+                return result
             last = j.get("error")
         except (requests.RequestException, ValueError) as exc:
             last = type(exc).__name__
     raise RuntimeError(f"{method}: {last}")
+
+
+def _history_call(session, url, method, params):
+    """A small retrying JSON-RPC call for the short M13 feature window."""
+    last = "empty response"
+    for attempt in range(3):
+        with _RPC_PACE_LOCK:
+            wait = 0.125 - (time.monotonic() - _RPC_LAST.get(url, 0.0))
+            if wait > 0:
+                time.sleep(wait)
+            _RPC_LAST[url] = time.monotonic()
+        try:
+            r = session.post(url, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params}, timeout=12)
+            if r.status_code == 429 or r.status_code >= 500:
+                last = f"HTTP {r.status_code}"
+                time.sleep(0.4 * (attempt + 1))
+                continue
+            r.raise_for_status()
+            body = r.json()
+            if body.get("error"):
+                last = f"RPC {body['error'].get('code', 'error')}"
+                break
+            return body.get("result")
+        except (requests.RequestException, ValueError) as exc:
+            last = type(exc).__name__
+            if attempt < 2:
+                time.sleep(0.4 * (attempt + 1))
+    raise RuntimeError(last)
+
+
+def migration_rows(mint, created, migrated):
+    """Build M13's two pump-curve feature windows from RPC transaction history.
+
+    The retired Pump swap-history endpoint is not used. Signatures are read from every configured
+    RPC so an endpoint with no archival history cannot mask one that has it. Only transactions in
+    the two model windows are fetched.
+    """
+    curve = curve_of(mint)
+    by_signature, provider_counts, errors = {}, {}, []
+    lower = created - 5
+    for url in URLS:
+        session = requests.Session()
+        before, count = None, 0
+        try:
+            for _ in range(HISTORY_PAGES):
+                options = {"limit": 1000, "commitment": "confirmed"}
+                if before:
+                    options["before"] = before
+                page = _history_call(session, url, "getSignaturesForAddress", [curve, options])
+                if not page:
+                    break
+                count += len(page)
+                for item in page:
+                    stamp = item.get("blockTime")
+                    sig = item.get("signature")
+                    if sig and stamp and lower <= stamp <= migrated:
+                        by_signature.setdefault(sig, dict(item, _provider=url))
+                oldest = page[-1]
+                if (oldest.get("blockTime") or 0) < lower or len(page) < 1000:
+                    break
+                before = oldest.get("signature")
+                if not before:
+                    break
+        except Exception as exc:  # noqa: BLE001 - try other configured RPCs
+            errors.append(type(exc).__name__)
+        if count:
+            provider_counts[url] = count
+        session.close()
+
+    if not by_signature:
+        why = errors[-1] if errors else "no signatures"
+        raise RuntimeError(f"no curve history ({why})")
+
+    signatures = sorted(by_signature.values(), key=lambda x: (x.get("blockTime") or 0, x.get("slot") or 0), reverse=True)
+    for index, item in enumerate(signatures):
+        item["_rank"] = index
+    launch_end = created + 120
+    launch = [x for x in signatures if x["blockTime"] <= launch_end][:HISTORY_CANDIDATES]
+    runup = signatures[:HISTORY_CANDIDATES]
+    selected = {x["signature"]: x for x in launch + runup}
+    providers = sorted(provider_counts, key=provider_counts.get, reverse=True)
+    # Prefer the RPC that actually returned curve history; some endpoints answer recent calls but
+    # time out on old transactions. Fall back only when that provider lacks the transaction.
+    tx_providers = providers + [url for url in URLS if url not in providers]
+
+    def fetch(item):
+        params = [item["signature"], {"encoding": "json", "maxSupportedTransactionVersion": 1,
+                                      "commitment": "confirmed"}]
+        for url in tx_providers or URLS:
+            session = requests.Session()
+            try:
+                tx = _history_call(session, url, "getTransaction", params)
+                if tx:
+                    return tx
+            except Exception:  # noqa: BLE001 - another provider may retain this transaction
+                continue
+            finally:
+                session.close()
+        return None
+
+    with ThreadPoolExecutor(max_workers=TX_WORKERS) as pool:
+        transactions = list(pool.map(fetch, selected.values()))
+
+    rows = []
+    for item, tx in zip(selected.values(), transactions):
+        if not tx:
+            continue
+        trade = parse_trade(tx, mint, curve)
+        if not trade or not trade.get("sol") or not trade.get("tok"):
+            continue
+        rows.append((trade["t"], item.get("slot") or 0, -item["_rank"],
+                     [trade["t"], trade["w"], bool(trade["b"]), trade["sol"], trade["tok"],
+                      trade["sol"] / trade["tok"] * SOL_USD, "pump"]))
+    # getSignaturesForAddress is newest-first. Keep chain order for same-second transactions.
+    rows.sort(key=lambda x: (x[0], x[1], x[2]))
+    return [x[3] for x in rows]
 
 
 def score(f):
@@ -158,7 +286,7 @@ def watch(q):
                 if s["signature"] in seen or s.get("err"):
                     continue
                 seen.add(s["signature"])
-                tx = rpc("getTransaction", [s["signature"], {"encoding": "json", "maxSupportedTransactionVersion": 0,
+                tx = rpc("getTransaction", [s["signature"], {"encoding": "json", "maxSupportedTransactionVersion": 1,
                                                             "commitment": "confirmed"}])
                 if not tx:
                     continue
@@ -198,9 +326,9 @@ def evaluate(q, ready, wallets):
                 rec.update(skip="instant graduation")
             else:
                 tc /= 1000
-                a, st1 = _page_back(s, H, c["m"], tc + 120, 2)
-                b, st2 = _page_back(s, H, c["m"], c["t_mig"], 2)
-                f = features(dict(m=c["m"], created=tc, t_mig=c["t_mig"], launch=_rows(a), runup=_rows(b)), d, wallets)
+                rows = migration_rows(c["m"], tc, c["t_mig"])
+                rec.update(history_source="solana-rpc", history_trades=len(rows))
+                f = features(dict(m=c["m"], created=tc, t_mig=c["t_mig"], rows=rows), d, wallets)
                 if f is None:
                     rec.update(skip="too few curve trades")
                 elif f["start_mc"] >= START_MAX:
