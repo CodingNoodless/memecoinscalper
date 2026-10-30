@@ -2,7 +2,7 @@
 
 import pytest
 
-from tradeslave.research import runners as R
+from tradeslave.research import grad_runners as R
 
 
 def tok(closes, highs=None, lows=None, opens=None, p0=4e-7):

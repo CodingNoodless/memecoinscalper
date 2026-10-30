@@ -25,7 +25,7 @@ import threading
 import requests
 
 from ..paths import PROJECT_ROOT
-from ..research.runners import NETWORK_FEE_SOL, SUPPLY, fee_for
+from ..research.grad_runners import NETWORK_FEE_SOL, SUPPLY, fee_for
 from ..scalper.recorder import TICK_DIR, read_ticks
 
 log = logging.getLogger("runner")
