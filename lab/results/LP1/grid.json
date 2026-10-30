@@ -1,0 +1,357 @@
+{
+ "chosen": {
+  "drop": 0.25,
+  "tgt": 0.15,
+  "hold": 10,
+  "stop": 0.15
+ },
+ "chosen_by": "best train mean (n >= 30)",
+ "grid": [
+  {
+   "p": {
+    "drop": 0.2,
+    "tgt": 0.15,
+    "hold": 10,
+    "stop": 0.15
+   },
+   "n": 1236,
+   "mean": -0.1276,
+   "median": -0.3258,
+   "win": 0.372,
+   "pf": 0.303,
+   "exits": {
+    "stop": 668,
+    "target": 277,
+    "target_open": 162,
+    "time": 129
+   }
+  },
+  {
+   "p": {
+    "drop": 0.2,
+    "tgt": 0.15,
+    "hold": 30,
+    "stop": 0.15
+   },
+   "n": 1236,
+   "mean": -0.1342,
+   "median": -0.3258,
+   "win": 0.383,
+   "pf": 0.298,
+   "exits": {
+    "end": 1,
+    "stop": 712,
+    "target": 303,
+    "target_open": 162,
+    "time": 58
+   }
+  },
+  {
+   "p": {
+    "drop": 0.2,
+    "tgt": 0.25,
+    "hold": 10,
+    "stop": 0.15
+   },
+   "n": 1214,
+   "mean": -0.1367,
+   "median": -0.3258,
+   "win": 0.308,
+   "pf": 0.32,
+   "exits": {
+    "stop": 721,
+    "target": 216,
+    "target_open": 88,
+    "time": 189
+   }
+  },
+  {
+   "p": {
+    "drop": 0.2,
+    "tgt": 0.25,
+    "hold": 30,
+    "stop": 0.15
+   },
+   "n": 1213,
+   "mean": -0.1476,
+   "median": -0.3258,
+   "win": 0.302,
+   "pf": 0.314,
+   "exits": {
+    "end": 2,
+    "stop": 786,
+    "target": 257,
+    "target_open": 88,
+    "time": 80
+   }
+  },
+  {
+   "p": {
+    "drop": 0.2,
+    "tgt": 0.4,
+    "hold": 10,
+    "stop": 0.15
+   },
+   "n": 1204,
+   "mean": -0.1389,
+   "median": -0.3258,
+   "win": 0.269,
+   "pf": 0.343,
+   "exits": {
+    "stop": 750,
+    "target": 164,
+    "target_open": 41,
+    "time": 249
+   }
+  },
+  {
+   "p": {
+    "drop": 0.2,
+    "tgt": 0.4,
+    "hold": 30,
+    "stop": 0.15
+   },
+   "n": 1193,
+   "mean": -0.1514,
+   "median": -0.3258,
+   "win": 0.246,
+   "pf": 0.344,
+   "exits": {
+    "end": 2,
+    "stop": 829,
+    "target": 211,
+    "target_open": 41,
+    "time": 110
+   }
+  },
+  {
+   "p": {
+    "drop": 0.25,
+    "tgt": 0.15,
+    "hold": 10,
+    "stop": 0.15
+   },
+   "n": 871,
+   "mean": -0.1263,
+   "median": -0.3258,
+   "win": 0.379,
+   "pf": 0.327,
+   "exits": {
+    "stop": 488,
+    "target": 187,
+    "target_open": 132,
+    "time": 64
+   }
+  },
+  {
+   "p": {
+    "drop": 0.25,
+    "tgt": 0.15,
+    "hold": 30,
+    "stop": 0.15
+   },
+   "n": 871,
+   "mean": -0.133,
+   "median": -0.3258,
+   "win": 0.383,
+   "pf": 0.319,
+   "exits": {
+    "stop": 516,
+    "target": 200,
+    "target_open": 132,
+    "time": 23
+   }
+  },
+  {
+   "p": {
+    "drop": 0.25,
+    "tgt": 0.25,
+    "hold": 10,
+    "stop": 0.15
+   },
+   "n": 860,
+   "mean": -0.137,
+   "median": -0.3258,
+   "win": 0.309,
+   "pf": 0.337,
+   "exits": {
+    "stop": 529,
+    "target": 153,
+    "target_open": 77,
+    "time": 101
+   }
+  },
+  {
+   "p": {
+    "drop": 0.25,
+    "tgt": 0.25,
+    "hold": 30,
+    "stop": 0.15
+   },
+   "n": 860,
+   "mean": -0.1483,
+   "median": -0.3258,
+   "win": 0.303,
+   "pf": 0.326,
+   "exits": {
+    "stop": 574,
+    "target": 175,
+    "target_open": 77,
+    "time": 34
+   }
+  },
+  {
+   "p": {
+    "drop": 0.25,
+    "tgt": 0.4,
+    "hold": 10,
+    "stop": 0.15
+   },
+   "n": 852,
+   "mean": -0.1371,
+   "median": -0.3258,
+   "win": 0.272,
+   "pf": 0.367,
+   "exits": {
+    "stop": 549,
+    "target": 129,
+    "target_open": 38,
+    "time": 136
+   }
+  },
+  {
+   "p": {
+    "drop": 0.25,
+    "tgt": 0.4,
+    "hold": 30,
+    "stop": 0.15
+   },
+   "n": 849,
+   "mean": -0.1537,
+   "median": -0.3258,
+   "win": 0.246,
+   "pf": 0.352,
+   "exits": {
+    "stop": 610,
+    "target": 152,
+    "target_open": 38,
+    "time": 49
+   }
+  },
+  {
+   "p": {
+    "drop": 0.3,
+    "tgt": 0.15,
+    "hold": 10,
+    "stop": 0.15
+   },
+   "n": 612,
+   "mean": -0.1263,
+   "median": -0.3258,
+   "win": 0.376,
+   "pf": 0.341,
+   "exits": {
+    "stop": 352,
+    "target": 130,
+    "target_open": 94,
+    "time": 36
+   }
+  },
+  {
+   "p": {
+    "drop": 0.3,
+    "tgt": 0.15,
+    "hold": 30,
+    "stop": 0.15
+   },
+   "n": 612,
+   "mean": -0.1341,
+   "median": -0.3258,
+   "win": 0.376,
+   "pf": 0.329,
+   "exits": {
+    "stop": 373,
+    "target": 136,
+    "target_open": 94,
+    "time": 9
+   }
+  },
+  {
+   "p": {
+    "drop": 0.3,
+    "tgt": 0.25,
+    "hold": 10,
+    "stop": 0.15
+   },
+   "n": 603,
+   "mean": -0.1393,
+   "median": -0.3258,
+   "win": 0.303,
+   "pf": 0.344,
+   "exits": {
+    "stop": 383,
+    "target": 103,
+    "target_open": 61,
+    "time": 56
+   }
+  },
+  {
+   "p": {
+    "drop": 0.3,
+    "tgt": 0.25,
+    "hold": 30,
+    "stop": 0.15
+   },
+   "n": 603,
+   "mean": -0.1485,
+   "median": -0.3258,
+   "win": 0.299,
+   "pf": 0.336,
+   "exits": {
+    "stop": 411,
+    "target": 117,
+    "target_open": 61,
+    "time": 14
+   }
+  },
+  {
+   "p": {
+    "drop": 0.3,
+    "tgt": 0.4,
+    "hold": 10,
+    "stop": 0.15
+   },
+   "n": 598,
+   "mean": -0.1379,
+   "median": -0.3258,
+   "win": 0.269,
+   "pf": 0.38,
+   "exits": {
+    "stop": 397,
+    "target": 91,
+    "target_open": 33,
+    "time": 77
+   }
+  },
+  {
+   "p": {
+    "drop": 0.3,
+    "tgt": 0.4,
+    "hold": 30,
+    "stop": 0.15
+   },
+   "n": 597,
+   "mean": -0.1502,
+   "median": -0.3258,
+   "win": 0.25,
+   "pf": 0.369,
+   "exits": {
+    "stop": 433,
+    "target": 107,
+    "target_open": 33,
+    "time": 24
+   }
+  }
+ ],
+ "built": "2026-10-29 23:54"
+}

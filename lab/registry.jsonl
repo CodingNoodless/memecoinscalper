@@ -71,3 +71,5 @@
 {"id": "MAX1", "family": "lottery-filter", "hypothesis": "Anti-lottery: steady curve climbers with no 1-min spike, hold 30-90 min", "status": "idea", "variants": 12, "t": "2026-10-29 23:50"}
 {"id": "TOD1", "family": "intraday-seasonality", "hypothesis": "Buy live tokens before the US-evening retail peak (23-00 UTC), sell 1-3 h later", "status": "idea", "variants": 12, "t": "2026-10-29 23:50"}
 {"id": "VD1", "family": "supply-exhaustion-candles", "hypothesis": "Volume dry-up after first burst with price >= 70% of max, curve reserve >= 45 SOL", "status": "idea", "variants": 12, "t": "2026-10-29 23:50"}
+{"id": "LP1", "status": "backtest", "note": "prereg 2026-10-29, Experiments note written before run", "t": "2026-10-29 23:53"}
+{"id": "LP1", "status": "killed", "note": "best-on-train variant net -12.6% (train n 871) / -12.2% (validation n 123), PF 0.37, 7/7 validation gates fail; gross ~0% (train -0.2%, val +0.5%)", "t": "2026-10-29 23:54"}
