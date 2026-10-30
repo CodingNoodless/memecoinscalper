@@ -1,4 +1,9 @@
 .env
+AGENTS.md
+CLAUDE.md
+.agents/
+.claude/
+
 paper_wallet.json
 trade_history.json
 token_attempts.json
