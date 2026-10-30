@@ -19,31 +19,46 @@ TAKER = 0.0005        # Binance futures VIP0 taker per side (sourced); funding n
 
 
 def pls1() -> None:
-    files = sorted((DATA_DIR / "perps").glob("*.json"))
-    coins = {}
-    for f in files:
+    """Skeptic fixes: listings = series starting after 2023-01-02 (the dataset's start is not a listing), no BTC/ETH/SOL,
+    funding from the data (`f`: [t, rate] per 8 h; a short receives +rate), a BTC-hedged column, results by month."""
+    import bisect
+    import time as _t
+    load = lambda s: json.loads((DATA_DIR / "perps" / f"{s}.json").read_text())  # noqa: E731
+    btc = load("BTC")["k"]
+    bt = [x[0] for x in btc]
+    rows = []
+    for f in sorted((DATA_DIR / "perps").glob("*.json")):
         d = json.loads(f.read_text())
-        k = d.get("k") or []
-        if len(k) > 24 * 40:
-            coins[d["sym"]] = k
-    first = {s: k[0][0] for s, k in coins.items()}
-    floor = min(first.values())
-    # a coin whose series starts at the dataset's common start may predate the data (not a listing): excluded
-    listed = {s: k for s, k in coins.items() if first[s] > floor + 86400}
-    print(f"coins with hourly data: {len(coins)}; series starting after the common start (treated as listings): {len(listed)}")
+        if d["sym"] in ("BTC", "ETH", "SOL") or not d.get("k") or d["k"][0][0] <= 1672617600:
+            continue
+        rows.append(d)
+    print(f"real listings (first candle after 2023-01-02, no BTC/ETH/SOL): {len(rows)}: "
+          + ", ".join(f"{d['sym']} {_t.strftime('%Y-%m', _t.gmtime(d['k'][0][0]))}" for d in rows))
     for D in (1, 3, 7):
         for K in (7, 30):
-            rets = []
-            for s, k in listed.items():
+            res = []
+            for d in rows:
+                k = d["k"]
                 i0, i1 = 24 * D, 24 * (D + K)
                 if i1 >= len(k):
                     continue
-                p_in, p_out = k[i0][1], k[i1][1]          # open of the entry hour, open of the exit hour
-                rets.append((p_in - p_out) / p_in - 2 * TAKER)
-            if rets:
-                print(f"D {D} K {K:>2}: n {len(rets)}, mean {statistics.mean(rets):+.2%}, median {statistics.median(rets):+.2%},"
-                      f" win {sum(r > 0 for r in rets) / len(rets):.0%}")
-    print("kill rule: mean < +10% or median < 0 in the cell; n <= 38 can never pass 300 trades (killtest only)")
+                t_in, t_out = k[i0][0], k[i1][0]
+                p_in, p_out = k[i0][1], k[i1][1]
+                fund = sum(r for t, r in d.get("f") or [] if t_in <= t < t_out)
+                short = (p_in - p_out) / p_in + fund - 2 * TAKER
+                j0, j1 = bisect.bisect_left(bt, t_in), bisect.bisect_left(bt, t_out)
+                hedge = (btc[min(j1, len(btc) - 1)][1] / btc[min(j0, len(btc) - 1)][1] - 1) - 2 * TAKER
+                res.append((short, short + hedge, _t.strftime("%Y-%m", _t.gmtime(t_in))))
+            if res:
+                sh = [x[0] for x in res]
+                hd = [x[1] for x in res]
+                by = {}
+                for x in res:
+                    by.setdefault(x[2][:7], []).append(x[0])
+                print(f"D {D} K {K:>2}: n {len(res)}, short mean {statistics.mean(sh):+.1%} median {statistics.median(sh):+.1%} "
+                      f"win {sum(r > 0 for r in sh) / len(sh):.0%} | BTC-hedged mean {statistics.mean(hd):+.1%} median "
+                      f"{statistics.median(hd):+.1%} | months with mean > 0: {sum(statistics.mean(v) > 0 for v in by.values())}/{len(by)}")
+    print("kill rule (prereg): mean < +10% or median < 0 (hedged column is the cleaner read); n ~31 can never pass 300")
 
 
 MEME = re.compile(r"\b(bonk|wif|dogwifhat|pepe|pengu|fartcoin|trump coin|\$trump|doge|dogecoin|shib|shiba|pump\.fun|\$pump|"

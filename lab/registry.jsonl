@@ -86,3 +86,4 @@
 {"id": "CLN1", "family": "copycat-confusion", "hypothesis": "Buy the flow leader of a same-ticker launch cluster, time exit", "status": "idea", "variants": 8, "t": "2026-10-30 10:19"}
 {"id": "BRD1", "family": "market-regime", "hypothesis": "Buy graduates only in hot market-breadth regimes, time exit", "status": "idea", "variants": 6, "t": "2026-10-30 10:19"}
 {"id": "PMN1", "family": "prediction-longshot-memecoin", "hypothesis": "Buy 'no' on memecoin moonshot contracts at 3-20c (killtest, existing data)", "status": "idea", "variants": 4, "t": "2026-10-30 10:19"}
+{"id": "PLS1", "status": "killed", "note": "31 real listings; short mean below +10% in all 6 cells (best BTC-hedged +7.2% at D3/K7); medians positive (up to +24% hedged) but squeezes make means ", "t": "2026-10-30 10:20"}

@@ -1,0 +1,8 @@
+real listings (first candle after 2023-01-02, no BTC/ETH/SOL): 31: 1000BONK 2023-11, 1000CAT 2024-10, 1000CHEEMS 2024-11, 1000FLOKI 2023-05, 1000PEPE 2023-05, 1000SATS 2023-12, ACT 2024-11, AI16Z 2025-01, BOME 2024-03, BRETT 2024-08, CHILLGUY 2024-11, DOGS 2024-08, FARTCOIN 2024-12, GOAT 2024-10, GRIFFAIN 2025-01, MEME 2023-11, MEW 2024-06, MOODENG 2024-10, NEIRO 2024-09, NOT 2024-05, PENGU 2024-12, PNUT 2024-11, PONKE 2024-11, POPCAT 2024-08, PUMP 2025-04, SPX 2024-12, TRUMP 2025-01, TURBO 2024-05, USELESS 2025-08, WIF 2024-01, ZEREBRO 2025-01
+D 1 K  7: n 31, short mean -8.1% median +9.1% win 65% | BTC-hedged mean -6.6% median +7.2% | months with mean > 0: 10/15
+D 1 K 30: n 31, short mean -28.0% median -0.2% win 48% | BTC-hedged mean -18.3% median +20.3% | months with mean > 0: 6/15
+D 3 K  7: n 31, short mean +5.9% median +11.8% win 61% | BTC-hedged mean +7.2% median +12.0% | months with mean > 0: 9/15
+D 3 K 30: n 31, short mean -13.1% median +16.2% win 52% | BTC-hedged mean -4.4% median +23.9% | months with mean > 0: 9/15
+D 7 K  7: n 31, short mean -8.8% median +3.8% win 58% | BTC-hedged mean -6.6% median +6.7% | months with mean > 0: 6/15
+D 7 K 30: n 31, short mean -7.9% median +21.7% win 58% | BTC-hedged mean +0.2% median +19.5% | months with mean > 0: 10/15
+kill rule (prereg): mean < +10% or median < 0 (hedged column is the cleaner read); n ~31 can never pass 300
