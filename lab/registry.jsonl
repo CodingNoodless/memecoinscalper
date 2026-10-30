@@ -79,3 +79,5 @@
 {"id": "VD1", "status": "killed", "note": "all 12 train variants lose -7.0% to -12.1% net; chosen variant train n 1300 net -7.0% (gross 0.0%), validation n 113 net -7.9% (gross -0.4%); 7/7 gate", "t": "2026-10-29 23:56"}
 {"id": "LP2", "status": "backtest", "note": "prereg 2026-10-29 written before run", "t": "2026-10-29 23:56"}
 {"id": "LP2", "status": "killed", "note": "all 12 train variants lose -15.1% to -17.7% net; chosen variant train n 399 (98 tokens) net -15.1% (gross -2.8%), validation n 42 (8 tokens) net -6.2%", "t": "2026-10-29 23:56"}
+{"id": "TOD1", "status": "backtest", "note": "prereg 2026-10-29 written before run", "t": "2026-10-29 23:56"}
+{"id": "TOD1", "status": "killed", "note": "chosen variant train n 26 (one night) net -13.2% (gross +0.3%), validation n 8 (one night) net -39.7%; all 12 train variants -13% to -45%; 6 gates fai", "t": "2026-10-29 23:57"}
