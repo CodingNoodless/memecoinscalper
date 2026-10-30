@@ -1,0 +1,14 @@
+VALIDATION MAX1: C:\Users\Rohit\PycharmProjects\tradeslavebot\lab\results\MAX1\trades.jsonl | train n 58 mean -14.59% (not gated) | trials: family lottery-filter: registry 12 + Hypothesis count 20
+gate                        value                              threshold                    result
+min_trades_oos              4                                  >= 300                       FAIL
+profit_factor_after_costs   0.514                              > 1.3                        FAIL
+expectancy_ci95_lower       -0.3659                            > 0.0                        FAIL
+max_drawdown                5.4%                               < 35% @ 10%/trade            PASS
+param_stability             min PF 0.257 (shift_maxret_down, 10 shifts) > 1.1                        FAIL
+outlier_test                -0.1812 (n 3)                      mean > 0 w/o top 5%          FAIL
+deflated_sharpe_prob        0.009 (trials 32)                  > 0.95                       FAIL
+holdout_profit_factor       -                                  > 1.2                        PENDING (--final only)
+capacity                    0.00 SOL                           report only                  -
+avg net return per trade -8.89% vs benchmark +5% (below)
+lab/gates.yaml @ 174435d
+FAIL (6 gate(s) failed)

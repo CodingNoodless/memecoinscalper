@@ -73,3 +73,5 @@
 {"id": "VD1", "family": "supply-exhaustion-candles", "hypothesis": "Volume dry-up after first burst with price >= 70% of max, curve reserve >= 45 SOL", "status": "idea", "variants": 12, "t": "2026-10-29 23:50"}
 {"id": "LP1", "status": "backtest", "note": "prereg 2026-10-29, Experiments note written before run", "t": "2026-10-29 23:53"}
 {"id": "LP1", "status": "killed", "note": "best-on-train variant net -12.6% (train n 871) / -12.2% (validation n 123), PF 0.37, 7/7 validation gates fail; gross ~0% (train -0.2%, val +0.5%)", "t": "2026-10-29 23:54"}
+{"id": "MAX1", "status": "backtest", "note": "prereg 2026-10-29 written before run", "t": "2026-10-29 23:55"}
+{"id": "MAX1", "status": "killed", "note": "all 12 train variants lose -11.8% to -25.6% net; chosen variant train n 58 net -14.6% (gross -2.6%), validation n 4; 6 gates fail incl. 300-trade mini", "t": "2026-10-29 23:55"}
