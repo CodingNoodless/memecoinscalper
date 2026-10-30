@@ -1,0 +1,102 @@
+[
+ {
+  "provider": "public",
+  "label": "public-1",
+  "host": "api.mainnet-beta.solana.com",
+  "status": "working",
+  "last_error": null,
+  "credits_used": null,
+  "checked": "2026-10-30 09:48",
+  "reset_date": null
+ },
+ {
+  "provider": "helius",
+  "label": "helius-1",
+  "host": "mainnet.helius-rpc.com",
+  "status": "exhausted",
+  "last_error": "429 max usage reached",
+  "credits_used": null,
+  "checked": "2026-10-30 09:48",
+  "reset_date": "2026-11-01"
+ },
+ {
+  "provider": "helius",
+  "label": "helius-2",
+  "host": "mainnet.helius-rpc.com",
+  "status": "working",
+  "last_error": null,
+  "credits_used": null,
+  "checked": "2026-10-30 09:48",
+  "reset_date": null
+ },
+ {
+  "provider": "helius",
+  "label": "helius-3",
+  "host": "mainnet.helius-rpc.com",
+  "status": "working",
+  "last_error": null,
+  "credits_used": null,
+  "checked": "2026-10-30 09:48",
+  "reset_date": null
+ },
+ {
+  "provider": "helius",
+  "label": "helius-4",
+  "host": "mainnet.helius-rpc.com",
+  "status": "working",
+  "last_error": null,
+  "credits_used": null,
+  "checked": "2026-10-30 09:48",
+  "reset_date": null
+ },
+ {
+  "provider": "helius",
+  "label": "helius-5",
+  "host": "mainnet.helius-rpc.com",
+  "status": "working",
+  "last_error": null,
+  "credits_used": null,
+  "checked": "2026-10-30 09:48",
+  "reset_date": null
+ },
+ {
+  "provider": "helius",
+  "label": "helius-6",
+  "host": "mainnet.helius-rpc.com",
+  "status": "working",
+  "last_error": null,
+  "credits_used": null,
+  "checked": "2026-10-30 09:48",
+  "reset_date": null
+ },
+ {
+  "provider": "rpcfast",
+  "label": "rpcfast-1",
+  "host": "solana-rpc.rpcfast.com",
+  "status": "working",
+  "last_error": null,
+  "credits_used": null,
+  "checked": "2026-10-30 09:48",
+  "reset_date": null
+ },
+ {
+  "provider": "shyft",
+  "label": "shyft-1",
+  "host": "rpc.shyft.to",
+  "status": "working",
+  "last_error": null,
+  "credits_used": null,
+  "checked": "2026-10-30 09:48",
+  "reset_date": null
+ },
+ {
+  "provider": "helius",
+  "label": "helius-7",
+  "host": "mainnet.helius-rpc.com",
+  "status": "exhausted",
+  "last_error": "429 max usage reached",
+  "credits_used": null,
+  "checked": "2026-10-30 09:48",
+  "reset_date": "2026-11-01"
+ }
+]

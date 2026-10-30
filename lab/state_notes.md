@@ -1,6 +1,5 @@
 <!-- Hand-written "current work" section, copied into vault STATE.md by `tools/lab.py brief`.
 Keep it short: what step is in progress, what's next, blockers. Overwrite, don't append. -->
-- Round 2: Phase 0 DONE (7b4c5d2). Phase 1 NOT started (waiting for Rohit's OK on the plan).
-- Measured 2026-10-30: public-RPC curve backfill ~57 s/token (7 tokens, 0.2-0.35 calls/s, dead coins 1-33 txs); GeckoTerminal pool OHLCV 1 call/graduate (642 candles in 0.55 s).
-- Create log data/c1/creates.jsonl ~21-25k/day from Oct 21 (46% zero dev buy; outages Oct 25-26); Oct 17-20 only launch_watch (biased).
-- Plan: forward all-trades recorder first, GeckoTerminal for graduates, sampled curve backfill Oct 21-29; ETA 14 days ~Nov 13 (free RPC only).
+- Overnight run (round 2). Recorder running since 09:46 (data/recorder, ~70 MB/day). chain_backfill running since 09:51: Helius gTFA, 5 keys, ~34k tokens/h, 153k creates Oct 21+, ETA ~14:30 PDT.
+- Endpoints: public 1/1, helius 5/7 (2 exhausted to 11-01), rpcfast 1/1, shyft 1/1.
+- Next: candle builder (raw trades -> 1-min OHLCV + reserves) + match check vs v1 on data/full_trades; GeckoTerminal graduates.
