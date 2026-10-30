@@ -25,8 +25,8 @@ from .chain_backfill import GRAD_VS
 from .gzlines import records
 from .research_data import K_POOL
 
-FIT_BEFORE = 1793188800.0        # 2026-10-23 12:00 UTC
-TEST_BEFORE = 1793318400.0       # 2026-10-25 00:00 UTC
+FIT_BEFORE = 1792756800.0        # 2026-10-23 12:00 UTC (checked with calendar.timegm)
+TEST_BEFORE = 1792886400.0       # 2026-10-25 00:00 UTC (checked with calendar.timegm)
 POOLS = DATA_DIR / "chain" / "pool_candles"
 
 
