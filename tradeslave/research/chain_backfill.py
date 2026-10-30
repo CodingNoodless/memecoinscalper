@@ -14,7 +14,7 @@ as the live feed). Window: create - 30 s .. create + 7 days (the curve stops tra
 
 Keys: one worker per working Helius key in lab/endpoints.json (tools/endpoints.py; labels only, never keys). A key
 that answers "max usage reached" is marked exhausted with its reset date and its worker stops; the others go on.
-Output: data/chain/curve/part-<worker>.jsonl.gz, one token per line:
+Output: data/chain/curve/part-<worker>-<run>.jsonl.gz (a new file per run; read with research.gzlines), one token per line:
   {"m", "bc", "t0", "n_tx", "trades": [[slot, ts, user, buy, sol_lamports, tok_raw, vs, vt], ...]}
 Graduates (curve reached ~115 SOL virtual = complete) also go to data/chain/graduates.jsonl {"m", "t_grad", "t0"} for
 the GeckoTerminal pool-candle job (research.gecko_grads).
@@ -68,20 +68,15 @@ def todo_list(done: set[str]) -> list[dict]:
 def done_mints() -> set[str]:
     """Mints already fetched; also (re)writes graduates.jsonl from the parts so it is complete after a restart."""
     done, grads = set(), []
+    from .gzlines import records
     for f in glob.glob(str(OUT / "part-*.jsonl.gz")):
-        try:
-            with gzip.open(f, "rt", encoding="utf-8") as fh:
-                for line in fh:
-                    try:
-                        d = json.loads(line)
-                    except ValueError:
-                        continue
-                    done.add(d["m"])
-                    g = next((t for t in d["trades"] if t[6] >= GRAD_VS), None)
-                    if g:
-                        grads.append({"m": d["m"], "t_grad": g[1], "t0": d["t0"]})
-        except EOFError:                      # a part cut mid-write by a crash: complete lines were read
-            pass
+        for d in records(f):                   # tolerant: parts cut by a crash keep their complete lines
+            if "m" not in d or d["m"] in done:
+                continue
+            done.add(d["m"])
+            g = next((t for t in d.get("trades", []) if t[6] >= GRAD_VS), None)
+            if g:
+                grads.append({"m": d["m"], "t_grad": g[1], "t0": d["t0"]})
     GRADS.parent.mkdir(parents=True, exist_ok=True)
     GRADS.write_text("".join(json.dumps(g) + "\n" for g in grads), encoding="utf-8")
     return done
@@ -116,6 +111,7 @@ def mark_exhausted(label: str, err: str) -> None:
 
 
 LOCK = threading.Lock()
+RUN = time.strftime("%Y%m%d%H%M")
 
 
 def trades_of(txs: list, mint: str) -> list[list]:
@@ -133,7 +129,7 @@ def worker(label: str, url: str, q: list, stats: dict) -> None:
     rpc = Rpc(url, 8.0)
     rpc.attempts = 4
     OUT.mkdir(parents=True, exist_ok=True)
-    fh = gzip.open(OUT / f"part-{label}.jsonl.gz", "at", encoding="utf-8")
+    fh = gzip.open(OUT / f"part-{label}-{RUN}.jsonl.gz", "wt", encoding="utf-8")   # a new part per run
     n_since_flush = 0
     while True:
         with LOCK:
