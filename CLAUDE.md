@@ -126,3 +126,7 @@ Lessons-Learned updated for anything killed, commit. (`AGENTS.md` is the Codex c
 - `/goal` and `/loop`: see "Autonomous runs" above.
 - Subagents: `skeptic` (attack any claimed edge), `researcher` (sourced findings → vault), `experiment-runner`
   (executes one pre-registered test exactly), `scribe` (vault bookkeeping).
+
+## Commit conventions
+- Never add "Co-Authored-By" lines to commits.
+- Do not include Claude attribution in commit messages or PR descriptions.

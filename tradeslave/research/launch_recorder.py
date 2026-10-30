@@ -50,6 +50,8 @@ from ..scalper.trade_events import b58encode, parse_trade_events
 
 PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
 PUMPSWAP = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"
+LAUNCHLAB = "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj"     # Raydium LaunchLab (bonk.fun); raydium-idl, sourced
+METEORA_DBC = "dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN"   # Meteora Dynamic Bonding Curve; Meteora SDK docs, sourced
 OUT = DATA_DIR / "recorder"
 COMPLETE_EVENT = hashlib.sha256(b"event:CompleteEvent").digest()[:8]
 CREATE_EVENT = hashlib.sha256(b"event:CreateEvent").digest()[:8]
@@ -313,11 +315,22 @@ def run() -> None:
             if set(ins) & LIFECYCLE:
                 swapx.write([round(now, 3), slot, sig, ins, other])
 
-    for program, name, handle in ((PUMP, "pump", on_pump), (PUMPSWAP, "swap", on_swap)):
+    lab, dbc = Sink("llab"), Sink("dbc")
+
+    def other_venue(sink):
+        """Raydium LaunchLab / Meteora DBC emit their events by self-CPI (not in logs), so only signature, slot and
+        instruction names are kept: enough to count launches and trades per venue and to fetch a sample later."""
+        def on(now, slot, sig, logs):
+            ins = [x[len("Program log: Instruction: "):] for x in logs if x.startswith("Program log: Instruction: ")]
+            sink.write([slot, round(now, 1), sig, [i for i in ins if i not in ROUTINE][:6]])
+        return on
+
+    for program, name, handle in ((PUMP, "pump", on_pump), (PUMPSWAP, "swap", on_swap),
+                                  (LAUNCHLAB, "llab", other_venue(lab)), (METEORA_DBC, "dbc", other_venue(dbc))):
         seen = Seen()
         for url in wss:
             threading.Thread(target=listen, args=(program, name, handle, url, seen), daemon=True).start()
-    sinks = (pump, comp, swap, swapx, create)
+    sinks = (pump, comp, swap, swapx, create, lab, dbc)
     last = {s.stream: 0 for s in sinks}
     t_note = time.time()
     while True:
