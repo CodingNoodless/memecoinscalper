@@ -72,7 +72,8 @@ def pmn1() -> None:
         for line in fh:
             m = json.loads(line)
             q = m.get("q") or ""
-            if MEME.search(q) and TARGET.search(q) and m.get("res") and len(m["res"]) == 2 and m.get("end"):
+            gov = re.search(r"department|government|efficiency|cuts?|federal|spending|savings|musk", q, re.I)
+            if MEME.search(q) and TARGET.search(q) and not gov and m.get("res") and len(m["res"]) == 2 and m.get("end"):
                 markets[m["id"]] = m
     hist = {}
     with (DATA_DIR / "poly" / "hist_all.jsonl").open(encoding="utf-8") as fh:
@@ -83,7 +84,7 @@ def pmn1() -> None:
     print(f"memecoin target markets with a resolution: {len(markets)}; with price history: {len(hist)}")
     for lo, hi in ((0.03, 0.10), (0.10, 0.20)):
         for days in (7, 30):
-            rets = []
+            rets, evs = [], set()
             for mid, h in hist.items():
                 m = markets[mid]
                 t_end = m.get("closed") or m["end"]
@@ -93,14 +94,16 @@ def pmn1() -> None:
                     continue
                 cost_no = 1 - pt[1] + 0.01                     # buy 'no' at 1 - yes + 1c slippage (assumption)
                 rets.append(((1 - yes_paid) - cost_no) / cost_no)
+                evs.add(m.get("event"))
             if rets:
-                print(f"yes {lo:.2f}-{hi:.2f}, >= {days:>2} d before end: n {len(rets)}, mean {statistics.mean(rets):+.2%},"
+                print(f"yes {lo:.2f}-{hi:.2f}, >= {days:>2} d before end: n {len(rets)} in {len(evs)} events, mean {statistics.mean(rets):+.2%},"
                       f" median {statistics.median(rets):+.2%}, 'yes' won {sum(r < 0 for r in rets)}")
             else:
                 print(f"yes {lo:.2f}-{hi:.2f}, >= {days} d: n 0")
     # sanity: res[0] is the yes payout if final yes prices sit near res[0]
     agree = [abs(h[-1][1] - float(markets[i]["res"][0])) < 0.2 for i, h in hist.items() if h]
     print(f"res[0] = yes payout check: last yes price within 0.2 of res[0] in {sum(agree)}/{len(agree)} markets")
+    print("caveat: only RESOLVED markets are in the file, so long-dated strikes appear only if they resolved early (hit)")
     print("kill rule: mean < +10% per contract or fewer than 50 qualifying markets")
 
 

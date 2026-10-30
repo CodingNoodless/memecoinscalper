@@ -1,0 +1,8 @@
+memecoin target markets with a resolution: 88; with price history: 28
+yes 0.03-0.10, >= 7 d: n 0
+yes 0.03-0.10, >= 30 d: n 0
+yes 0.10-0.20, >= 7 d: n 0
+yes 0.10-0.20, >= 30 d: n 0
+res[0] = yes payout check: last yes price within 0.2 of res[0] in 28/28 markets
+caveat: only RESOLVED markets are in the file, so long-dated strikes appear only if they resolved early (hit)
+kill rule: mean < +10% per contract or fewer than 50 qualifying markets
