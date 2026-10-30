@@ -1,0 +1,252 @@
+{
+ "chosen": {
+  "vfrac": 0.1,
+  "hold": 30,
+  "stop": 0.25,
+  "tgt": 0.3
+ },
+ "chosen_by": "best train mean (n >= 30)",
+ "grid": [
+  {
+   "p": {
+    "vfrac": 0.1,
+    "hold": 30,
+    "stop": 0.15,
+    "tgt": 0.3
+   },
+   "n": 1361,
+   "mean": -0.0789,
+   "median": -0.0544,
+   "win": 0.251,
+   "pf": 0.34,
+   "exits": {
+    "end": 24,
+    "stop": 362,
+    "target": 188,
+    "target_open": 3,
+    "time": 784
+   }
+  },
+  {
+   "p": {
+    "vfrac": 0.1,
+    "hold": 30,
+    "stop": 0.25,
+    "tgt": 0.3
+   },
+   "n": 1300,
+   "mean": -0.0703,
+   "median": -0.0508,
+   "win": 0.272,
+   "pf": 0.378,
+   "exits": {
+    "end": 25,
+    "stop": 216,
+    "target": 188,
+    "target_open": 3,
+    "time": 868
+   }
+  },
+  {
+   "p": {
+    "vfrac": 0.1,
+    "hold": 120,
+    "stop": 0.15,
+    "tgt": 0.3
+   },
+   "n": 833,
+   "mean": -0.0987,
+   "median": -0.1219,
+   "win": 0.342,
+   "pf": 0.413,
+   "exits": {
+    "end": 27,
+    "stop": 399,
+    "target": 227,
+    "target_open": 3,
+    "time": 177
+   }
+  },
+  {
+   "p": {
+    "vfrac": 0.1,
+    "hold": 120,
+    "stop": 0.25,
+    "tgt": 0.3
+   },
+   "n": 740,
+   "mean": -0.0883,
+   "median": -0.0512,
+   "win": 0.391,
+   "pf": 0.472,
+   "exits": {
+    "end": 27,
+    "stop": 261,
+    "target": 228,
+    "target_open": 3,
+    "time": 221
+   }
+  },
+  {
+   "p": {
+    "vfrac": 0.2,
+    "hold": 30,
+    "stop": 0.15,
+    "tgt": 0.3
+   },
+   "n": 1829,
+   "mean": -0.0921,
+   "median": -0.0663,
+   "win": 0.276,
+   "pf": 0.353,
+   "exits": {
+    "end": 25,
+    "stop": 658,
+    "target": 305,
+    "target_open": 21,
+    "time": 820
+   }
+  },
+  {
+   "p": {
+    "vfrac": 0.2,
+    "hold": 30,
+    "stop": 0.25,
+    "tgt": 0.3
+   },
+   "n": 1660,
+   "mean": -0.0795,
+   "median": -0.052,
+   "win": 0.305,
+   "pf": 0.408,
+   "exits": {
+    "end": 25,
+    "stop": 390,
+    "target": 303,
+    "target_open": 16,
+    "time": 926
+   }
+  },
+  {
+   "p": {
+    "vfrac": 0.2,
+    "hold": 120,
+    "stop": 0.15,
+    "tgt": 0.3
+   },
+   "n": 1263,
+   "mean": -0.1137,
+   "median": -0.3258,
+   "win": 0.328,
+   "pf": 0.393,
+   "exits": {
+    "end": 28,
+    "stop": 693,
+    "target": 342,
+    "target_open": 22,
+    "time": 178
+   }
+  },
+  {
+   "p": {
+    "vfrac": 0.2,
+    "hold": 120,
+    "stop": 0.25,
+    "tgt": 0.3
+   },
+   "n": 1059,
+   "mean": -0.0997,
+   "median": -0.0766,
+   "win": 0.398,
+   "pf": 0.469,
+   "exits": {
+    "end": 28,
+    "stop": 446,
+    "target": 345,
+    "target_open": 17,
+    "time": 223
+   }
+  },
+  {
+   "p": {
+    "vfrac": 0.3,
+    "hold": 30,
+    "stop": 0.15,
+    "tgt": 0.3
+   },
+   "n": 2180,
+   "mean": -0.1004,
+   "median": -0.0832,
+   "win": 0.28,
+   "pf": 0.35,
+   "exits": {
+    "end": 25,
+    "stop": 888,
+    "target": 399,
+    "target_open": 32,
+    "time": 836
+   }
+  },
+  {
+   "p": {
+    "vfrac": 0.3,
+    "hold": 30,
+    "stop": 0.25,
+    "tgt": 0.3
+   },
+   "n": 1937,
+   "mean": -0.0878,
+   "median": -0.0549,
+   "win": 0.314,
+   "pf": 0.408,
+   "exits": {
+    "end": 25,
+    "stop": 543,
+    "target": 402,
+    "target_open": 27,
+    "time": 940
+   }
+  },
+  {
+   "p": {
+    "vfrac": 0.3,
+    "hold": 120,
+    "stop": 0.15,
+    "tgt": 0.3
+   },
+   "n": 1603,
+   "mean": -0.1212,
+   "median": -0.3258,
+   "win": 0.325,
+   "pf": 0.38,
+   "exits": {
+    "end": 28,
+    "stop": 929,
+    "target": 436,
+    "target_open": 32,
+    "time": 178
+   }
+  },
+  {
+   "p": {
+    "vfrac": 0.3,
+    "hold": 120,
+    "stop": 0.25,
+    "tgt": 0.3
+   },
+   "n": 1320,
+   "mean": -0.1065,
+   "median": -0.1124,
+   "win": 0.402,
+   "pf": 0.461,
+   "exits": {
+    "end": 28,
+    "stop": 598,
+    "target": 443,
+    "target_open": 27,
+    "time": 224
+   }
+  }
+ ],
+ "built": "2026-10-29 23:55"
+}

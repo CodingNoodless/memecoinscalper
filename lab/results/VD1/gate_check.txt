@@ -1,0 +1,14 @@
+VALIDATION VD1: C:\Users\Rohit\PycharmProjects\tradeslavebot\lab\results\VD1\trades.jsonl | train n 1300 mean -7.03% (not gated) | trials: family supply-exhaustion-candles: registry 12 + Hypothesis count 10
+gate                        value                              threshold                    result
+min_trades_oos              113                                >= 300                       FAIL
+profit_factor_after_costs   0.386                              > 1.3                        FAIL
+expectancy_ci95_lower       -0.1185                            > 0.0                        FAIL
+max_drawdown                61.4%                              < 35% @ 10%/trade            FAIL
+param_stability             min PF 0.348 (shift_stop_down, 8 shifts) > 1.1                        FAIL
+outlier_test                -0.0979 (n 107)                    mean > 0 w/o top 5%          FAIL
+deflated_sharpe_prob        0.000 (trials 22)                  > 0.95                       FAIL
+holdout_profit_factor       -                                  > 1.2                        PENDING (--final only)
+capacity                    0.00 SOL                           report only                  -
+avg net return per trade -7.94% vs benchmark +5% (below)
+lab/gates.yaml @ 174435d
+FAIL (7 gate(s) failed)
