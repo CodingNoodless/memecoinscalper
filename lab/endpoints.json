@@ -6,7 +6,7 @@
   "status": "working",
   "last_error": null,
   "credits_used": null,
-  "checked": "2026-10-30 09:48",
+  "checked": "2026-10-30 10:12",
   "reset_date": null
  },
  {
@@ -26,7 +26,7 @@
   "status": "working",
   "last_error": null,
   "credits_used": null,
-  "checked": "2026-10-30 09:48",
+  "checked": "2026-10-30 10:12",
   "reset_date": null
  },
  {
@@ -36,7 +36,7 @@
   "status": "working",
   "last_error": null,
   "credits_used": null,
-  "checked": "2026-10-30 09:48",
+  "checked": "2026-10-30 10:12",
   "reset_date": null
  },
  {
@@ -46,7 +46,7 @@
   "status": "working",
   "last_error": null,
   "credits_used": null,
-  "checked": "2026-10-30 09:48",
+  "checked": "2026-10-30 10:12",
   "reset_date": null
  },
  {
@@ -56,18 +56,18 @@
   "status": "working",
   "last_error": null,
   "credits_used": null,
-  "checked": "2026-10-30 09:48",
+  "checked": "2026-10-30 10:12",
   "reset_date": null
  },
  {
   "provider": "helius",
   "label": "helius-6",
   "host": "mainnet.helius-rpc.com",
-  "status": "working",
-  "last_error": null,
+  "status": "exhausted",
+  "last_error": "429 max usage reached",
   "credits_used": null,
-  "checked": "2026-10-30 09:48",
-  "reset_date": null
+  "checked": "2026-10-30 10:13",
+  "reset_date": "2026-11-01"
  },
  {
   "provider": "rpcfast",
@@ -76,7 +76,7 @@
   "status": "working",
   "last_error": null,
   "credits_used": null,
-  "checked": "2026-10-30 09:48",
+  "checked": "2026-10-30 10:12",
   "reset_date": null
  },
  {
@@ -86,7 +86,7 @@
   "status": "working",
   "last_error": null,
   "credits_used": null,
-  "checked": "2026-10-30 09:48",
+  "checked": "2026-10-30 10:12",
   "reset_date": null
  },
  {
