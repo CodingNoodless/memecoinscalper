@@ -71,15 +71,24 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=12000)
     ap.add_argument("--fix", action="store_true")
+    ap.add_argument("--creates", action="store_true",
+                    help="draw launches from data/c1/creates.jsonl (launch_watch create log, Oct 21+) instead of the ticks")
     a = ap.parse_args()
     if a.fix:
         fix_truncated()
         return
     OUT.mkdir(parents=True, exist_ok=True)
     t0s = {}
-    for r in read_ticks(sorted(TICK_DIR.glob("*.jsonl.gz"))):
-        if r.get("k") == "create" and r.get("m") and r.get("bc") and not r.get("mh"):
-            t0s[r["m"]] = float(r["t"])
+    if a.creates:
+        with (DATA_DIR / "c1" / "creates.jsonl").open(encoding="utf-8") as fh:
+            for line in fh:
+                r = json.loads(line)
+                if r.get("m") and not r.get("mh"):
+                    t0s.setdefault(r["m"], float(r["t"]))
+    else:
+        for r in read_ticks(sorted(TICK_DIR.glob("*.jsonl.gz"))):
+            if r.get("k") == "create" and r.get("m") and r.get("bc") and not r.get("mh"):
+                t0s[r["m"]] = float(r["t"])
     mints = sorted(t0s)
     random.Random(11).shuffle(mints)
     todo = [m for m in mints[: a.n] if not (OUT / f"{m}.json").exists()]

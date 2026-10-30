@@ -1,0 +1,69 @@
+{
+ "built": "2026-10-29 23:46",
+ "sources": [
+  "long_paths",
+  "long_paths_busy"
+ ],
+ "universe": "random sample of all pump.fun creates (+ busy sample), rugged/dead included",
+ "reserves": "derived from close price (curve exact; pool assumes no LP changes)",
+ "gap_hours": 6.0,
+ "dropped_in_gaps": 8626,
+ "all": {
+  "tokens": 52689,
+  "t0_min": "2026-10-13 03:25",
+  "t0_max": "2026-10-17 01:24",
+  "graduated_share": 0.0201,
+  "rugged_share": 0.0303,
+  "died_share": 0.9784,
+  "rugged_or_died_share": 0.9785,
+  "busy_share": 0.0051,
+  "candles": 684245
+ },
+ "splits": {
+  "train": {
+   "tokens": 31568,
+   "t0_min": "2026-10-13 03:25",
+   "t0_max": "2026-10-15 16:16",
+   "graduated_share": 0.0203,
+   "rugged_share": 0.0337,
+   "died_share": 0.986,
+   "rugged_or_died_share": 0.9861,
+   "busy_share": 0.0083,
+   "candles": 306838,
+   "file": "data/research/train/tokens.jsonl.gz",
+   "sha256": "526aea8111bf0b27f7635d5d19acf61ab010706977d7abad74ed870148c38d05",
+   "t0_from": null,
+   "t0_before": "2026-10-15 16:16"
+  },
+  "validation": {
+   "tokens": 4725,
+   "t0_min": "2026-10-15 22:16",
+   "t0_max": "2026-10-16 05:44",
+   "graduated_share": 0.0157,
+   "rugged_share": 0.0182,
+   "died_share": 0.9735,
+   "rugged_or_died_share": 0.9735,
+   "busy_share": 0.0,
+   "candles": 35270,
+   "file": "data/research/validation/tokens.jsonl.gz",
+   "sha256": "3edb118f23c0568464f0e29886a4ee38c5b4ca42d6bdbcca6b2c2b720512b01f",
+   "t0_from": "2026-10-15 22:16",
+   "t0_before": "2026-10-16 05:45"
+  },
+  "holdout": {
+   "tokens": 7770,
+   "t0_min": "2026-10-16 15:35",
+   "t0_max": "2026-10-17 01:24",
+   "graduated_share": 0.0201,
+   "rugged_share": 0.03,
+   "died_share": 0.9557,
+   "rugged_or_died_share": 0.9564,
+   "busy_share": 0.0003,
+   "candles": 98539,
+   "file": "data/research/holdout/tokens.jsonl.gz",
+   "sha256": "126cde61f58b80c4806b620d128fd9ed559a7c0398cbe88ff9eb32e289a2073d",
+   "t0_from": "2026-10-16 11:45",
+   "t0_before": null
+  }
+ }
+}
