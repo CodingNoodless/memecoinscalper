@@ -17,6 +17,23 @@ from pathlib import Path
 
 VAULT = Path(r"D:\vault\tradeslave")
 START, END = "<!-- map:start -->", "<!-- map:end -->"
+# Hand-written text in generated Map notes lives between these markers and survives every rebuild.
+MANUAL_START, MANUAL_END = "<!-- manual:start -->", "<!-- manual:end -->"
+GENERATED_TAG = "---\ntags: [map"   # generated Map notes start with this frontmatter; hand-made MOCs don't
+
+
+def write_keeping_manual(path: Path, text: str) -> None:
+    """Write a generated note, carrying over its manual block (placed just before the first '## ' section)."""
+    manual = ""
+    if path.exists():
+        m = re.search(re.escape(MANUAL_START) + r".*?" + re.escape(MANUAL_END), path.read_text(encoding="utf-8"), re.S)
+        manual = m.group(0) if m else ""
+    if manual:
+        i = text.find("\n## ")
+        text = text + "\n" + manual + "\n" if i < 0 else text[:i] + "\n" + manual + "\n" + text[i:]
+    path.write_text(text, encoding="utf-8")
+
+
 SKIP_DIRS = {".obsidian", "Templates", "Sources", "Map", ".trash", "Trades", "Runners"}   # Runners: reached via the RN1000 study and its hubs
 SRC_DIR = VAULT / "Research" / "Runner research" / "Sources"
 # trade data-point notes (Trades/Data points) -> words that place them in a topic
@@ -378,8 +395,10 @@ def main() -> None:
     vd = verdicts()
     md = VAULT / "Map"
     md.mkdir(exist_ok=True)
-    for old in md.glob("*.md"):
-        old.unlink()
+    for old in md.glob("*.md"):  # only stale GENERATED notes; hand-made MOCs (Vault map, Map - Strategies ...) stay
+        keep = {f"Map - {k}.md" for k in TOPICS} | {"Memecoin bot knowledge map.md"}
+        if old.name not in keep and old.read_text(encoding="utf-8").startswith(GENERATED_TAG):
+            old.unlink()
     by_topic = defaultdict(list)
     for n, ts in tops.items():
         for k in ts:
