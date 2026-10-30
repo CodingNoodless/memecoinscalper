@@ -14,6 +14,7 @@ Forward-test rules (fixed, same for every bot; returns are net per trade after c
             both halves > 0, and the mean is still > 0 without the 3 best trades
   CONTINUE  otherwise
 PASS only makes a bot eligible for a live micro-test; going live is always Rohit's decision.
+size      guarded half-Kelly share of bankroll per trade (tradeslave/sizing.py); 0 until the edge's 80% lower bound > 0
 """
 
 from __future__ import annotations
@@ -25,6 +26,9 @@ import statistics
 import sys
 import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from tradeslave.sizing import kelly_fraction  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
@@ -125,15 +129,15 @@ def scoreboard(print_out=True) -> list[dict]:
             continue
         s = stats(rets)
         fam = reg.get(bot, {}).get("family", bot)
-        s.update(bot=bot, verdict=verdict(s, family_variants(reg, fam) if bot in reg else 1),
+        s.update(bot=bot, size=kelly_fraction(rets), verdict=verdict(s, family_variants(reg, fam) if bot in reg else 1),
                  last=time.strftime("%m-%d %H:%M", time.localtime(f.stat().st_mtime)))
         rows.append(s)
     rows.sort(key=lambda r: ({"PASS": 0, "CONTINUE": 1, "KILL": 2}[r["verdict"]], -r["t"]))
     if print_out:
-        print(f"{'bot':10s} {'n':>5s} {'mean':>8s} {'median':>8s} {'win':>5s} {'t':>6s} {'halves':>15s} {'ex-top3':>8s}  verdict   last trade")
+        print(f"{'bot':10s} {'n':>5s} {'mean':>8s} {'median':>8s} {'win':>5s} {'t':>6s} {'halves':>15s} {'ex-top3':>8s} {'size':>6s}  verdict   last trade")
         for r in rows:
             print(f"{r['bot']:10s} {r['n']:5d} {r['mean']*100:+7.2f}% {r['median']*100:+7.2f}% {r['win']*100:4.0f}% "
-                  f"{r['t']:+6.2f} {r['h1']*100:+6.1f}/{r['h2']*100:+6.1f}% {r['mean_ex_top3']*100:+7.2f}%  "
+                  f"{r['t']:+6.2f} {r['h1']*100:+6.1f}/{r['h2']*100:+6.1f}% {r['mean_ex_top3']*100:+7.2f}% {r['size']*100:5.1f}%  "
                   f"{r['verdict']:9s} {r['last']}")
     return rows
 
@@ -153,15 +157,16 @@ def brief(write: str | None = None) -> str:
         "- Nothing reaches the targets until one strategy PASSES its forward test. Speed to a trustworthy yes/no is the job.",
         "",
         "## Paper bots (forward tests, net per trade)",
-        "| bot | n | mean | median | win | t | halves | ex-top3 | verdict |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| bot | n | mean | median | win | t | halves | ex-top3 | size | verdict |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for r in rows:
         lines.append(f"| {r['bot']} | {r['n']} | {r['mean']*100:+.2f}% | {r['median']*100:+.2f}% | {r['win']*100:.0f}% | "
-                     f"{r['t']:+.2f} | {r['h1']*100:+.1f} / {r['h2']*100:+.1f}% | {r['mean_ex_top3']*100:+.2f}% | **{r['verdict']}** |")
+                     f"{r['t']:+.2f} | {r['h1']*100:+.1f} / {r['h2']*100:+.1f}% | {r['mean_ex_top3']*100:+.2f}% | {r['size']*100:.1f}% | **{r['verdict']}** |")
     lines += ["", "Rules: KILL at n>=20 if the 80% upper bound < 0, or n>=60 with t<1. PASS at n>=100, t>=2.5 "
               "(higher if many variants), both halves > 0, positive without the top 3. PASS = eligible for a live "
-              "micro-test, Rohit decides.", "", "## Pipeline (registry: lab/registry.jsonl)"]
+              "micro-test, Rohit decides. Size = guarded half-Kelly share of bankroll per trade "
+              "(tradeslave/sizing.py): 0 until the 80% lower bound of the edge is > 0.", "", "## Pipeline (registry: lab/registry.jsonl)"]
     for st in STATUSES:
         if by_status.get(st):
             lines.append(f"- **{st}**: {', '.join(sorted(by_status[st]))}")

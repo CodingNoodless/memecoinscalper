@@ -41,8 +41,12 @@ BOTS = {
     "m12": ("M12", ["2026-10-24 M12 - M8 with hype context (M12)", "2026-10-23 M7 vs M8 forward test (m6-v3 entries, two exit sets)"], "Max profit and max 25% loss - what the vault says"),
     "m12r": ("M12r", ["2026-10-24 M12 - M8 with hype context (M12)"], "Max profit and max 25% loss - what the vault says"),
     "m13": ("M13", ["2026-10-25 M13 - runner model at migration (M13)", "2026-10-24 runner detection on 1,000 real runners (RD)",
-                    "2026-10-24 the last 1,000 runners (RN1000)"], "Max profit and max 25% loss - what the vault says"),
-    "m13b": ("M13b", ["2026-10-25 M13 - runner model at migration (M13)"], "Max profit and max 25% loss - what the vault says"),
+                    "2026-10-24 the last 1,000 runners (RN1000)"], "Observations on M13+M13b"),
+    "m13b": ("M13b", ["2026-10-25 M13 - runner model at migration (M13)"], "Observations on M13+M13b"),
+    "m13_110": ("M13_110", ["2026-10-29 M13 early breakeven ratchet (M17)", "2026-10-25 M13 - runner model at migration (M13)"],
+                "Observations on M13+M13b"),
+    "m13b_110": ("M13b_110", ["2026-10-29 M13 early breakeven ratchet (M17)", "2026-10-25 M13 - runner model at migration (M13)"],
+                 "Observations on M13+M13b"),
     "m11": ("M11", ["2026-10-24 M11 - leader wave rider (M11)", "2026-10-24 learning decu's style (DC)"], "Max profit and max 25% loss - what the vault says"),
     "m10": ("M10", ["2026-10-23 M10 flagship model - backtest (M10)"], "Max profit and max 25% loss - what the vault says"),
     "m9e": ("M9e", ["2026-10-23 pattern search for M9 (PX)"], "Max profit and max 25% loss - what the vault says"),
@@ -115,8 +119,12 @@ def feed_rows(db, x):
 def analyse(x, pp, src=None):
     """Numbers for one trade. pp = (pre, post) curve rows or None."""
     p0, t0, te = x["p0"], x["t"], x.get("t_exit", x["t"])
-    a = dict(ret=x["ret"], peak=x["peak"] / p0, fill=x["p_exit"] / p0, held=te - t0, exit=x.get("exit"),
-             score=x.get("score"), mc=x.get("mc"), stop=x.get("stop", 0.7), data=None)
+    ex = (x.get("exit") or "").upper()
+    stop = x.get("stop") or 0.7
+    a = dict(ret=x["ret"], peak=x["peak"] / p0, fill=x.get("p_exit", x.get("px")) / p0, held=te - t0,   # M11 logs its exit price as px
+             exit="STOP" if ex == "SL" else ex or None,          # M11 logs SL, M13 logs lower-case stop
+             score=x.get("score"), mc=x.get("mc"), data=None,
+             stop=stop / p0 if stop < 0.05 else stop)            # M13 stores its final stop as a price
     if not pp:
         return a
     pre, post = pp
@@ -130,7 +138,7 @@ def analyse(x, pp, src=None):
     a["at10"] = next((r[1] for r in reversed(post) if r[0] <= t0 + 10), p0) / p0
     a["at60"] = next((r[1] for r in reversed(post) if r[0] <= t0 + 60), p0) / p0
     after = [r for r in post if te < r[0] <= te + 900]
-    a["after_hi"] = max((r[1] for r in after), default=x["p_exit"]) / p0
+    a["after_hi"] = max((r[1] for r in after), default=a["fill"] * p0) / p0
     hold = [r for r in post if r[0] <= te + 3]
     sells = [r for r in hold if not r[2] and r[3]]
     creator = pre[0][4] if pre else None
@@ -282,6 +290,116 @@ def better(a, cat, bot):
         s.append("Nothing specific stands out beyond the bot's general lack of edge at this entry point "
                  f"(see the {bot} experiment notes).")
     return s, links
+
+
+CANDLES = DATA_DIR / "m13_candles"     # 1-min GeckoTerminal candles for migrated (M13-family) coins
+
+
+def candle_path(x, a):
+    """Fill the post-entry numbers from 1-min candle closes when we have no curve trades (migrated coins).
+    Closes, not highs: 1-min highs ran ~16% above what the bot's 2 s poll saw (measured 2026-10-29)."""
+    f = CANDLES / f"{x['m']}.json"
+    if not f.exists():
+        return
+    c = [r for r in json.loads(f.read_text())["c"] if r[0] >= x["t"]]
+    if not c:
+        return
+    p0, te = x["p0"], x.get("t_exit", x["t"])
+    a["data"] = "candles"
+    w15 = [r for r in c if r[0] <= x["t"] + 900]
+    if w15:
+        a.update(hi15=max(r[4] for r in w15) / p0, t_hi15=0.0, lo15=min(r[4] for r in w15) / p0, t_lo15=0.0,
+                 end15=w15[-1][4] / p0, at10=1.0, at60=w15[0][4] / p0)
+    a["after_hi"] = max((r[4] for r in c if te < r[0] <= te + 900), default=a["fill"] * p0) / p0
+    a["after_hi60"] = max((r[4] for r in c if te < r[0] <= te + 3600), default=a["fill"] * p0) / p0
+
+
+# Mistakes: one trade can make several. Each is computed from measured numbers; the fix is a hypothesis to
+# pre-register, not a proven rule. (title, what it means, test(a), fix to test, experiments that already tried it)
+MISTAKES = {
+    "bought_top": ("Bought the top", "Never got 5% above our entry.",
+                   lambda a: a["peak"] < 1.05,
+                   "Entry selection or a confirmation entry; nothing after entry saves these.",
+                   ["2026-10-23 M5 entry redesign (ER)", "2026-10-26 first-minute migration confirmation (M14)"]),
+    "stop_gap": ("Stop gapped through", "The stop sold more than 10 points below its level (one or a few big sells).",
+                 lambda a: a["exit"] == "STOP" and a["fill"] < a["stop"] - 0.10,
+                 "Smaller size on coins with big holders; faster stops gain little (Issue 36).",
+                 ["2026-10-23 exit anatomy - max loss and max profit (XA)", "2026-10-23 buy quality and big-holder dumps (BQ)"]),
+    "rugged": ("Rugged", "Lost 90% or more.", lambda a: a["ret"] <= -0.90,
+               "Rug filters before entry; size so one rug costs at most a few % of bankroll.",
+               ["2026-10-23 creator dump veto (CV)", "2026-10-23 funding links (FL)"]),
+    "gave_back": ("Gave back a 30%+ gain", "Was up 30% or more, closed at a loss.",
+                  lambda a: a["peak"] >= 1.3 and a["ret"] <= 0,
+                  "Lock profit earlier (breakeven or trailing stop once up 30%+).",
+                  ["2026-10-22 fade exits (FX)", "2026-10-29 M13 early breakeven ratchet (M17)"]),
+    "gave_back_2x": ("Gave back most of a 2x", "Peaked at 2x or more but kept less than a third of the gain.",
+                     lambda a: a["peak"] >= 2 and a["ret"] < (a["peak"] - 1) / 3,
+                     "A tighter ratchet above 2x (Rohit: stop 1.4-1.5x at 2x).",
+                     ["2026-10-24 M12 - M8 with hype context (M12)", "2026-10-29 M13 early breakeven ratchet (M17)"]),
+    "shaken_out": ("Shaken out before a 2x", "A stop sold at a loss, then the coin reached 2x of our entry within 15 min.",
+                   lambda a: a["exit"] == "STOP" and a["ret"] <= 0 and a.get("after_hi", 0) >= 2,
+                   "Wider early stop; costs more on the coins that keep falling (MV, M15).",
+                   ["2026-10-22 M4 variants backtest (MV)", "2026-10-26 M13 initial stop at 0.90x (M15)"]),
+    "be_noise": ("Breakeven stop hit by noise", "Stopped near breakeven after a small peak (under 1.4x), then the coin "
+                 "rose to 1.3x+ of entry within an hour.",
+                 lambda a: a["exit"] == "STOP" and a["peak"] < 1.4 and a["fill"] >= 0.9 and a.get("after_hi60", 0) >= 1.3,
+                 "Arm breakeven later (1.25-1.4x) so normal wiggle doesn't trigger it.",
+                 ["2026-10-29 M13 early breakeven ratchet (M17)"]),
+    "sold_early": ("Sold a winner early", "A take-profit or other non-stop exit, then the coin went 50% higher within 15 min.",
+                   lambda a: a["exit"] not in ("STOP", None) and a.get("after_hi", 0) >= max(2, a["fill"] * 1.5),
+                   "Sell part, trail the rest; partial TPs lowered the mean on M5 entries (ER B1/B2).",
+                   ["2026-10-22 trade forensics and fix sweep (TF)", "2026-10-23 M5 entry redesign (ER)"]),
+    "creator_dump": ("Creator dumped on us", "The creator sold 0.5 SOL or more while we held.",
+                     lambda a: a.get("creator_sold", 0) >= 0.5 and a["ret"] <= 0,
+                     "Creator-holding veto (failed on average in CV); creator-reputation filter untested.",
+                     ["2026-10-23 creator dump veto (CV)"]),
+    "early_dump": ("Snipers dumped on us", "First-5-second wallets sold 1 SOL or more while we held.",
+                   lambda a: a.get("early_sold", 0) >= 1 and a["ret"] <= 0,
+                   "Sniper-overhang filter (sign reversed in OH).", ["2026-10-23 sniper overhang test (OH)"]),
+    "sell_flow": ("Held into net selling", "Others sold more than twice what they bought while we held.",
+                  lambda a: a.get("sell_sol", 0) > 2 * max(a.get("buy_sol", 0), 0.1) and a["ret"] <= 0,
+                  "Exit on sustained net sell flow.", ["2026-10-22 trade patterns (TF2)"]),
+    "top_buyers_out": ("Bought after the first buyers left", "3+ of the first 5 buyers had sold out before our entry.",
+                       lambda a: a.get("top5_out", 0) >= 3 and a["ret"] <= 0,
+                       "Entry filter on early-buyer exits (Rohit's M4 notes).", ["2026-10-22 Rohit M4 notes (TF3)"]),
+    "chased_pump": ("Chased a pump", "The price was 40%+ lower in the 10 min before entry.",
+                    lambda a: a.get("pre_lo", 9) <= 0.6 and a["ret"] <= 0,
+                    "Skip or wait after a fast run-up (dip waits did not help in ER).", ["2026-10-23 M5 entry redesign (ER)"]),
+    "dying_coin": ("Bought a dying coin", "Holders were already 20%+ below their peak at entry.",
+                   lambda a: a.get("h_max_pre") and a.get("h_entry") is not None and a["h_entry"] < 0.8 * a["h_max_pre"]
+                   and a["ret"] <= 0,
+                   "Holder-trend entry filter.", ["2026-10-22 Rohit M4 notes (TF3)"]),
+    "time_loss": ("Held a dead coin to the time limit", "The time limit closed it at a loss.",
+                  lambda a: a["exit"] in ("TIME", "TIMEOUT") and a["ret"] <= 0,
+                  "Shorter time stop for coins that never moved.", ["2026-10-22 fade exits (FX)"]),
+}
+# tags whose condition is observable apart from the outcome (pre-entry: candidate filters; while held: exit signals)
+CONDITIONS = {"chased_pump", "top_buyers_out", "dying_coin", "early_dump", "creator_dump"}
+GOOD = {   # what went right, so wins link to each other too
+    "rode_runner": ("Rode a runner", "Peaked at 2x+ and kept at least half of the gain.",
+                    lambda a: a["peak"] >= 2 and a["ret"] >= (a["peak"] - 1) / 2 * 0.9),
+    "small_win": ("Took a small win", "Closed above entry after costs without reaching 2x.",
+                  lambda a: 0 < a["ret"] and a["peak"] < 2),
+}
+
+
+def mistakes(a):
+    out = []
+    for k, test in [(k, v[2]) for k, v in MISTAKES.items()] + [(k, v[2]) for k, v in GOOD.items()]:
+        try:
+            if test(a):
+                out.append(k)
+        except (KeyError, TypeError):
+            pass
+    return out
+
+
+def tag_title(k):
+    return (MISTAKES.get(k) or GOOD[k])[0]
+
+
+def tag_note(k):
+    return ("Mistake - " if k in MISTAKES else "Worked - ") + tag_title(k)
 
 
 def name_of(bot, x):
@@ -486,7 +604,7 @@ def head(x, a, cat, label, t):
             f"- **Coin:** `{x['m']}` · [pump.fun](https://pump.fun/coin/{x['m']})"
             + (f" · [X post](https://x.com/i/status/{x['nkey']})" if x.get("nkey") else ""),
             "- **Data used:** " + {"ticks": "Helius curve ticks", "feed": "live-feed curve trades",
-                                   None: "bot record only"}[a["data"]] + "\n"]
+                                   "candles": "1-min candle closes (migrated coin)", None: "bot record only"}[a["data"]] + "\n"]
 
 
 def main() -> None:
@@ -513,6 +631,8 @@ def main() -> None:
         if not pp:
             pp, src = feed_rows(db, x), "feed"
         a = analyse(x, pp, src)
+        if a["data"] is None:
+            candle_path(x, a)
         a["t"] = x["t"]
         sc_r = last_before(recs[bot][0].get(x["m"], []), x["t"]) or {}
         de_r = last_before(recs[bot][1].get(x["m"], []), x["t"]) or {}
@@ -525,7 +645,15 @@ def main() -> None:
                 v, b = None, None
             if b is not None:
                 dims[k] = (v, b)
-        items.append(dict(bot=bot, x=x, a=a, cat=category(a), sc=sc_r, de=de_r, dims=dims, nm=name_of(bot, x)))
+        items.append(dict(bot=bot, x=x, a=a, cat=category(a), sc=sc_r, de=de_r, dims=dims, nm=name_of(bot, x),
+                          tags=mistakes(a)))
+    by_tag, by_combo = defaultdict(list), defaultdict(list)
+    for it in items:
+        for k in it["tags"]:
+            by_tag[k].append(it)
+        bad = tuple(k for k in it["tags"] if k in MISTAKES)
+        if bad:
+            by_combo[bad].append(it)
     stats = defaultdict(lambda: defaultdict(list))
     for it in items:
         for k, (v, b) in it["dims"].items():
@@ -546,6 +674,24 @@ def main() -> None:
         md = head(x, a, cat, label, t) + ["## Why it " + ("won" if x["ret"] > 0 else "lost")]
         md += [f"- {s}" for s in why(a, cat)]
         md += ["", "## What could have been better"] + [f"- {s}" for s in bet]
+        bad = [k for k in it["tags"] if k in MISTAKES]
+        md += ["", "## Mistakes in this trade" if bad else "## What worked"]
+        if not it["tags"]:
+            md.append("- No tagged mistake: the loss is the bot's general lack of edge, not one fixable error.")
+        for k in it["tags"]:
+            rr = [i["x"]["ret"] for i in by_tag[k]]
+            if k in MISTAKES:
+                title_, desc_, _, fix_, exps_ = MISTAKES[k]
+                md.append(f"- [[{tag_note(k)}|{title_}]]: {desc_} {len(rr)} trades made it (mean {sum(rr) / len(rr):+.1%}). "
+                          f"Fix to test: {fix_}")
+            else:
+                md.append(f"- [[{tag_note(k)}|{tag_title(k)}]]: {GOOD[k][1]} {len(rr)} trades (mean {sum(rr) / len(rr):+.1%}).")
+        if bad:
+            same = [i for i in by_combo[tuple(bad)] if i is not it]
+            same.sort(key=lambda i: (i["bot"] != bot, abs(i["x"]["t"] - x["t"])))
+            if same:
+                md.append(f"- **Same mistakes ({len(same)} other trades with exactly this set):** "
+                          + ", ".join(f"[[{i['nm']}]]" for i in same[:8]) + (" …" if len(same) > 8 else ""))
         md += ["", "## Data points",
                "Each links to a data-point note with the P/L of every trade sharing that range (all bots, *measured*, "
                "descriptive only).", "", "| Data point | This trade | Range | Mean P/L in range (n) |",
@@ -596,6 +742,82 @@ def main() -> None:
         d.mkdir(parents=True, exist_ok=True)
         (d / f"{nm}.md").write_text("\n".join(md) + "\n", encoding="utf-8")
         index[label].append((x["t"], nm, x.get("name"), x["ret"], cat, title))
+    md_dir = OUT / "Mistakes"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    ranked = []
+    for k in list(MISTAKES) + list(GOOD):
+        v = sorted(by_tag.get(k, []), key=lambda i: i["x"]["t"])
+        rr = [i["x"]["ret"] for i in v]
+        if k in MISTAKES:
+            title_, desc_, _, fix_, exps_ = MISTAKES[k]
+        else:
+            (title_, desc_, _), fix_, exps_ = GOOD[k], "", []
+        cost = sum(rr) * SIZE
+        if k in MISTAKES:
+            ranked.append((cost, k, len(v)))
+        byb = defaultdict(list)
+        for i in v:
+            byb[BOTS[i["bot"]][0]].append(i["x"]["ret"])
+        co = Counter(o for i in v for o in i["tags"] if o != k and o in MISTAKES)
+        lines = [f"---\ntags: [trades, {'mistake' if k in MISTAKES else 'worked'}]\n---\n# {tag_note(k)}\n", f"{desc_}\n",
+                 f"**{len(v)} trades** across all bots, mean {sum(rr) / max(1, len(rr)):+.1%}, total {cost:+.2f} SOL at "
+                 f"0.1 SOL. *Measured* from our records; the tag rule is in `tradeslave/trade_notes.py` (MISTAKES). "
+                 f"Part of [[Weak points]] · [[Trades index]].\n"]
+        if fix_:
+            lines.append(f"**Fix to test (hypothesis, pre-register before trusting it):** {fix_}\n")
+        if exps_:
+            lines.append("**Experiments that already tried something here:** " + ", ".join(f"[[{e}]]" for e in exps_) + "\n")
+        if co:
+            lines.append("**Often comes with:** " + ", ".join(f"[[{tag_note(o)}|{tag_title(o)}]] ({n})" for o, n in co.most_common(5)) + "\n")
+        lines += ["| Bot | Trades | Mean | SOL |", "| --- | --- | --- | --- |"]
+        lines += [f"| [[Trades - {b}|{b}]] | {len(z)} | {sum(z) / len(z):+.1%} | {sum(z) * SIZE:+.2f} |"
+                  for b, z in sorted(byb.items(), key=lambda kv: sum(kv[1]))]
+        lines += ["", "## Every trade with this tag", "| Entered | Trade | P/L | Peak | Also |", "| --- | --- | --- | --- | --- |"]
+        lines += [f"| {dt.datetime.fromtimestamp(i['x']['t']):%m-%d %H:%M} | [[{i['nm']}]] | {i['x']['ret']:+.1%} | "
+                  f"{i['a']['peak']:.2f}× | {', '.join(tag_title(o) for o in i['tags'] if o != k)} |" for i in v]
+        (md_dir / f"{tag_note(k)}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    ranked.sort()
+    wp = ["---\ntags: [trades, moc, mistakes]\n---\n# Weak points\n",
+          "Every paper trade is tagged with the mistakes it made (a trade can make several), computed from measured numbers "
+          "by `uv run python -m tradeslave.trade_notes`. Ranked by SOL lost at 0.1 SOL per trade. Overlapping tags double-count, "
+          "so the column doesn't sum to the bots' total. A big row is where a fix would pay most, if one works: "
+          "pre-register it before trusting it. Part of [[Trades index]].\n",
+          "Most tags only count losing trades, so their mean is bad by construction. The **condition** columns fix that: "
+          "every trade where the same condition held, win or lose, against every trade where it didn't (same bots). "
+          "A condition is a candidate filter only if its own mean is clearly below the rest; post-entry conditions "
+          "(dumps, sell flow) can only inform exits.\n",
+          "| Mistake | Trades | Mean P/L | SOL lost | Condition: trades, mean | Without it: mean | Fix to test |",
+          "| --- | --- | --- | --- | --- | --- | --- |"]
+    left = []
+    for cost, k, n in ranked:
+        rr = [i["x"]["ret"] for i in by_tag[k]]
+        if cost > 0:
+            left.append((k, n, rr))
+            continue
+        cond = []
+        for i in items:
+            try:
+                cond.append(bool(MISTAKES[k][2](dict(i["a"], ret=-1.0))))     # outcome forced to a loss: condition only
+            except (KeyError, TypeError):
+                cond.append(None)
+        yes = [i["x"]["ret"] for i, c in zip(items, cond) if c]
+        no = [i["x"]["ret"] for i, c in zip(items, cond) if c is False]
+        cy = f"{len(yes)}, {sum(yes) / len(yes):+.1%}" if yes else "–"
+        cn = f"{sum(no) / len(no):+.1%}" if no else "–"
+        if k not in CONDITIONS:
+            cy, cn = "outcome-defined", ""
+        wp.append(f"| [[{tag_note(k)}|{tag_title(k)}]] | {n} | {sum(rr) / max(1, n):+.1%} | {cost:+.2f} | {cy} | {cn} | "
+                  f"{MISTAKES[k][3]} |")
+    if left:
+        wp += ["", "## Profitable, but left money on the table", "| Mistake | Trades | Mean P/L | Fix to test |",
+               "| --- | --- | --- | --- |"]
+        wp += [f"| [[{tag_note(k)}|{tag_title(k)}]] | {n} | {sum(rr) / n:+.1%} | {MISTAKES[k][3]} |" for k, n, rr in left]
+    wp += ["", "## Most common mistake combinations", "| Mistakes | Trades | Mean P/L |", "| --- | --- | --- |"]
+    for combo, v in sorted(by_combo.items(), key=lambda kv: -len(kv[1]))[:15]:
+        wp.append(f"| {' + '.join(f'[[{tag_note(k)}|{tag_title(k)}]]' for k in combo)} | {len(v)} | "
+                  f"{sum(i['x']['ret'] for i in v) / len(v):+.1%} |")
+    wp += ["", "## What worked"] + [f"- [[{tag_note(k)}|{tag_title(k)}]]: {len(by_tag[k])} trades" for k in GOOD]
+    (OUT / "Weak points.md").write_text("\n".join(wp) + "\n", encoding="utf-8")
     dd = OUT / "Data points"
     dd.mkdir(parents=True, exist_ok=True)
     for k, (desc, _, rx, exps) in DIMS.items():
@@ -644,7 +866,7 @@ def main() -> None:
     for k, (title, meaning, exps, themes, issues) in CATS.items():
         rows = sorted(by_cat[title], key=lambda r: r[1])
         lines = [f"---\ntags: [trades]\n---\n# Trades - {title}\n", f"{meaning}\n",
-                 f"{len(rows)} trades across M1–M5. Experiments: " + ", ".join(f"[[{e}]]" for e in exps)
+                 f"{len(rows)} trades across all paper bots. Experiments: " + ", ".join(f"[[{e}]]" for e in exps)
                  + ". Themes: " + ", ".join(f"[[{t}]]" for t in themes) + ". Research: "
                  + ", ".join(f"[[{s}]]" for s in cat_src.get(k, [])) + ". Part of [[Trades index]].\n",
                  "| Bot | Entered | Trade | P/L |", "| --- | --- | --- | --- |"]
@@ -652,7 +874,7 @@ def main() -> None:
                   for lb, tt, nm, cn, r, kk, tl in rows]
         (OUT / f"Trades - {title}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     top = ["---\ntags: [trades, moc]\n---\n# Trades index\n",
-           "Every closed M1–M5 paper trade has its own note: why it won or lost, what could have been better, its data "
+           "Every closed paper trade (all bots) has its own note: why it won or lost, the mistakes it made (each linked to every trade that made it), what could have been better, its data "
            "points (each linked to a data-point note with the P/L of every trade sharing that range), the bot's "
            "decision record, the research sources behind it, and links to experiments, known issues and Rohit's notes. "
            "Generated by `uv run python -m tradeslave.trade_notes` from our own records; part of "
@@ -663,6 +885,8 @@ def main() -> None:
     tot = sum(cats_all.values())
     for k, v in cats_all.most_common():
         top.append(f"| [[Trades - {CATS[k][0]}]] | {v} | {v / tot:.0%} |")
+    top += ["", "## Mistakes", "Every trade is tagged with the mistakes it made; each tag links every trade that made it. "
+            "Ranked: [[Weak points]]."] + [f"- [[{tag_note(k)}|{tag_title(k)}]]: {len(by_tag[k])} trades" for k in MISTAKES]
     top += ["", "## Data points"] + [f"- [[{dp_name(k)}]]: {d[0]}" for k, d in DIMS.items()]
     (OUT / "Trades index.md").write_text("\n".join(top) + "\n", encoding="utf-8")
     print(f"{tot} trade notes:", {k: len(v) for k, v in index.items()}, dict(cats_all))
