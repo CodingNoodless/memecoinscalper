@@ -1,0 +1,19 @@
+# Backtest gates (research-system setup, 2026-10-29). Checked by `uv run python tools/gate_check.py`.
+# LOCKED: never edit to make a result pass. Any change needs Rohit's explicit OK and a Decisions row.
+# Separate from the forward verdict rules in tools/lab.py.
+# Every value is net of tradeslave/cost_model.py costs (the trades file holds `ret` per trade, already net).
+
+min_trades_oos: 300               # trades in the scored out-of-sample set (validation by default, holdout with --final)
+profit_factor_after_costs: 1.3    # sum(wins) / |sum(losses)| must be > this
+expectancy_ci95_lower: 0.0        # bootstrap 95% CI lower bound of the mean net return must be > this
+bootstrap_resamples: 10000        # >= 10k
+bootstrap_seed: 20261029
+max_drawdown: 0.35                # compounded equity at a fixed share of equity per trade must stay above (1 - this)
+drawdown_bet_fraction: 0.10       # 10% of equity per trade
+param_stability_pf: 1.1           # every +/-20% parameter-shifted variant must keep PF > this
+param_shift: 0.20
+outlier_top_share: 0.05           # still profitable (mean > 0) with this share of best trades removed
+deflated_sharpe_prob: 0.95        # DSR probability must be > this; trials = registry variants + Hypothesis count tally
+holdout_profit_factor: 1.2        # --final only: PF on the holdout must be > this
+capacity_report: true             # report the position size (SOL) where expectancy after cost_model slippage reaches 0
+benchmark_net_per_trade: 0.05     # printed for comparison only (not a gate): the 5% net per trade target
