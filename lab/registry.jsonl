@@ -81,3 +81,8 @@
 {"id": "LP2", "status": "killed", "note": "all 12 train variants lose -15.1% to -17.7% net; chosen variant train n 399 (98 tokens) net -15.1% (gross -2.8%), validation n 42 (8 tokens) net -6.2%", "t": "2026-10-29 23:56"}
 {"id": "TOD1", "status": "backtest", "note": "prereg 2026-10-29 written before run", "t": "2026-10-29 23:56"}
 {"id": "TOD1", "status": "killed", "note": "chosen variant train n 26 (one night) net -13.2% (gross +0.3%), validation n 8 (one night) net -39.7%; all 12 train variants -13% to -45%; 6 gates fai", "t": "2026-10-29 23:57"}
+{"id": "M13v2", "family": "migration-selection", "hypothesis": "RD-style curve-feature model at migration, top-K, time exit, no stop (v2 clean refit)", "status": "idea", "variants": 9, "t": "2026-10-30 10:19"}
+{"id": "PLS1", "family": "perp-listing-premium", "hypothesis": "Short memecoin perps D days after listing, hold K days (killtest, existing data)", "status": "idea", "variants": 6, "t": "2026-10-30 10:19"}
+{"id": "CLN1", "family": "copycat-confusion", "hypothesis": "Buy the flow leader of a same-ticker launch cluster, time exit", "status": "idea", "variants": 8, "t": "2026-10-30 10:19"}
+{"id": "BRD1", "family": "market-regime", "hypothesis": "Buy graduates only in hot market-breadth regimes, time exit", "status": "idea", "variants": 6, "t": "2026-10-30 10:19"}
+{"id": "PMN1", "family": "prediction-longshot-memecoin", "hypothesis": "Buy 'no' on memecoin moonshot contracts at 3-20c (killtest, existing data)", "status": "idea", "variants": 4, "t": "2026-10-30 10:19"}

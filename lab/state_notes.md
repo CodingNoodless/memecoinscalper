@@ -1,5 +1,5 @@
 <!-- Hand-written "current work" section, copied into vault STATE.md by `tools/lab.py brief`.
 Keep it short: what step is in progress, what's next, blockers. Overwrite, don't append. -->
-- Overnight run (round 2). Running: launch_recorder (~350 MB/day incl. address table, re-check), chain_backfill (~21-30k tokens/h, 145k left), gecko_grads (~3 graduates/min).
-- v2 so far: 8,168 tokens Oct 21-30, 136 graduated (1.67%), rugged/died 95.4% (v1 97.9%), 41.9% never traded after create.
-- Batch 1 (round 2) written: M13v2, BRD1, CLN1, PLS1, PMN1; skeptic review running; ranking to be committed before any result.
+- Round 2 batch 1 RANKED and committed before results: M13v2 > PLS1 > CLN1 > BRD1 > PMN1 (Strategies/Hypotheses/Ranking-v2.md). None can reach 300 OOS yet: train-only killtests first.
+- Running: recorder, chain_backfill (~21k/h, 142k left), gecko_grads (~2 graduates/min, slow: free-API 429s).
+- Next: PLS1 + PMN1 killtests (existing data), then M13v2 when >= ~300 train graduates have pool candles.
