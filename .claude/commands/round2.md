@@ -55,20 +55,27 @@ OOS trades; (2) the hypotheses aimed at moves too small to clear costs. This run
 - After each one: Experiments note, registry status, Lessons-Learned line if it's killed, `lab/state_notes.md`, today's
   Sessions note, `tools/lab.py brief --write D:/vault/tradeslave`, commit.
 
-## Stop when one of these holds
-(a) A hypothesis prints ALL PASS from `tools/gate_check.py --final <id>` with `lab/gates.yaml` unchanged since 174435d.
-Start it as a forward paper bot (WIP limit 3) and write `Reviews/Final-Report-2.md`. Don't take any live step; that
-needs Rohit's go.
+## Phase 4: keep going until something passes
+A batch where every hypothesis dies is not the end. Write `Reviews/Batch-<n>-Report.md` (gross vs net per idea, why
+each died, what that rules out), add the dead ideas to `Lessons-Learned.md`, then go back to Phase 2 with a new batch
+of 5–8 hypotheses from **different families**. Use what the dead batch taught: where gross edge appeared, which
+costs dominated, and which data was missing. When data is the blocker, go back to Phase 1 and build the missing data
+(free sources only). Between batches, use the `researcher` agent for new sourced ideas (bots, MEV, launchpads,
+prediction markets, perps, other chains, other venues) and check `Strategies/Lessons-Learned.md` first.
+Trust protections, which get stricter as the run goes on (never looser):
+- The trials count includes every variant of every batch, so deflated Sharpe and the luck hurdle rise automatically.
+- The holdout is one shot per hypothesis. If more than 20 hypotheses have used the v2 holdout, build a fresh holdout
+  from newly recorded data (the launch recorder) before the next `--final`.
+- A backtest PASS is not the finish line: it must also pass a forward paper test under the `tools/lab.py` rules.
 
-(b) Every v2 hypothesis is killed or passed. Write `Reviews/Final-Report-2.md` covering:
-- the data built;
-- each result, with gross vs net;
-- the cost math;
-- a plain answer to "can buy-side pump.fun trading at 1.25% fees per side have an edge for us, and what would have to
-  be true";
-- the 3 best next directions, with the data they need.
+## Stop only when one of these holds
+(a) **Goal reached:** a hypothesis has ALL PASS from `tools/gate_check.py --final <id>` (`lab/gates.yaml` unchanged
+since 174435d) **and** a forward PASS in `uv run python tools/lab.py scoreboard`. While its forward test runs, keep
+researching the next batch, and check the scoreboard each turn. Then write `Reviews/Final-Report-2.md`. No live
+step without Rohit's go.
 
-(c) 80 turns. Update `lab/state_notes.md`, STATE.md and `Reviews/Interim-Report-2.md` with where each phase stands.
+(b) **Turn cap:** 150 turns. Update `lab/state_notes.md`, STATE.md and `Reviews/Interim-Report-2.md` with batches
+done, what's queued next, and the forward bot status, so the next run continues where this one stopped.
 
 Each turn, finish one concrete step and print the tool output that proves it. Never relax a gate, cost or split to
-get a pass. "No edge" written up honestly counts as a successful run.
+get a pass: a pass obtained that way isn't the goal.
