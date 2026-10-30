@@ -23,6 +23,7 @@ import json
 import math
 import os
 import statistics
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -142,6 +143,17 @@ def scoreboard(print_out=True) -> list[dict]:
     return rows
 
 
+def git_hash(path: str) -> str:
+    """Last commit touching `path` (short hash), plus '+dirty' if it has uncommitted edits."""
+    try:
+        h = subprocess.run(["git", "log", "-1", "--format=%h", "--", path], cwd=ROOT,
+                           capture_output=True, text=True, timeout=10).stdout.strip() or "untracked"
+        dirty = subprocess.run(["git", "diff", "--quiet", "--", path], cwd=ROOT, timeout=10).returncode
+        return h + ("+dirty" if dirty else "")
+    except Exception:
+        return "unknown"
+
+
 def brief(write: str | None = None) -> str:
     rows = scoreboard(print_out=False)
     reg = registry()
@@ -181,6 +193,12 @@ def brief(write: str | None = None) -> str:
         lines.append(f"- KILL: {', '.join(kills)} → stop these bots, record the verdict, free the slot.")
     if not passes and not kills:
         lines.append("- Nothing decided yet: keep the forward tests running.")
+    lines += ["", "## Locked rule files", f"- tools/lab.py @ {git_hash('tools/lab.py')}"]
+    if (ROOT / "lab" / "gates.yaml").exists():
+        lines.append(f"- lab/gates.yaml @ {git_hash('lab/gates.yaml')}")
+    notes = ROOT / "lab" / "state_notes.md"
+    if notes.exists() and notes.read_text(encoding="utf-8").strip():
+        lines += ["", "## Current work (from lab/state_notes.md)", notes.read_text(encoding="utf-8").strip()]
     text = "\n".join(lines) + "\n"
     if write:
         Path(write, "STATE.md").write_text(text, encoding="utf-8")

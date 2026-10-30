@@ -13,7 +13,10 @@
       "Bash(bash tools/start_all.sh:*)",
       "Bash(git status:*)",
       "Bash(git diff:*)",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "Bash(uv run python tools/gate_check.py:*)",
+      "Bash(uv run python -m tradeslave.vault_map:*)",
+      "Bash(powershell -ExecutionPolicy Bypass -File tools\\start_all.ps1:*)"
     ],
     "deny": [
       "Read(./.env)"
