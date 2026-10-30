@@ -16,6 +16,8 @@ Keys: one worker per working Helius key in lab/endpoints.json (tools/endpoints.p
 that answers "max usage reached" is marked exhausted with its reset date and its worker stops; the others go on.
 Output: data/chain/curve/part-<worker>.jsonl.gz, one token per line:
   {"m", "bc", "t0", "n_tx", "trades": [[slot, ts, user, buy, sol_lamports, tok_raw, vs, vt], ...]}
+Graduates (curve reached ~115 SOL virtual = complete) also go to data/chain/graduates.jsonl {"m", "t_grad", "t0"} for
+the GeckoTerminal pool-candle job (research.gecko_grads).
 Progress: logs/chain_backfill.out and data/chain/curve/progress.json. Paper only: read-only RPC calls.
 """
 
@@ -39,6 +41,8 @@ CREATES = DATA_DIR / "c1" / "creates.jsonl"
 FROM_T = 1792540800.0          # 2026-10-21 00:00 UTC
 SEED = 30
 WINDOW_S = 7 * 86400
+GRAD_VS = 0.99 * 115.005e9                 # virtual SOL (lamports) when the curve completes
+GRADS = DATA_DIR / "chain" / "graduates.jsonl"
 ENDPOINTS = PROJECT_ROOT / "lab" / "endpoints.json"
 
 
@@ -62,17 +66,24 @@ def todo_list(done: set[str]) -> list[dict]:
 
 
 def done_mints() -> set[str]:
-    done = set()
+    """Mints already fetched; also (re)writes graduates.jsonl from the parts so it is complete after a restart."""
+    done, grads = set(), []
     for f in glob.glob(str(OUT / "part-*.jsonl.gz")):
         try:
             with gzip.open(f, "rt", encoding="utf-8") as fh:
                 for line in fh:
                     try:
-                        done.add(json.loads(line)["m"])
-                    except (ValueError, KeyError):
-                        pass
+                        d = json.loads(line)
+                    except ValueError:
+                        continue
+                    done.add(d["m"])
+                    g = next((t for t in d["trades"] if t[6] >= GRAD_VS), None)
+                    if g:
+                        grads.append({"m": d["m"], "t_grad": g[1], "t0": d["t0"]})
         except EOFError:                      # a part cut mid-write by a crash: complete lines were read
             pass
+    GRADS.parent.mkdir(parents=True, exist_ok=True)
+    GRADS.write_text("".join(json.dumps(g) + "\n" for g in grads), encoding="utf-8")
     return done
 
 
@@ -147,6 +158,10 @@ def worker(label: str, url: str, q: list, stats: dict) -> None:
                     stats[label]["too_many"] += 1
             continue
         tr = trades_of(txs, tok["m"])
+        grad = next((t for t in tr if t[6] >= GRAD_VS), None)
+        if grad:
+            with LOCK, GRADS.open("a", encoding="utf-8") as g:
+                g.write(json.dumps({"m": tok["m"], "t_grad": grad[1], "t0": tok["t0"]}) + "\n")
         fh.write(json.dumps({**tok, "n_tx": len(txs), "trades": tr}, separators=(",", ":")) + "\n")
         n_since_flush += 1
         if n_since_flush >= 50:

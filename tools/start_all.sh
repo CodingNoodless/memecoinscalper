@@ -11,6 +11,7 @@ PROGRAMS=(
   'research\.live_feed\b|-u -m tradeslave.research.live_feed|live_feed'
   'research\.launch_recorder\b|-u -m tradeslave.research.launch_recorder|launch_recorder'
   'research\.chain_backfill\b|-u -m tradeslave.research.chain_backfill|chain_backfill'
+  'research\.gecko_grads\b|-u -m tradeslave.research.gecko_grads|gecko_grads'
   'research\.launch_watch\b|-m tradeslave.research.launch_watch|launch_watch'
   'research\.c1_curve record|-m tradeslave.research.c1_curve record|c1_curve'
   'research\.create_poll\b|-X utf8 -u -m tradeslave.research.create_poll|create_poll'
