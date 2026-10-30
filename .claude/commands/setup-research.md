@@ -63,7 +63,9 @@ Vault = `D:/vault/tradeslave`. Never open `data/research/holdout/` in steps 1–
    - capacity: report the position size (SOL) where expectancy after `cost_model.py` slippage reaches 0
    Then write `tools/gate_check.py`: reads `lab/gates.yaml` and a trades file (`ret` per trade, net of costs), prints
    a PASS/FAIL table per gate, avg net return per trade vs. the 5% benchmark, and the git hash of `lab/gates.yaml`
-   (refuse to run if it has uncommitted edits). Add `tests/test_gate_check.py` with a known-good and a known-bad
+   (refuse to run if it has uncommitted edits). Default mode scores train/validation only. `--final` scores the
+   holdout once per registry id: it refuses if that id has already used it, logs the use in `lab/holdout_log.jsonl`,
+   and prints ALL PASS only if every gate passes. Add `tests/test_gate_check.py` with a known-good and a known-bad
    synthetic series. These backtest gates are separate from the forward verdict rules in `tools/lab.py`.
 
 6. **HYPOTHESIS REGISTRY.** Write 5–8 notes in `Strategies/Hypotheses/` (use frontmatter from CLAUDE.md). Each needs:
