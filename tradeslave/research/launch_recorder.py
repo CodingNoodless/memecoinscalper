@@ -13,6 +13,11 @@ is gone (410). Two public-RPC websockets (logsSubscribe at `processed`, never He
 Output, rotated hourly (multi-member gzip, safe to append after a crash):
   data/recorder/pump-YYYYMMDD-HH.jsonl.gz      [slot, i, ts, lag, mint#, user#, buy, sol_lamports, tok_raw, vs, vt, c]
   data/recorder/complete-YYYYMMDD-HH.jsonl.gz  [recv, slot, sig, user, mint, curve, ts]
+  data/recorder/create-YYYYMMDD-HH.jsonl.gz    [slot, recv, mint#, curve#, user#, creator#, name, symbol, uri]
+                                                (CreateEvent: every launch, with or without a dev buy; since 2026-10-30
+                                                ~17:25 UTC. Pump rows' last field c = 1 only for the created mint;
+                                                before that fix c was unreliable: "Instruction: Create" also matched
+                                                the token program's CreateIdempotent)
   data/recorder/swap-YYYYMMDD-HH.jsonl.gz      [slot, ts, lag, buy, pool#, user#, base_amt, quote_lamports,
                                                 pool_base_pre, pool_quote_pre]
   data/recorder/swapx-YYYYMMDD-HH.jsonl.gz     [recv, slot, sig, [instruction names], [base64 payloads]] pool lifecycle
@@ -47,6 +52,7 @@ PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
 PUMPSWAP = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"
 OUT = DATA_DIR / "recorder"
 COMPLETE_EVENT = hashlib.sha256(b"event:CompleteEvent").digest()[:8]
+CREATE_EVENT = hashlib.sha256(b"event:CreateEvent").digest()[:8]
 BUY_EVENT = hashlib.sha256(b"event:BuyEvent").digest()[:8]
 SELL_EVENT = hashlib.sha256(b"event:SellEvent").digest()[:8]
 PUMP_TRADE_EVENT = hashlib.sha256(b"event:TradeEvent").digest()[:8]
@@ -131,6 +137,34 @@ def status(**kw) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     with (OUT / "status.jsonl").open("a", encoding="utf-8") as fh:
         fh.write(json.dumps({"t": round(time.time(), 1), **kw}) + "\n")
+
+
+def parse_create(logs) -> list[tuple]:
+    """pump.fun CreateEvents: (name, symbol, uri, mint, bonding_curve, user, creator). Layout verified 2026-10-30 on a
+    CreateV2 transaction (mint and curve match the create log). Creates without a dev buy have no TradeEvent, so this
+    is the only way to see them."""
+    out = []
+    for line in logs or []:
+        if not (isinstance(line, str) and line.startswith("Program data: ")):
+            continue
+        try:
+            raw = base64.b64decode(line[14:])
+        except ValueError:
+            continue
+        if raw[:8] != CREATE_EVENT:
+            continue
+        try:
+            o, s = 8, []
+            for _ in range(3):
+                n = struct.unpack_from("<I", raw, o)[0]
+                o += 4
+                s.append(raw[o:o + n].decode("utf-8", "replace"))
+                o += n
+            keys = [b58encode(raw[o + 32 * k:o + 32 * (k + 1)]) for k in range(4)]
+        except struct.error:
+            continue
+        out.append((*s, *keys))
+    return out
 
 
 def parse_complete(logs) -> list[list]:
@@ -241,19 +275,21 @@ def run() -> None:
     from .history_miner import endpoints
     wss = [u.replace("https://", "wss://", 1) for u, _ in endpoints(3.0)
            if not any(x in u for x in ("helius", "quiknode", "alchemy", "shyft"))]
-    pump, comp, swap, swapx = Sink("pump"), Sink("complete"), Sink("swap"), Sink("swapx")
+    pump, comp, swap, swapx, create = Sink("pump"), Sink("complete"), Sink("swap"), Sink("swapx"), Sink("create")
     ids = Ids()
     # swap rows wait for pool resolution as (pool, slot, ts, lag, buy, user, base, quote, pb, pq)
     pools = Pools(swap, lambda r: [r[1], r[2], r[3], r[4], ids(r[0]), ids(r[5]), *r[6:]])
     threading.Thread(target=pools.resolve_loop, daemon=True).start()
 
     def on_pump(now, slot, sig, logs):
+        made = set()
+        for name, sym, uri, mint, curve, user, creator in parse_create(logs):     # every create, dev buy or not
+            made.add(mint)
+            create.write([slot, round(now, 1), ids(mint), ids(curve), ids(user), ids(creator), name[:64], sym[:32], uri[:200]])
         evs = parse_trade_events(logs)
-        if evs:
-            c = int(any("Instruction: Create" in x for x in logs))
-            for i, e in enumerate(evs):
-                pump.write([slot, i, e["ts"], round(now - e["ts"]), ids(e["mint"]), ids(e["user"]), int(e["buy"]),
-                            e["sol"], e["tok"], e["vs"], e["vt"], c])
+        for i, e in enumerate(evs):
+            pump.write([slot, i, e["ts"], round(now - e["ts"]), ids(e["mint"]), ids(e["user"]), int(e["buy"]),
+                        e["sol"], e["tok"], e["vs"], e["vt"], int(e["mint"] in made)])
         for row in parse_complete(logs):
             comp.write([round(now, 3), slot, sig, *row])
 
@@ -281,7 +317,7 @@ def run() -> None:
         seen = Seen()
         for url in wss:
             threading.Thread(target=listen, args=(program, name, handle, url, seen), daemon=True).start()
-    sinks = (pump, comp, swap, swapx)
+    sinks = (pump, comp, swap, swapx, create)
     last = {s.stream: 0 for s in sinks}
     t_note = time.time()
     while True:
